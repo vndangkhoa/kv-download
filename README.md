@@ -29,40 +29,66 @@ Or for docker locally:
 The Docker image is available from the Forgejo container registry:
 
 ```bash
-docker pull git.khoavo.myds.me/vndangkhoa/kv-download:latest
-```
-
-### Deploy on Synology NAS
-
-1. Load the image (if using local transfer):
-```bash
-docker load -i kv-download.tar
-```
-
-2. Run with docker-compose:
-```yaml
-services:
-  kv-download:
-    image: git.khoavo.myds.me/vndangkhoa/kv-download:latest
-    container_name: kv-download
-    restart: unless-stopped
-    ports:
-      - "9292:9292"
-    volumes:
-      - /volume2/docker/kv-download/download:/download
-    environment:
-      - MR_DOWNLOAD_DIR=/download
-      - TZ=Asia/Ho_Chi_Minh
-```
-
-```bash
-docker compose up -d
+docker pull git.khoavo.myds.me/vndangkhoa/kv-download:v1
 ```
 
 ### Build Your Own Image
 
 ```bash
-docker build -t kv-download:latest --platform linux/amd64 .
+docker build -t git.khoavo.myds.me/vndangkhoa/kv-download:v1 --platform linux/amd64 .
+docker push git.khoavo.myds.me/vndangkhoa/kv-download:v1
+```
+
+## Deploy on Synology NAS
+
+### Method 1: Docker Compose (Recommended)
+
+1. SSH into your Synology NAS
+
+2. Create a project directory and copy the `docker-compose.yml` there
+
+3. Run:
+```bash
+cd /path/to/project
+docker compose up -d
+```
+
+### Method 2: Synology Container Manager (Docker GUI)
+
+1. Open **Container Manager** in DSM
+
+2. Go to **Registry** → **Add** → enter:
+   - Server: `git.khoavo.myds.me`
+   - Username: `vndangkhoa`
+   - Password: `Thieugia19`
+
+3. Search for `vndangkhoa/kv-download` and download the `v1` tag
+
+4. Go to **Image** → select `kv-download` → **Create Container**
+
+5. Configure the container:
+   - **Container Name**: `kv-download`
+   - **Port Settings**: Local `9292` → Container `9292`
+   - **Volume Settings**:
+     - Add folder: `/volume2/docker/kv-download/download` → Mount path `/download`
+   - **Environment Variables**:
+     - `MR_DOWNLOAD_DIR` = `/download`
+     - `TZ` = `Asia/Ho_Chi_Minh`
+   - **Restart Policy**: `Always restart the container`
+
+6. Click **Done** to start the container
+
+### Method 3: Docker CLI
+
+```bash
+docker run -d \
+  --name kv-download \
+  --restart unless-stopped \
+  -p 9292:9292 \
+  -v ./download:/download \
+  -e MR_DOWNLOAD_DIR=/download \
+  -e TZ=Asia/Ho_Chi_Minh \
+  git.khoavo.myds.me/vndangkhoa/kv-download:v1
 ```
 
 ## Docker Environment Variables
@@ -73,7 +99,7 @@ docker build -t kv-download:latest --platform linux/amd64 .
 
 After downloading videos, files are organized as follows:
 ```
-/download/
+download/
 ├── <hash>/
 │   └── <video-id>.mp4        # Video files
 └── json/

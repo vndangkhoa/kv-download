@@ -214,7 +214,38 @@ func downloadMedia(url string, requestArgs map[string]string) (string, string, e
 		log.Error().Msgf("failed to capture stderr: %v", errStderr)
 	}
 
+	moveJsonFiles(id)
+
 	return id, "", nil
+}
+
+func moveJsonFiles(id string) {
+	root := getMediaDirectory(id)
+	jsonDir := downloadDir + "json/"
+
+	if err := os.MkdirAll(jsonDir, 0755); err != nil {
+		log.Error().Msgf("failed to create json dir: %v", err)
+		return
+	}
+
+	file, err := os.Open(root)
+	if err != nil {
+		return
+	}
+	files, _ := file.Readdirnames(0)
+	file.Close()
+
+	for _, f := range files {
+		if strings.HasSuffix(f, ".json") {
+			src := root + f
+			dst := jsonDir + f
+			if err := os.Rename(src, dst); err != nil {
+				log.Error().Msgf("failed to move json %s: %v", f, err)
+			} else {
+				log.Info().Msgf("moved json metadata to %s", dst)
+			}
+		}
+	}
 }
 
 func getMediaDirectory(id string) string {
