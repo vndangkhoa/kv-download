@@ -1,12 +1,13 @@
 services:
   kv-download:
     image: git.khoavo.myds.me/vndangkhoa/kv-download:v1
+    pull_policy: always
     container_name: kv-download
     restart: unless-stopped
     ports:
       - "9292:9292"
     volumes:
-      - ./download:/download
+      - ./downloads:/download
     environment:
       - MR_DOWNLOAD_DIR=/download
       - TZ=Asia/Ho_Chi_Minh
