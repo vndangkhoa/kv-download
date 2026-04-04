@@ -1,0 +1,28 @@
+services:
+  kv-download:
+    image: git.khoavo.myds.me/vndangkhoa/kv-download:latest
+    container_name: kv-download
+    restart: unless-stopped
+    ports:
+      - "9292:9292"
+    volumes:
+      - ./downloads:/download
+    environment:
+      - MR_DOWNLOAD_DIR=/download
+      - TZ=Asia/Ho_Chi_Minh
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9292/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 5s
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: "1.0"
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

@@ -1,1 +1,9 @@
 downloads/
+download/
+.git/
+.github/
+.forgejo/
+.idea/
+.DS_Store
+*.md
+media-roller

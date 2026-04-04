@@ -1,5 +1,8 @@
-FROM golang:1.25.3-alpine3.22 AS builder
+# syntax=docker/dockerfile:1
+FROM --platform=$BUILDPLATFORM golang:1.25.3-alpine3.22 AS builder
 
+ARG TARGETOS
+ARG TARGETARCH
 RUN apk add --no-cache curl
 
 WORKDIR /app
@@ -10,10 +13,16 @@ COPY go.mod go.mod
 COPY go.sum go.sum
 
 RUN go mod download
-RUN go build -x -o media-roller ./src
+RUN GOOS=$TARGETOS GOARCH=$TARGETARCH go build -x -o media-roller ./src
 
 # yt-dlp needs python
-FROM python:3.13.7-alpine3.22
+FROM --platform=$TARGETPLATFORM python:3.13.7-alpine3.22
+
+ARG TARGETARCH
+
+LABEL org.opencontainers.image.source="https://git.khoavo.myds.me/vndangkhoa/kv-download"
+LABEL org.opencontainers.image.description="Media Roller - Mobile friendly video downloader"
+LABEL org.opencontainers.image.licenses="MIT"
 
 # This is where the downloaded files will be saved in the container.
 ENV MR_DOWNLOAD_DIR="/download"
@@ -46,5 +55,8 @@ RUN yt-dlp --version && \
     ffmpeg -version
 
 EXPOSE 9292
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:9292/ || exit 1
 
 ENTRYPOINT ["/app/media-roller"]
