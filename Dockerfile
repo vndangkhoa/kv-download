@@ -30,6 +30,7 @@ COPY --from=mwader/static-ffmpeg:8.0 /ffprobe /usr/local/bin/
 COPY --from=builder /app/media-roller /app/media-roller
 COPY templates /app/templates
 COPY static /app/static
+COPY cookies.txt /app/cookies.txt
 
 WORKDIR /app
 
@@ -43,5 +44,7 @@ RUN yt-dlp --update --update-to nightly
 # Sanity check
 RUN yt-dlp --version && \
     ffmpeg -version
+
+EXPOSE 9292
 
 ENTRYPOINT ["/app/media-roller"]

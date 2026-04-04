@@ -25,7 +25,6 @@ func main() {
 		router.Get("/fetch", media.FetchMedia)
 		router.Get("/api/download", media.FetchMediaApi)
 		router.Get("/download", media.ServeMedia)
-		router.Get("/about", media.AboutIndex)
 	})
 	fileServer(router, "/static", "static/")
 
@@ -43,7 +42,7 @@ func main() {
 	go startYtDlpUpdater()
 
 	// The HTTP Server
-	server := &http.Server{Addr: ":3000", Handler: router}
+	server := &http.Server{Addr: ":9292", Handler: router}
 
 	// Server run context
 	serverCtx, serverStopCtx := context.WithCancel(context.Background())
@@ -87,7 +86,7 @@ func main() {
 // startYtDlpUpdater will update the yt-dlp to the latest nightly version ever few hours
 func startYtDlpUpdater() {
 	log.Info().Msgf("yt-dlp version: %s", media.GetInstalledVersion())
-	ticker := time.NewTicker(12 * time.Hour)
+	ticker := time.NewTicker(6 * time.Hour)
 
 	// Do one update now
 	_ = media.UpdateYtDlp()

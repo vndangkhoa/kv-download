@@ -1,30 +1,23 @@
 package media
 
 import (
+	"bytes"
 	"crypto/md5"
 	"errors"
 	"fmt"
 	"github.com/dustin/go-humanize"
+	"github.com/rs/zerolog/log"
 	"golang.org/x/sync/errgroup"
 	"html/template"
+	"io"
 	"media-roller/src/utils"
 	"net/http"
+	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
-)
-
-/**
-This file will download the media from a URL and save it to disk.
-*/
-
-import (
-	"bytes"
-	"github.com/rs/zerolog/log"
-	"io"
-	"os"
-	"os/exec"
 )
 
 type Media struct {
@@ -36,7 +29,6 @@ type Media struct {
 
 var fetchIndexTmpl = template.Must(template.ParseFiles("templates/media/index.html"))
 
-// Where the media files are saved. Always has a trailing slash
 var downloadDir = getDownloadDir()
 var idCharSet = regexp.MustCompile(`^[a-zA-Z0-9]+$`).MatchString
 
@@ -85,14 +77,12 @@ func FetchMediaApi(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// just take the first one
 	streamFileToClientById(w, r, medias[0].Id)
 }
 
 func getUrl(r *http.Request) (string, map[string]string) {
 	u := strings.TrimSpace(r.URL.Query().Get("url"))
 
-	// Support yt-dlp arguments passed in via the url. We'll assume anything starting with a dash - is an argument
 	args := make(map[string]string)
 	for k, v := range r.URL.Query() {
 		if strings.HasPrefix(k, "-") {
@@ -115,18 +105,12 @@ func getMediaResults(inputUrl string, args map[string]string) ([]Media, string, 
 	url := utils.NormalizeUrl(inputUrl)
 	log.Info().Msgf("Got input '%s' and extracted '%s' with args %v", inputUrl, url, args)
 
-	// NOTE: This system is for a simple use case, meant to run at home. This is not a great design for a robust system.
-	// We are hashing the URL here and writing files to disk to a consistent directory based on the ID. You can imagine
-	// concurrent users would break this for the same URL. That's fine given this is for a simple home system.
-	// Future work can make this more sophisticated.
 	id := GetMD5Hash(url, args)
-	// Look to see if we already have the media on disk
 	medias, err := getAllFilesForId(id)
 	if err != nil {
 		return nil, "", err
 	}
 	if len(medias) == 0 {
-		// We don't, so go fetch it
 		errMessage := ""
 		id, errMessage, err = downloadMedia(url, args)
 		if err != nil {
@@ -141,29 +125,31 @@ func getMediaResults(inputUrl string, args map[string]string) ([]Media, string, 
 	return medias, "", nil
 }
 
-// returns the ID of the file, and error message, and an error
 func downloadMedia(url string, requestArgs map[string]string) (string, string, error) {
-	// The id will be used as the name of the parent directory of the output files
 	id := GetMD5Hash(url, requestArgs)
 	name := getMediaDirectory(id) + "%(id)s.%(ext)s"
 
 	log.Info().Msgf("Downloading %s to %s", url, name)
 
+	cookiesPath := getCookiesPath()
+
 	defaultArgs := map[string]string{
-		"--format":              "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
-		"--merge-output-format": "mp4",
-		"--trim-filenames":      "100",
-		"--recode-video":        "mp4",
-		"--format-sort":         "codec:h264",
-		"--restrict-filenames":  "",
-		"--write-info-json":     "",
-		"--verbose":             "",
-		"--output":              name,
+		"--format":                "best",
+		"--trim-filenames":        "100",
+		"--recode-video":          "mp4",
+		"--restrict-filenames":    "",
+		"--write-info-json":       "",
+		"--output":                name,
+		"--no-check-certificates": "",
+		"--extractor-args":        "instagram:image_persist=1",
+	}
+
+	if _, err := os.Stat(cookiesPath); err == nil {
+		defaultArgs["--cookies"] = cookiesPath
 	}
 
 	args := make([]string, 0)
 
-	// First add all default arguments that were not supplied as request level arguments
 	for arg, value := range defaultArgs {
 		if _, has := requestArgs[arg]; !has {
 			args = append(args, arg)
@@ -173,7 +159,6 @@ func downloadMedia(url string, requestArgs map[string]string) (string, string, e
 		}
 	}
 
-	// Now add all request level arguments
 	for arg, value := range requestArgs {
 		args = append(args, arg)
 		if value != "" {
@@ -181,7 +166,6 @@ func downloadMedia(url string, requestArgs map[string]string) (string, string, e
 		}
 	}
 
-	// And finally add any environment level arguments not supplied as request level args
 	for arg, value := range getEnvVars() {
 		if _, has := requestArgs[arg]; !has {
 			args = append(args, arg)
@@ -233,13 +217,10 @@ func downloadMedia(url string, requestArgs map[string]string) (string, string, e
 	return id, "", nil
 }
 
-// Returns the relative directory containing the media file, with a trailing slash.
-// Id is expected to be pre validated
 func getMediaDirectory(id string) string {
 	return downloadDir + id + "/"
 }
 
-// id is expected to be validated prior to calling this func
 func getAllFilesForId(id string) ([]Media, error) {
 	root := getMediaDirectory(id)
 	file, err := os.Open(root)
@@ -249,14 +230,13 @@ func getAllFilesForId(id string) ([]Media, error) {
 		}
 		return nil, err
 	}
-	files, _ := file.Readdirnames(0) // 0 to read all files and folders
+	files, _ := file.Readdirnames(0)
 	if len(files) == 0 {
 		return nil, errors.New("ID not found: " + id)
 	}
 
 	var medias []Media
 
-	// We expect two files to be produced for each video, a json manifest and an mp4.
 	for _, f := range files {
 		if !strings.HasSuffix(f, ".json") {
 			fi, err2 := os.Stat(root + f)
@@ -278,24 +258,19 @@ func getAllFilesForId(id string) ([]Media, error) {
 	return medias, nil
 }
 
-// id is expected to be validated prior to calling this func
-// TODO: This needs to handle multiple files in the directory
 func getFileFromId(id string) (string, error) {
 	root := getMediaDirectory(id)
 	file, err := os.Open(root)
 	if err != nil {
 		return "", err
 	}
-	files, _ := file.Readdirnames(0) // 0 to read all files and folders
+	files, _ := file.Readdirnames(0)
 	if len(files) == 0 {
 		return "", errors.New("ID not found")
 	}
 
-	// We expect two files to be produced, a json manifest and an mp4. We want to return the mp4
-	// Sometimes the video file might not have an mp4 extension, so filter out the json file
 	for _, f := range files {
 		if !strings.HasSuffix(f, ".json") {
-			// TODO: This is just returning the first file found. We need to handle multiple
 			return root + f, nil
 		}
 	}
@@ -329,6 +304,11 @@ func getDownloadDir() string {
 		return dir
 	}
 	return "downloads/"
+}
+
+func getCookiesPath() string {
+	execDir, _ := filepath.Abs(filepath.Dir(os.Args[0]))
+	return filepath.Join(execDir, "cookies.txt")
 }
 
 func getEnvVars() map[string]string {

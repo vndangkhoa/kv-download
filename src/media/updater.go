@@ -13,12 +13,9 @@ import (
 var CachedYtDlpVersion = ""
 
 func UpdateYtDlp() error {
-	log.Info().Msgf("Updateing yt-dlp")
+	log.Info().Msgf("Updateing yt-dlp to nightly")
 
-	cmd := exec.Command("yt-dlp",
-		"--update",
-		"--update-to", "nightly",
-	)
+	cmd := exec.Command("pip3", "install", "-U", "yt-dlp")
 
 	var stdoutBuf, stderrBuf bytes.Buffer
 	stdoutIn, _ := cmd.StdoutPipe()
