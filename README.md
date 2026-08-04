@@ -91,6 +91,46 @@ docker compose up -d
 ./docker-run.sh
 ```
 
+### Synology NAS
+
+1. Open **Container Manager** (or Docker on older DSM)
+2. Create a new project/stack:
+
+```yaml
+services:
+  kv-download:
+    image: vndangkhoa/kv-download:latest
+    container_name: kv-download
+    restart: unless-stopped
+    ports:
+      - "9292:9292"
+    volumes:
+      - /volume2/docker/kv-download/downloads:/download
+      - /volume2/docker/kv-download/cookies.txt:/app/cookies.txt:ro
+    environment:
+      - TZ=Asia/Ho_Chi_Minh
+```
+
+3. Place `cookies.txt` in `/volume2/docker/kv-download/`
+4. Access at `http://NAS_IP:9292`
+
+#### Clean up downloads
+
+```bash
+# SSH into NAS, then delete all downloaded files
+rm -rf /volume2/docker/kv-download/downloads/*
+
+# Or delete files older than 7 days
+find /volume2/docker/kv-download/downloads/ -type f -mtime +7 -delete
+```
+
+To automate cleanup, add a cron job via **Task Scheduler** in DSM:
+
+```bash
+# Run daily at 3 AM, delete files older than 7 days
+0 3 * * * find /volume2/docker/kv-download/downloads/ -type f -mtime +7 -delete
+```
+
 ---
 
 ## Cookies (optional)
