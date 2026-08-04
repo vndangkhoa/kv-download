@@ -50,7 +50,7 @@
                               placeholder="Paste video URL(s) here... one per line" rows="1"
                               id="urlInput" autofocus></textarea>
                     <button class="btn-download" type="submit" id="submitBtn">
-                        <i class="bi bi-download"></i>
+                        <i class="bi bi-search"></i>
                         <span class="btn-text">Fetch Videos</span>
                     </button>
                 </div>
@@ -62,10 +62,36 @@
                 <div class="progress-bar-fill" id="progressFill"></div>
             </div>
             <div class="progress-info">
-                <span class="progress-label" id="progressLabel">Preparing download...</span>
+                <span class="progress-label" id="progressLabel">Preparing scan...</span>
                 <span class="progress-timer" id="progressTimer">0:00</span>
             </div>
+            <div class="stepper-bar" id="stepperBar">
+                <div class="step-item" id="step1"><span class="step-number">1</span><span>Scan Link</span></div>
+                <div class="step-line" id="line1"></div>
+                <div class="step-item" id="step2"><span class="step-number">2</span><span>Select</span></div>
+                <div class="step-line" id="line2"></div>
+                <div class="step-item" id="step3"><span class="step-number">3</span><span>Download</span></div>
+                <div class="step-line" id="line3"></div>
+                <div class="step-item" id="step4"><span class="step-number">4</span><span>Play & Save</span></div>
+            </div>
             <div class="download-queue" id="downloadQueue"></div>
+        </div>
+
+        <div class="selection-section d-none" id="selectionSection">
+            <div class="selection-bar">
+                <div class="selection-count">
+                    <i class="bi bi-collection-play"></i>
+                    <span id="selectionCountText">0 videos found</span>
+                </div>
+                <div class="selection-actions">
+                    <button type="button" class="btn-select-toggle" id="btnSelectToggle">Deselect All</button>
+                    <button type="button" class="btn-start-download" id="btnStartDownload">
+                        <i class="bi bi-download"></i>
+                        <span id="btnStartDownloadText">Download Selected (0)</span>
+                    </button>
+                </div>
+            </div>
+            <div class="selection-grid" id="selectionGrid"></div>
         </div>
 
         <div class="platforms-wrapper">
@@ -79,11 +105,18 @@
 
     <section class="results-section d-none" id="resultsSection">
         <div class="section-header">
-            <i class="bi bi-check-circle-fill"></i>
-            <h2>Download Complete</h2>
-            <button class="btn-download-all d-none" id="downloadAllBtn" title="Download all videos as a ZIP">
-                <i class="bi bi-folder-zip"></i> Download All
-            </button>
+            <div class="header-left">
+                <i class="bi bi-check-circle-fill"></i>
+                <h2>Download Complete</h2>
+            </div>
+            <div class="header-actions">
+                <button type="button" class="btn-go-back" id="btnGoBack" title="Return to video selection grid">
+                    <i class="bi bi-arrow-left"></i> Select More Videos
+                </button>
+                <button class="btn-download-all d-none" id="downloadAllBtn" title="Download all videos as a ZIP">
+                    <i class="bi bi-folder-zip"></i> Download All
+                </button>
+            </div>
         </div>
         <div class="media-grid" id="mediaGrid"></div>
     </section>
@@ -137,9 +170,16 @@
     var progressLabel = document.getElementById('progressLabel');
     var progressTimer = document.getElementById('progressTimer');
     var downloadQueue = document.getElementById('downloadQueue');
+    var selectionSection = document.getElementById('selectionSection');
+    var selectionCountText = document.getElementById('selectionCountText');
+    var btnSelectToggle = document.getElementById('btnSelectToggle');
+    var btnStartDownload = document.getElementById('btnStartDownload');
+    var btnStartDownloadText = document.getElementById('btnStartDownloadText');
+    var selectionGrid = document.getElementById('selectionGrid');
     var resultsSection = document.getElementById('resultsSection');
     var mediaGrid = document.getElementById('mediaGrid');
     var downloadAllBtn = document.getElementById('downloadAllBtn');
+    var btnGoBack = document.getElementById('btnGoBack');
     var errorSection = document.getElementById('errorSection');
     var errorText = document.getElementById('errorText');
 
@@ -149,6 +189,7 @@
     var matrixCanvas = document.getElementById('matrixCanvas');
     var currentThemeLabel = document.getElementById('currentThemeLabel');
 
+    var scannedEntries = [];
     var mediaIds = [];
     var currentTheme = localStorage.getItem('kv_theme') || 'simple';
 
@@ -226,15 +267,11 @@
         if (themeName === 'matrix') {
             if (matrixCanvas) matrixCanvas.classList.remove('d-none');
             startMatrixRain();
-            if (btnText && (btnText.textContent === 'Fetch Videos' || btnText.textContent === 'Download')) {
-                btnText.textContent = '[ DOWNLOAD ]';
-            }
+            if (btnText && btnText.textContent === 'Fetch Videos') btnText.textContent = '[ INITIATE_SCAN ]';
         } else {
             if (matrixCanvas) matrixCanvas.classList.add('d-none');
             stopMatrixRain();
-            if (btnText && btnText.textContent === '[ DOWNLOAD ]') {
-                btnText.textContent = 'Fetch Videos';
-            }
+            if (btnText && btnText.textContent === '[ INITIATE_SCAN ]') btnText.textContent = 'Fetch Videos';
         }
     }
 
@@ -259,6 +296,22 @@
     });
 
     applyTheme(currentTheme);
+
+    function updateStepper(step) {
+        for (var i = 1; i <= 4; i++) {
+            var stepEl = document.getElementById('step' + i);
+            var lineEl = document.getElementById('line' + (i - 1));
+            if (stepEl) {
+                stepEl.classList.remove('active', 'completed');
+                if (i < step) stepEl.classList.add('completed');
+                else if (i === step) stepEl.classList.add('active');
+            }
+            if (lineEl) {
+                lineEl.classList.remove('completed');
+                if (i <= step) lineEl.classList.add('completed');
+            }
+        }
+    }
 
     function formatTime(sec) {
         var m = Math.floor(sec / 60);
@@ -291,24 +344,6 @@
         var pct = total === 0 ? 0 : (completed / total) * 100;
         progressFill.style.width = pct + '%';
         progressLabel.textContent = completed + ' of ' + total + ' done';
-    }
-
-    function setLoading(loading, label) {
-        submitBtn.disabled = loading;
-        var defaultBtnText = currentTheme === 'matrix' ? '[ DOWNLOAD ]' : 'Fetch Videos';
-        btnText.textContent = loading ? (label || 'Fetching...') : defaultBtnText;
-        if (loading) {
-            progressContainer.classList.remove('d-none');
-            resultsSection.classList.add('d-none');
-            errorSection.classList.add('d-none');
-            downloadQueue.innerHTML = '';
-            mediaGrid.innerHTML = '';
-            mediaIds = [];
-            progressFill.style.width = '0%';
-            startTimer();
-        } else {
-            stopTimer(false);
-        }
     }
 
     function getUrls() {
@@ -352,7 +387,7 @@
         if (status === 'scanning' || status === 'loading') {
             icon.classList.add('queue-loading');
             icon.innerHTML = '<div class="spinner"></div>';
-            statusEl.textContent = 'Fetching video file...';
+            statusEl.textContent = status === 'scanning' ? 'Scanning metadata...' : 'Fetching video file...';
             statusEl.className = 'queue-status';
         } else if (status === 'done') {
             icon.classList.add('queue-done');
@@ -422,11 +457,171 @@
     });
 
     function startFlow(urls) {
-        var items = urls.map(function(u) { return { url: u }; });
-        downloadUrls(items);
+        scannedEntries = [];
+        updateStepper(1);
+        submitBtn.disabled = true;
+        btnText.textContent = 'Scanning...';
+
+        progressContainer.classList.remove('d-none');
+        selectionSection.classList.add('d-none');
+        resultsSection.classList.add('d-none');
+        errorSection.classList.add('d-none');
+        downloadQueue.innerHTML = '';
+        mediaGrid.innerHTML = '';
+        mediaIds = [];
+        progressFill.style.width = '0%';
+        startTimer();
+
+        var completed = 0;
+        var total = urls.length;
+        var hasErrors = false;
+        var errorLogs = [];
+
+        urls.forEach(function(url, i) { addQueueItem(i, url); });
+
+        function scanNext() {
+            if (completed >= total) {
+                stopTimer(false);
+                submitBtn.disabled = false;
+                btnText.textContent = currentTheme === 'matrix' ? '[ INITIATE_SCAN ]' : 'Fetch Videos';
+
+                if (scannedEntries.length > 0) {
+                    updateStepper(2);
+                    renderSelectionGrid();
+                } else if (hasErrors) {
+                    errorText.textContent = errorLogs.join('\n\n');
+                    errorSection.classList.remove('d-none');
+                }
+                return;
+            }
+
+            var idx = completed;
+            var url = urls[idx];
+            setQueueItemStatus(idx, 'scanning');
+
+            var xhr = new XMLHttpRequest();
+            xhr.open('GET', '/api/scan?url=' + encodeURIComponent(url), true);
+            xhr.setRequestHeader('X-Requested-With', 'XMLHttpRequest');
+
+            xhr.onload = function() {
+                completed++;
+                if (xhr.status === 200) {
+                    try {
+                        var data = JSON.parse(xhr.responseText);
+                        if (data.scan && data.scan.entries && data.scan.entries.length > 0) {
+                            data.scan.entries.forEach(function(entry) {
+                                scannedEntries.push({
+                                    id: entry.id,
+                                    title: entry.title || data.scan.title || url,
+                                    url: entry.url || url,
+                                    thumbnail: entry.thumbnail || data.scan.thumbnail || '',
+                                    selected: true
+                                });
+                            });
+                            setQueueItemStatus(idx, 'done', data.scan.entries.length + ' video(s)');
+                        } else {
+                            // Fallback single entry
+                            scannedEntries.push({
+                                id: url,
+                                title: url,
+                                url: url,
+                                thumbnail: '',
+                                selected: true
+                            });
+                            setQueueItemStatus(idx, 'done', '1 video');
+                        }
+                    } catch (err) {
+                        scannedEntries.push({ id: url, title: url, url: url, thumbnail: '', selected: true });
+                        setQueueItemStatus(idx, 'done', '1 video');
+                    }
+                } else {
+                    scannedEntries.push({ id: url, title: url, url: url, thumbnail: '', selected: true });
+                    setQueueItemStatus(idx, 'done', '1 video');
+                }
+                updateOverallProgress(completed, total);
+                scanNext();
+            };
+
+            xhr.onerror = function() {
+                completed++;
+                scannedEntries.push({ id: url, title: url, url: url, thumbnail: '', selected: true });
+                setQueueItemStatus(idx, 'done', '1 video');
+                updateOverallProgress(completed, total);
+                scanNext();
+            };
+
+            xhr.send();
+        }
+
+        scanNext();
     }
 
+    function renderSelectionGrid() {
+        selectionSection.classList.remove('d-none');
+        selectionCountText.textContent = scannedEntries.length + ' video(s) found';
+        selectionGrid.innerHTML = '';
+
+        scannedEntries.forEach(function(item, i) {
+            var card = document.createElement('div');
+            card.className = 'select-item-card' + (item.selected ? ' is-selected' : '');
+
+            var thumbHtml = item.thumbnail
+                ? '<img src="' + escapeHtml(item.thumbnail) + '" class="select-item-thumb" alt="thumbnail" onerror="this.onerror=null;this.replaceWith(document.createRange().createContextualFragment(\'<div class=\\\ select-item-thumb-placeholder\\\'><i class=\\\ bi bi-film\\\'></i></div>\'));">'
+                : '<div class="select-item-thumb-placeholder"><i class="bi bi-film"></i></div>';
+
+            card.innerHTML =
+                thumbHtml +
+                '<div class="select-item-info">' +
+                    '<div class="select-item-title" title="' + escapeHtml(item.title) + '">' + escapeHtml(item.title) + '</div>' +
+                    '<div class="select-item-url" title="' + escapeHtml(item.url) + '">' + escapeHtml(shortenUrl(item.url)) + '</div>' +
+                '</div>' +
+                '<div class="select-item-check"><i class="bi bi-check-lg"></i></div>';
+
+            card.addEventListener('click', function() {
+                item.selected = !item.selected;
+                card.classList.toggle('is-selected', item.selected);
+                updateSelectionCount();
+            });
+
+            selectionGrid.appendChild(card);
+        });
+
+        updateSelectionCount();
+    }
+
+    function updateSelectionCount() {
+        var selectedCount = scannedEntries.filter(function(e) { return e.selected; }).length;
+        var downloadLabel = currentTheme === 'matrix' ? '[ DOWNLOAD_SELECTED (' + selectedCount + ') ]' : 'Download Selected (' + selectedCount + ')';
+        btnStartDownloadText.textContent = downloadLabel;
+        btnStartDownload.disabled = (selectedCount === 0);
+
+        var allSelected = (selectedCount === scannedEntries.length && scannedEntries.length > 0);
+        btnSelectToggle.textContent = allSelected ? 'Deselect All' : 'Select All';
+    }
+
+    btnSelectToggle.addEventListener('click', function() {
+        var selectedCount = scannedEntries.filter(function(e) { return e.selected; }).length;
+        var shouldSelectAll = (selectedCount < scannedEntries.length);
+        scannedEntries.forEach(function(e) { e.selected = shouldSelectAll; });
+        renderSelectionGrid();
+    });
+
+    btnStartDownload.addEventListener('click', function() {
+        var selectedItems = scannedEntries.filter(function(e) { return e.selected; });
+        if (selectedItems.length === 0) return;
+
+        selectionSection.classList.add('d-none');
+        downloadUrls(selectedItems);
+    });
+
+    btnGoBack.addEventListener('click', function() {
+        resultsSection.classList.add('d-none');
+        selectionSection.classList.remove('d-none');
+        updateStepper(2);
+    });
+
     function downloadUrls(items) {
+        updateStepper(3);
         progressContainer.classList.remove('d-none');
         resultsSection.classList.remove('d-none');
         errorSection.classList.add('d-none');
@@ -452,8 +647,9 @@
                 progressFill.style.width = '100%';
                 progressLabel.textContent = 'All done';
                 stopTimer(true);
+                updateStepper(4);
                 submitBtn.disabled = false;
-                btnText.textContent = currentTheme === 'matrix' ? '[ DOWNLOAD ]' : 'Fetch Videos';
+                btnText.textContent = currentTheme === 'matrix' ? '[ INITIATE_SCAN ]' : 'Fetch Videos';
 
                 if (mediaIds.length === 0 && hasErrors) {
                     errorText.textContent = errorLogs.join('\n\n');

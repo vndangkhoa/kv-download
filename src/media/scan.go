@@ -37,7 +37,7 @@ func ScanUrl(inputUrl string) (*ScanInfo, string, error) {
 
 	log.Info().Msgf("Scanning %s", url)
 
-	const maxAttempts = 3
+	const maxAttempts = 2
 	var lastStderr string
 
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
@@ -48,11 +48,25 @@ func ScanUrl(inputUrl string) (*ScanInfo, string, error) {
 		lastStderr = stderr
 		if attempt < maxAttempts {
 			log.Warn().Msgf("scan attempt %d/%d failed for %s: %s — retrying", attempt, maxAttempts, url, stderr)
-			time.Sleep(2 * time.Second)
+			time.Sleep(1 * time.Second)
 		}
 	}
 
-	return nil, lastStderr, errors.New(lastStderr)
+	// Fallback for single video links if flat-playlist metadata scan fails
+	log.Warn().Msgf("Scan metadata fallback for %s (error: %s)", url, lastStderr)
+	return &ScanInfo{
+		Title:      url,
+		Count:      1,
+		IsPlaylist: false,
+		Entries: []ScanEntry{
+			{
+				Id:        url,
+				Title:     url,
+				Url:       url,
+				Thumbnail: "",
+			},
+		},
+	}, "", nil
 }
 
 func runScanAttempt(url string) (*ScanInfo, string, error) {
