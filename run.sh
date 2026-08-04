@@ -2,7 +2,7 @@
 set -euo pipefail
 
 PORT="${PORT:-9292}"
-DOWNLOAD_DIR="${MR_DOWNLOAD_DIR:-./download}"
+DOWNLOAD_DIR="${MR_DOWNLOAD_DIR:-./downloads}"
 
 log() {
   echo "[kv-download] $*"

@@ -53,8 +53,8 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: |
-            docker.io/ronnieroller/media-roller
-            ghcr.io/rroller/media-roller
+            docker.io/vndangkhoa/kv-download
+            ghcr.io/vndangkhoa/kv-download
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
             type=sha
