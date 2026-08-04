@@ -1,9 +1,6 @@
 services:
   kv-download:
-    image: git.khoavo.myds.me/vndangkhoa/kv-download:latest
-    # Alternative registry images:
-    # image: vndangkhoa/kv-download:latest
-    # image: ghcr.io/vndangkhoa/kv-download:latest
+    image: git.khoavo.myds.me/vndangkhoa/kv-download:v1
     pull_policy: always
     container_name: kv-download
     restart: unless-stopped
@@ -11,7 +8,6 @@ services:
       - "9292:9292"
     volumes:
       - ./downloads:/download
-      - ./cookies.txt:/app/cookies.txt:ro
     environment:
       - MR_DOWNLOAD_DIR=/download
       - TZ=Asia/Ho_Chi_Minh
