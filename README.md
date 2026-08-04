@@ -104,23 +104,53 @@ Some platforms (TikTok, Instagram, Twitter/X) require authentication to download
 3. Click the extension icon and export cookies as `cookies.txt`
 4. Place the file in the project root (same directory as `run.sh`)
 
-### Option 2: yt-dlp browser extraction
+### Option 2: yt-dlp browser extraction (recommended)
 
-yt-dlp can extract cookies directly from your browser:
+yt-dlp can extract cookies directly from your installed browser.
 
-```bash
-# Use cookies from Chrome
-yt-dlp --cookies-from-browser chrome "VIDEO_URL"
+#### Windows
+
+```cmd
+:: Install secretstorage dependency (run once)
+pip install secretstorage
+
+:: Extract cookies from Chrome (browser must be closed)
+yt-dlp --cookies-from-browser chrome --cookies cookies.txt "https://www.youtube.com/"
+
+:: Or from Firefox
+yt-dlp --cookies-from-browser firefox --cookies cookies.txt "https://www.youtube.com/"
 ```
 
-This requires the browser to be closed while running.
-
-### Option 3: Manual export
+#### Linux
 
 ```bash
-# Export cookies from a running browser session
-yt-dlp --cookies-from-browser firefox --cookies cookies.txt "VIDEO_URL"
+# Install secretstorage dependency (Ubuntu/Debian)
+sudo apt install python3-secretstorage
+
+# Extract cookies from Chrome (browser must be closed)
+yt-dlp --cookies-from-browser chrome --cookies cookies.txt "https://www.youtube.com/"
+
+# Or from Firefox
+yt-dlp --cookies-from-browser firefox --cookies cookies.txt "https://www.youtube.com/"
 ```
+
+#### macOS
+
+```bash
+# Install secretstorage dependency
+pip3 install secretstorage
+
+# Extract cookies from Chrome (browser must be closed)
+yt-dlp --cookies-from-browser chrome --cookies cookies.txt "https://www.youtube.com/"
+
+# Or from Safari
+yt-dlp --cookies-from-browser safari --cookies cookies.txt "https://www.youtube.com/"
+
+# Or from Firefox
+yt-dlp --cookies-from-browser firefox --cookies cookies.txt "https://www.youtube.com/"
+```
+
+> **Note:** The browser must be fully closed (not running in background) when extracting cookies.
 
 ### Using cookies.txt
 
