@@ -1,40 +1,63 @@
-<p align="center">
-  <img src="static/images/screenshot.png" alt="KV Download" width="100%">
-</p>
+<div align="center">
 
-<h1 align="center">KV Download</h1>
+# 🎬 KV Download
 
-<p align="center">
-  A fast, mobile-friendly video downloader for social media platforms.<br>
-  Built with <a href="https://go.dev/">Go</a> + <a href="https://github.com/yt-dlp/yt-dlp">yt-dlp</a>.
-</p>
+**A fast, mobile-friendly video downloader for social media platforms.**
 
-<p align="center">
-  <a href="#features">Features</a> &bull;
-  <a href="#quick-start">Quick Start</a> &bull;
-  <a href="#docker">Docker</a> &bull;
-  <a href="#cookies-optional">Cookies</a> &bull;
-  <a href="#api">API</a> &bull;
-  <a href="#configuration">Configuration</a>
-</p>
+Built with **Go** + **[yt-dlp](https://github.com/yt-dlp/yt-dlp)** — deploy anywhere in one command.
+
+[![Go Version](https://img.shields.io/badge/Go-1.24+-00ADD8.svg?logo=go&logoColor=white)](https://go.dev/)
+[![Docker Hub](https://img.shields.io/badge/Docker-vndangkhoa%2Fkv--download-2496ED?logo=docker&logoColor=white)](https://hub.docker.com/repositories/vndangkhoa)
+[![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![Platform](https://img.shields.io/badge/Platform-amd64%20%7C%20arm64-blue.svg)](#docker)
+
+</div>
+
+<div align="center">
+  <img src="static/images/screenshot.png" alt="KV Download — screenshot" width="90%" style="border-radius: 12px; box-shadow: 0 8px 32px rgba(0,0,0,0.3);">
+</div>
+
+<br>
+
+## 📦 Table of Contents
+
+- [✨ Features](#-features)
+- [🚀 Quick Start](#-quick-start)
+- [🐳 Docker](#-docker)
+  - [Docker Hub](#docker-hub)
+  - [Forgejo Registry](#forgejo-registry)
+  - [Docker Compose](#docker-compose)
+  - [Build Locally](#build-locally)
+  - [Synology NAS](#synology-nas)
+- [🍪 Cookies (optional)](#-cookies-optional)
+- [⚙️ Configuration](#️-configuration)
+- [📡 API](#-api)
+- [🗂️ File Structure](#️-file-structure)
+- [📄 License](#-license)
 
 ---
 
-## Features
+## ✨ Features
 
-- **Multi-URL** &mdash; paste multiple links, download them all in sequence
-- **Download queue** &mdash; real-time per-URL status with progress bar
-- **ZIP export** &mdash; bundle all videos into a single download
-- **Responsive** &mdash; works on desktop, tablet, and mobile
-- **Video preview** &mdash; watch before you save
-- **Auto-update** &mdash; yt-dlp refreshes every 6 hours
-- **Dark mode** &mdash; sleek glassmorphism UI
+| 🚀 Multi-URL | 📥 Download queue | 💾 ZIP export |
+|:---:|:---:|:---:|
+| Paste multiple links, download them all in sequence | Real-time per-URL status with progress bar | Bundle all videos into a single download |
 
-Supported platforms: YouTube, TikTok, Instagram, Twitter/X, Vimeo, Reddit, and [many more](https://github.com/yt-dlp/yt-dlp/blob/master/supportedsites.md).
+| 📱 Responsive | 👀 Video preview | 🔄 Auto-update |
+|:---:|:---:|:---:|
+| Works on desktop, tablet, and mobile | Watch before you save | yt-dlp refreshes itself every 6 hours |
+
+| 🌙 Dark mode | 🔒 Cookie support | 🐳 One-command deploy |
+|:---:|:---:|:---:|
+| Sleek glassmorphism UI | Authenticate with TikTok, Instagram, Twitter/X | Single Docker image for amd64 & arm64 |
+
+### Supported platforms
+
+YouTube · TikTok · Instagram · Twitter/X · Vimeo · Reddit · [many more](https://github.com/yt-dlp/yt-dlp/blob/master/supportedsites.md)
 
 ---
 
-## Quick Start
+## 🚀 Quick Start
 
 **Prerequisites:** [Go](https://go.dev/dl/), [yt-dlp](https://github.com/yt-dlp/yt-dlp#installation), [FFmpeg](https://ffmpeg.org/download.html)
 
@@ -44,24 +67,28 @@ cd kv-download
 ./run.sh
 ```
 
-Then open **http://localhost:9292**
+Then open **http://localhost:9292** 🎉
 
 ---
 
-## Docker
+## 🐳 Docker
 
 ### Docker Hub
 
 ```bash
 docker pull vndangkhoa/kv-download:latest
-docker run -d -p 9292:9292 -v ./downloads:/download vndangkhoa/kv-download:latest
+docker run -d -p 9292:9292 \
+  -v ./downloads:/download \
+  vndangkhoa/kv-download:latest
 ```
 
 ### Forgejo Registry
 
 ```bash
 docker pull git.khoavo.myds.me/vndangkhoa/kv-download:latest
-docker run -d -p 9292:9292 -v ./downloads:/download git.khoavo.myds.me/vndangkhoa/kv-download:latest
+docker run -d -p 9292:9292 \
+  -v ./downloads:/download \
+  git.khoavo.myds.me/vndangkhoa/kv-download:latest
 ```
 
 ### Docker Compose
@@ -93,7 +120,7 @@ docker compose up -d
 
 ### Synology NAS
 
-1. Open **Container Manager** (or Docker on older DSM)
+1. Open **Container Manager** (or **Docker** on older DSM)
 2. Create a new project/stack:
 
 ```yaml
@@ -114,7 +141,7 @@ services:
 3. Place `cookies.txt` in `/volume2/docker/kv-download/`
 4. Access at `http://NAS_IP:9292`
 
-#### Clean up downloads
+#### 🧹 Clean up downloads
 
 ```bash
 # SSH into NAS, then delete all downloaded files
@@ -124,7 +151,7 @@ rm -rf /volume2/docker/kv-download/downloads/*
 find /volume2/docker/kv-download/downloads/ -type f -mtime +7 -delete
 ```
 
-To automate cleanup, add a cron job via **Task Scheduler** in DSM:
+Automate cleanup via **Task Scheduler** in DSM:
 
 ```bash
 # Run daily at 3 AM, delete files older than 7 days
@@ -133,70 +160,67 @@ To automate cleanup, add a cron job via **Task Scheduler** in DSM:
 
 ---
 
-## Cookies (optional)
+## 🍪 Cookies (optional)
 
-Some platforms (TikTok, Instagram, Twitter/X) require authentication to download private or age-restricted content. Create a `cookies.txt` file in Netscape format:
+Some platforms (**TikTok**, **Instagram**, **Twitter/X**) require authentication to download private or age-restricted content. Create a `cookies.txt` in Netscape format:
 
-### Option 1: Browser extension (recommended)
+### Option 1: Browser extension
 
 1. Install [Get cookies.txt LOCALLY](https://chromewebstore.google.com/detail/get-cookiestxt-locally/cclelndahbckbenkjhflpdbgdldlbecc) (Chrome) or [cookies.txt](https://addons.mozilla.org/en-US/firefox/addon/cookies-txt/) (Firefox)
 2. Log in to the platform (TikTok, Instagram, etc.)
-3. Click the extension icon and export cookies as `cookies.txt`
+3. Click the extension icon and export as `cookies.txt`
 4. Place the file in the project root (same directory as `run.sh`)
 
-### Option 2: yt-dlp browser extraction (recommended)
+### Option 2: yt-dlp browser extraction
 
-yt-dlp can extract cookies directly from your installed browser.
+yt-dlp can extract cookies directly from your installed browser. **Close the browser first!**
 
-#### Windows
-
-```cmd
-:: Install secretstorage dependency (run once)
-pip install secretstorage
-
-:: Extract cookies from Chrome (browser must be closed)
-yt-dlp --cookies-from-browser chrome --cookies cookies.txt "https://www.youtube.com/"
-
-:: Or from Firefox
-yt-dlp --cookies-from-browser firefox --cookies cookies.txt "https://www.youtube.com/"
-```
-
-#### Linux
+<details>
+<summary>🍎 macOS</summary>
 
 ```bash
-# Install secretstorage dependency (Ubuntu/Debian)
-sudo apt install python3-secretstorage
-
-# Extract cookies from Chrome (browser must be closed)
-yt-dlp --cookies-from-browser chrome --cookies cookies.txt "https://www.youtube.com/"
-
-# Or from Firefox
-yt-dlp --cookies-from-browser firefox --cookies cookies.txt "https://www.youtube.com/"
-```
-
-#### macOS
-
-```bash
-# Install secretstorage dependency
 pip3 install secretstorage
 
-# Extract cookies from Chrome (browser must be closed)
+# Chrome
 yt-dlp --cookies-from-browser chrome --cookies cookies.txt "https://www.youtube.com/"
-
-# Or from Safari
+# Safari
 yt-dlp --cookies-from-browser safari --cookies cookies.txt "https://www.youtube.com/"
-
-# Or from Firefox
+# Firefox
 yt-dlp --cookies-from-browser firefox --cookies cookies.txt "https://www.youtube.com/"
 ```
+</details>
 
-> **Note:** The browser must be fully closed (not running in background) when extracting cookies.
+<details>
+<summary>🐧 Linux</summary>
+
+```bash
+# Ubuntu/Debian
+sudo apt install python3-secretstorage
+
+# Chrome
+yt-dlp --cookies-from-browser chrome --cookies cookies.txt "https://www.youtube.com/"
+# Firefox
+yt-dlp --cookies-from-browser firefox --cookies cookies.txt "https://www.youtube.com/"
+```
+</details>
+
+<details>
+<summary>🪟 Windows</summary>
+
+```cmd
+pip install secretstorage
+yt-dlp --cookies-from-browser chrome --cookies cookies.txt "https://www.youtube.com/"
+yt-dlp --cookies-from-browser firefox --cookies cookies.txt "https://www.youtube.com/"
+```
+</details>
+
+> ⚠️ **Note:** The browser must be fully closed (not running in background) when extracting cookies.
 
 ### Using cookies.txt
 
 **Local:**
 ```bash
-# Place cookies.txt in the project root, run.sh will pass it automatically
+# Place cookies.txt in the project root — run.sh passes it automatically
 ./run.sh
 ```
 
@@ -224,11 +248,11 @@ services:
       - TZ=Asia/Ho_Chi_Minh
 ```
 
-> **Note:** `cookies.txt` contains session tokens. Never commit it to git or share it publicly.
+> 🔒 **Security:** `cookies.txt` contains session tokens. **Never commit it to git or share it publicly.**
 
 ---
 
-## Configuration
+## ⚙️ Configuration
 
 | Variable | Description | Default |
 |---|---|---|
@@ -237,7 +261,7 @@ services:
 
 ---
 
-## API
+## 📡 API
 
 ### Get video info (JSON)
 
@@ -245,7 +269,7 @@ services:
 GET /api/info?url=VIDEO_URL
 ```
 
-Returns:
+**Returns:**
 
 ```json
 {
@@ -287,7 +311,7 @@ javascript:(location.href="http://127.0.0.1:9292/fetch?url="+encodeURIComponent(
 
 ---
 
-## File Structure
+## 🗂️ File Structure
 
 ```
 <download-dir>/
@@ -300,6 +324,12 @@ javascript:(location.href="http://127.0.0.1:9292/fetch?url="+encodeURIComponent(
 
 ---
 
-## License
+## 📄 License
 
 [MIT](LICENSE)
+
+---
+
+<div align="center">
+  <sub>Made with ❤️ by <a href="https://github.com/vndangkhoa">vndangkhoa</a> · Star it on <a href="https://github.com/vndangkhoa/kv-download">GitHub</a> ⭐</sub>
+</div>
