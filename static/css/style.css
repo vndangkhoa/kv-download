@@ -127,6 +127,13 @@ body::after {
     animation: shimmer 3s ease-in-out infinite;
 }
 
+.app-title .app-logo {
+    width: 40px;
+    height: 40px;
+    flex-shrink: 0;
+    animation: shimmer 3s ease-in-out infinite;
+}
+
 @keyframes shimmer {
     0%, 100% { opacity: 1; }
     50% { opacity: 0.7; }
@@ -810,6 +817,11 @@ body::after {
 
     .app-title i {
         font-size: 1.3rem;
+    }
+
+    .app-title .app-logo {
+        width: 32px;
+        height: 32px;
     }
 
     .app-subtitle {
