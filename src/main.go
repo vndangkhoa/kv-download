@@ -31,6 +31,11 @@ func main() {
 	})
 	fileServer(router, "/static", "static/")
 
+	// Serve favicon.ico at root (browsers request this by default)
+	router.Get("/favicon.ico", func(w http.ResponseWriter, r *http.Request) {
+		http.ServeFile(w, r, "static/favicon-32x32.png")
+	})
+
 	// Print out all routes
 	walkFunc := func(method string, route string, handler http.Handler, middlewares ...func(http.Handler) http.Handler) error {
 		log.Info().Msgf("%s %s", method, route)

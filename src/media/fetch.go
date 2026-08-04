@@ -185,6 +185,12 @@ func downloadMedia(url string, requestArgs map[string]string) (string, string, e
 		"--extractor-args":        "instagram:image_persist=1",
 	}
 
+	if impersonate := strings.TrimSpace(os.Getenv("MR_IMPERSONATE")); impersonate != "" {
+		defaultArgs["--impersonate"] = impersonate
+	} else {
+		defaultArgs["--impersonate"] = "chrome"
+	}
+
 	if _, err := os.Stat(cookiesPath); err == nil {
 		if err := unix.Access(cookiesPath, unix.W_OK); err == nil {
 			defaultArgs["--cookies"] = cookiesPath
