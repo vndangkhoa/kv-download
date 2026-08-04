@@ -13,6 +13,7 @@
   <a href="#features">Features</a> &bull;
   <a href="#quick-start">Quick Start</a> &bull;
   <a href="#docker">Docker</a> &bull;
+  <a href="#cookies-optional">Cookies</a> &bull;
   <a href="#api">API</a> &bull;
   <a href="#configuration">Configuration</a>
 </p>
@@ -89,6 +90,71 @@ docker compose up -d
 ./docker-build.sh
 ./docker-run.sh
 ```
+
+---
+
+## Cookies (optional)
+
+Some platforms (TikTok, Instagram, Twitter/X) require authentication to download private or age-restricted content. Create a `cookies.txt` file in Netscape format:
+
+### Option 1: Browser extension (recommended)
+
+1. Install [Get cookies.txt LOCALLY](https://chromewebstore.google.com/detail/get-cookiestxt-locally/cclelndahbckbenkjhflpdbgdldlbecc) (Chrome) or [cookies.txt](https://addons.mozilla.org/en-US/firefox/addon/cookies-txt/) (Firefox)
+2. Log in to the platform (TikTok, Instagram, etc.)
+3. Click the extension icon and export cookies as `cookies.txt`
+4. Place the file in the project root (same directory as `run.sh`)
+
+### Option 2: yt-dlp browser extraction
+
+yt-dlp can extract cookies directly from your browser:
+
+```bash
+# Use cookies from Chrome
+yt-dlp --cookies-from-browser chrome "VIDEO_URL"
+```
+
+This requires the browser to be closed while running.
+
+### Option 3: Manual export
+
+```bash
+# Export cookies from a running browser session
+yt-dlp --cookies-from-browser firefox --cookies cookies.txt "VIDEO_URL"
+```
+
+### Using cookies.txt
+
+**Local:**
+```bash
+# Place cookies.txt in the project root, run.sh will pass it automatically
+./run.sh
+```
+
+**Docker:**
+```bash
+docker run -d -p 9292:9292 \
+  -v ./downloads:/download \
+  -v ./cookies.txt:/app/cookies.txt:ro \
+  vndangkhoa/kv-download:latest
+```
+
+**Docker Compose:**
+```yaml
+services:
+  kv-download:
+    image: vndangkhoa/kv-download:latest
+    container_name: kv-download
+    restart: unless-stopped
+    ports:
+      - "9292:9292"
+    volumes:
+      - ./downloads:/download
+      - ./cookies.txt:/app/cookies.txt:ro
+    environment:
+      - TZ=Asia/Ho_Chi_Minh
+```
+
+> **Note:** `cookies.txt` contains session tokens. Never commit it to git or share it publicly.
 
 ---
 
