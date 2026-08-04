@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/rs/zerolog/log"
-	"golang.org/x/sys/unix"
 )
 
 type ScanEntry struct {
@@ -72,10 +71,8 @@ func runScanAttempt(url string) (*ScanInfo, string, error) {
 	}
 
 	cp := getCookiesPath()
-	if isWritableFile(cp) {
+	if isReadableFile(cp) {
 		args = append(args, "--cookies", cp)
-	} else {
-		log.Warn().Msgf("cookies.txt not found or not writable at %s — TikTok and other protected sites may fail without --impersonate", cp)
 	}
 
 	for arg, value := range getEnvVars() {
@@ -188,9 +185,7 @@ func runScanAttempt(url string) (*ScanInfo, string, error) {
 	return info, "", nil
 }
 
-func isWritableFile(path string) bool {
-	if _, err := os.Stat(path); err != nil {
-		return false
-	}
-	return unix.Access(path, unix.W_OK) == nil
+func isReadableFile(path string) bool {
+	fi, err := os.Stat(path)
+	return err == nil && !fi.IsDir()
 }

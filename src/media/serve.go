@@ -6,6 +6,7 @@ import (
 	"github.com/rs/zerolog/log"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 )
@@ -127,7 +128,8 @@ func streamFileToClient(w http.ResponseWriter, r *http.Request, filename string)
 	fileContentType := http.DetectContentType(fileHeader)
 
 	// Send the headers
-	w.Header().Set("Content-Disposition", "filename="+filepath.Base(filename))
+	baseName := filepath.Base(filename)
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"; filename*=UTF-8''%s`, baseName, url.PathEscape(baseName)))
 	w.Header().Set("Content-Type", fileContentType)
 
 	log.Info().Msgf("Opening file for streaming %s", filename)

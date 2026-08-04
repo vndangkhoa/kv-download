@@ -20,8 +20,6 @@ import (
 	"sort"
 	"strings"
 	"time"
-
-	"golang.org/x/sys/unix"
 )
 
 type Media struct {
@@ -178,7 +176,7 @@ func getMediaResults(inputUrl string, args map[string]string) ([]Media, string, 
 
 func downloadMedia(url string, requestArgs map[string]string) (string, string, error) {
 	id := GetMD5Hash(url, requestArgs)
-	name := getMediaDirectory(id) + "%(id)s.%(ext)s"
+	name := getMediaDirectory(id) + "%(title,channel+id,uploader+id,id)s.%(ext)s"
 
 	log.Info().Msgf("Downloading %s to %s", url, name)
 
@@ -186,9 +184,8 @@ func downloadMedia(url string, requestArgs map[string]string) (string, string, e
 
 	defaultArgs := map[string]string{
 		"--format":                "best",
-		"--trim-filenames":        "100",
+		"--trim-filenames":        "120",
 		"--recode-video":          "mp4",
-		"--restrict-filenames":    "",
 		"--write-info-json":       "",
 		"--output":                name,
 		"--no-check-certificates": "",
@@ -201,12 +198,8 @@ func downloadMedia(url string, requestArgs map[string]string) (string, string, e
 		defaultArgs["--impersonate"] = "chrome"
 	}
 
-	if _, err := os.Stat(cookiesPath); err == nil {
-		if err := unix.Access(cookiesPath, unix.W_OK); err == nil {
-			defaultArgs["--cookies"] = cookiesPath
-		} else {
-			log.Warn().Msgf("cookies.txt is not writable (%v), skipping cookie file to avoid yt-dlp save failure", err)
-		}
+	if isReadableFile(cookiesPath) {
+		defaultArgs["--cookies"] = cookiesPath
 	}
 
 	args := make([]string, 0)
