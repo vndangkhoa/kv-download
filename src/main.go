@@ -33,7 +33,7 @@ func main() {
 
 	// Serve favicon.ico at root (browsers request this by default)
 	router.Get("/favicon.ico", func(w http.ResponseWriter, r *http.Request) {
-		http.ServeFile(w, r, "static/favicon-32x32.png")
+		http.ServeFile(w, r, "static/favicon.ico")
 	})
 
 	// Print out all routes

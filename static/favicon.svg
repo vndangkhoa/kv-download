@@ -1,15 +1,26 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
   <defs>
-    <linearGradient id="border" x1="0%" y1="0%" x2="100%" y2="100%">
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#14161f"/>
+      <stop offset="100%" stop-color="#08090c"/>
+    </linearGradient>
+    <linearGradient id="borderGrad" x1="0%" y1="0%" x2="100%" y2="100%">
       <stop offset="0%" stop-color="#2997ff"/>
+      <stop offset="50%" stop-color="#64d2ff"/>
       <stop offset="100%" stop-color="#bf5af2"/>
     </linearGradient>
+    <linearGradient id="iconGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#ffffff"/>
+      <stop offset="100%" stop-color="#d8e4f8"/>
+    </linearGradient>
   </defs>
-  <rect x="16" y="16" width="480" height="480" rx="112" fill="#0f0f0f"/>
-  <rect x="16" y="16" width="480" height="480" rx="112" fill="none" stroke="url(#border)" stroke-width="8"/>
-  <g fill="white">
-    <rect x="238" y="155" width="36" height="180" rx="18"/>
-    <rect x="166" y="161" width="180" height="28" rx="14"/>
-    <polygon points="256,370 136,260 376,260"/>
+
+  <rect x="20" y="20" width="472" height="472" rx="118" fill="url(#bgGrad)"/>
+  <rect x="20" y="20" width="472" height="472" rx="118" fill="none" stroke="url(#borderGrad)" stroke-width="12"/>
+
+  <g fill="url(#iconGrad)">
+    <rect x="232" y="120" width="48" height="150" rx="24"/>
+    <path d="M 152 240 L 256 344 L 360 240 C 370 230 384 244 374 254 L 267 361 C 261 367 251 367 245 361 L 138 254 C 128 244 142 230 152 240 Z"/>
+    <rect x="136" y="380" width="240" height="40" rx="20"/>
   </g>
 </svg>
