@@ -198,8 +198,8 @@ func downloadMedia(url string, requestArgs map[string]string) (string, string, e
 		defaultArgs["--impersonate"] = "chrome"
 	}
 
-	if isReadableFile(cookiesPath) {
-		defaultArgs["--cookies"] = cookiesPath
+	if workingCookies := getWorkingCookiesPath(cookiesPath); workingCookies != "" {
+		defaultArgs["--cookies"] = workingCookies
 	}
 
 	args := make([]string, 0)
@@ -332,27 +332,26 @@ func getAllFilesForId(id string) ([]Media, error) {
 		return nil, err
 	}
 	files, _ := file.Readdirnames(0)
-	if len(files) == 0 {
-		return nil, errors.New("ID not found: " + id)
-	}
+	file.Close()
 
 	var medias []Media
 
 	for _, f := range files {
-		if !strings.HasSuffix(f, ".json") {
+		if !strings.HasSuffix(f, ".json") && !strings.HasSuffix(f, ".part") && !strings.HasSuffix(f, ".ytdl") {
 			fi, err2 := os.Stat(root + f)
 			var size int64 = 0
 			if err2 == nil {
 				size = fi.Size()
 			}
-
-			media := Media{
-				Id:          id + "/" + f,
-				Name:        filepath.Base(f),
-				SizeInBytes: size,
-				HumanSize:   humanize.Bytes(uint64(size)),
+			if size > 0 {
+				media := Media{
+					Id:          id + "/" + f,
+					Name:        filepath.Base(f),
+					SizeInBytes: size,
+					HumanSize:   humanize.Bytes(uint64(size)),
+				}
+				medias = append(medias, media)
 			}
-			medias = append(medias, media)
 		}
 	}
 

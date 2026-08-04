@@ -71,8 +71,8 @@ func runScanAttempt(url string) (*ScanInfo, string, error) {
 	}
 
 	cp := getCookiesPath()
-	if isReadableFile(cp) {
-		args = append(args, "--cookies", cp)
+	if workingCookies := getWorkingCookiesPath(cp); workingCookies != "" {
+		args = append(args, "--cookies", workingCookies)
 	}
 
 	for arg, value := range getEnvVars() {

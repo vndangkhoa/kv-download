@@ -3,6 +3,7 @@ package media
 import (
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -99,4 +100,24 @@ func isSupportedBrowser(browser string) bool {
 		}
 	}
 	return false
+}
+
+// getWorkingCookiesPath copies cookiesPath to a writable temporary file in /tmp
+// to prevent yt-dlp from crashing when save_cookies() tries to open read-only cookies files on exit.
+func getWorkingCookiesPath(cookiesPath string) string {
+	if !isReadableFile(cookiesPath) {
+		return ""
+	}
+
+	tmpPath := filepath.Join(os.TempDir(), "mr_working_cookies.txt")
+	data, err := os.ReadFile(cookiesPath)
+	if err != nil {
+		return cookiesPath
+	}
+
+	if err := os.WriteFile(tmpPath, data, 0644); err == nil {
+		return tmpPath
+	}
+
+	return cookiesPath
 }
