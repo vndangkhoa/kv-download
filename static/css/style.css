@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=Share+Tech+Mono&display=swap');
 
 * {
     margin: 0;
@@ -1130,4 +1130,289 @@ body::after {
     border-color: var(--accent-blue);
     color: #fff;
 }
+
+/* ── Top Navigation & Settings Modal ─────────────────── */
+
+.top-nav {
+    width: 100%;
+    max-width: 900px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 24px;
+    padding: 0 4px;
+}
+
+.brand {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.brand-name {
+    font-size: 1.15rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    letter-spacing: -0.02em;
+}
+
+.btn-theme-toggle {
+    background: var(--bg-glass);
+    backdrop-filter: var(--blur-glass);
+    -webkit-backdrop-filter: var(--blur-glass);
+    border: 1px solid var(--glass-border);
+    color: var(--text-secondary);
+    border-radius: 20px;
+    padding: 8px 16px;
+    font-size: 0.82rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: var(--transition);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-family: inherit;
+}
+
+.btn-theme-toggle:hover {
+    background: var(--bg-glass-hover);
+    color: var(--text-primary);
+    border-color: var(--glass-border-hover);
+    transform: translateY(-1px);
+}
+
+.theme-modal {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.7);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    z-index: 100;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+    animation: fadeIn 0.3s ease;
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+
+.theme-modal-card {
+    background: #0d0f14;
+    border: 1px solid var(--glass-border);
+    border-radius: var(--radius-lg);
+    width: 100%;
+    max-width: 420px;
+    padding: 24px;
+    box-shadow: var(--shadow-lift);
+}
+
+.theme-modal-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 20px;
+}
+
+.theme-modal-header h3 {
+    font-size: 1.05rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.btn-close-modal {
+    background: transparent;
+    border: none;
+    color: var(--text-tertiary);
+    font-size: 1.1rem;
+    cursor: pointer;
+    transition: var(--transition);
+}
+
+.btn-close-modal:hover {
+    color: var(--text-primary);
+}
+
+.theme-options {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.theme-option-btn {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 14px 16px;
+    background: var(--bg-glass);
+    border: 1px solid var(--glass-border);
+    border-radius: var(--radius-md);
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: var(--transition);
+    text-align: left;
+    font-family: inherit;
+}
+
+.theme-option-btn i {
+    font-size: 1.4rem;
+    color: var(--text-tertiary);
+    transition: var(--transition);
+}
+
+.theme-option-info {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.theme-option-info strong {
+    font-size: 0.9rem;
+    color: var(--text-primary);
+}
+
+.theme-option-info span {
+    font-size: 0.75rem;
+    color: var(--text-tertiary);
+}
+
+.theme-option-btn:hover {
+    background: var(--bg-glass-hover);
+    border-color: var(--glass-border-hover);
+}
+
+.theme-option-btn.active {
+    border-color: var(--accent-blue);
+    background: rgba(41, 151, 255, 0.08);
+}
+
+.theme-option-btn.active i {
+    color: var(--accent-blue-light);
+}
+
+/* ── Matrix Theme Overrides ────────────────────────────── */
+
+body.theme-matrix {
+    --bg-primary: #030603;
+    --bg-glass: rgba(0, 255, 102, 0.04);
+    --bg-glass-hover: rgba(0, 255, 102, 0.09);
+    --glass-border: rgba(0, 255, 102, 0.25);
+    --glass-border-hover: rgba(0, 255, 102, 0.5);
+    --text-primary: #00ff66;
+    --text-secondary: rgba(0, 255, 102, 0.75);
+    --text-tertiary: rgba(0, 255, 102, 0.45);
+    --accent-blue: #00ff66;
+    --accent-blue-light: #52ff94;
+    --accent-purple: #00ffaa;
+    --accent-green: #00ff66;
+    font-family: 'Share Tech Mono', 'Consolas', monospace;
+}
+
+body.theme-matrix::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background: repeating-linear-gradient(
+        0deg,
+        rgba(0, 0, 0, 0.35) 0px,
+        rgba(0, 0, 0, 0.35) 1px,
+        transparent 1px,
+        transparent 3px
+    );
+    pointer-events: none;
+    z-index: 2;
+    opacity: 0.75;
+}
+
+.matrix-canvas {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100vh;
+    pointer-events: none;
+    z-index: 0;
+    opacity: 0.35;
+}
+
+body.theme-matrix .glass-card,
+body.theme-matrix .select-item-card,
+body.theme-matrix .media-card,
+body.theme-matrix .selection-bar,
+body.theme-matrix .theme-modal-card {
+    border: 1px solid rgba(0, 255, 102, 0.35);
+    box-shadow: 0 0 15px rgba(0, 255, 102, 0.2), inset 0 0 10px rgba(0, 255, 102, 0.05);
+    background: rgba(3, 10, 4, 0.88);
+}
+
+body.theme-matrix .btn-download,
+body.theme-matrix .btn-start-download,
+body.theme-matrix .btn-save {
+    background: #00ff66;
+    color: #020803;
+    font-weight: 700;
+    border: 1px solid #00ff66;
+    text-shadow: none;
+    box-shadow: 0 0 15px rgba(0, 255, 102, 0.5);
+    letter-spacing: 0.05em;
+    font-family: 'Share Tech Mono', monospace;
+}
+
+body.theme-matrix .btn-download:hover,
+body.theme-matrix .btn-start-download:hover,
+body.theme-matrix .btn-save:hover {
+    background: #52ff94;
+    box-shadow: 0 0 25px rgba(0, 255, 102, 0.8);
+    color: #000;
+}
+
+body.theme-matrix .btn-theme-toggle {
+    border-color: rgba(0, 255, 102, 0.4);
+    color: #00ff66;
+    box-shadow: 0 0 10px rgba(0, 255, 102, 0.2);
+}
+
+body.theme-matrix .theme-modal-card {
+    background: #030803;
+    border-color: #00ff66;
+    box-shadow: 0 0 30px rgba(0, 255, 102, 0.3);
+}
+
+body.theme-matrix .theme-option-btn.active {
+    border-color: #00ff66;
+    background: rgba(0, 255, 102, 0.12);
+}
+
+body.theme-matrix .theme-option-btn.active i {
+    color: #00ff66;
+}
+
+body.theme-matrix .url-input {
+    color: #00ff66;
+    font-family: 'Share Tech Mono', monospace;
+    text-shadow: 0 0 5px rgba(0, 255, 102, 0.5);
+}
+
+body.theme-matrix .url-input::placeholder {
+    color: rgba(0, 255, 102, 0.4);
+}
+
+body.theme-matrix .progress-bar-fill {
+    background: linear-gradient(90deg, #00bb44, #00ff66);
+    box-shadow: 0 0 15px #00ff66;
+}
+
+body.theme-matrix .progress-timer,
+body.theme-matrix .progress-label {
+    color: #00ff66;
+    font-family: 'Share Tech Mono', monospace;
+    text-shadow: 0 0 8px rgba(0, 255, 102, 0.6);
+}
+
 

@@ -15,8 +15,22 @@
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.2/font/bootstrap-icons.min.css">
     <link rel="stylesheet" href="/static/css/style.css">
 </head>
-<body>
+<body class="theme-simple">
+
+<canvas id="matrixCanvas" class="matrix-canvas d-none"></canvas>
+
 <div class="app-container">
+    <div class="top-nav">
+        <div class="brand">
+            <img src="/static/logo.svg" alt="KV Download" width="32" height="32" class="app-logo">
+            <span class="brand-name">KV Download</span>
+        </div>
+        <button type="button" class="btn-theme-toggle" id="themeToggleBtn" title="Theme Settings">
+            <i class="bi bi-palette-fill"></i>
+            <span class="theme-label" id="currentThemeLabel">Simple</span>
+        </button>
+    </div>
+
     <header class="hero-content">
         <h1 class="app-title">
             <img src="/static/logo.svg" alt="KV Download" width="40" height="40" class="app-logo">
@@ -104,6 +118,31 @@
     </footer>
 </div>
 
+<div class="theme-modal d-none" id="themeModal">
+    <div class="theme-modal-card">
+        <div class="theme-modal-header">
+            <h3><i class="bi bi-palette-fill"></i> Select Interface Theme</h3>
+            <button type="button" class="btn-close-modal" id="btnCloseThemeModal"><i class="bi bi-x-lg"></i></button>
+        </div>
+        <div class="theme-options">
+            <button type="button" class="theme-option-btn active" data-theme="simple">
+                <i class="bi bi-moon-stars-fill"></i>
+                <div class="theme-option-info">
+                    <strong>Simple Dark</strong>
+                    <span>Clean modern glassmorphism UI</span>
+                </div>
+            </button>
+            <button type="button" class="theme-option-btn" data-theme="matrix">
+                <i class="bi bi-terminal-fill"></i>
+                <div class="theme-option-info">
+                    <strong>Matrix Hacker</strong>
+                    <span>Green phosphor CRT & digital rain aesthetic</span>
+                </div>
+            </button>
+        </div>
+    </div>
+</div>
+
 <script>
 (function() {
     var form = document.getElementById('downloadForm');
@@ -127,11 +166,119 @@
     var errorSection = document.getElementById('errorSection');
     var errorText = document.getElementById('errorText');
 
+    var themeToggleBtn = document.getElementById('themeToggleBtn');
+    var themeModal = document.getElementById('themeModal');
+    var btnCloseThemeModal = document.getElementById('btnCloseThemeModal');
+    var matrixCanvas = document.getElementById('matrixCanvas');
+    var currentThemeLabel = document.getElementById('currentThemeLabel');
+
     var scannedEntries = [];
     var mediaIds = [];
+    var currentTheme = localStorage.getItem('kv_theme') || 'simple';
 
     var timerInterval = null;
     var startTime = null;
+
+    // Matrix Rain animation engine
+    var ctx = matrixCanvas ? matrixCanvas.getContext('2d') : null;
+    var matrixInterval = null;
+    var chars = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZアイウエオカキクケコサシスセソタチツテトナニヌネノハヒフヘホマミムメモヤユヨラリルレロワヲン';
+    var fontSize = 14;
+    var drops = [];
+
+    function initMatrixRain() {
+        if (!matrixCanvas || !ctx) return;
+        matrixCanvas.width = window.innerWidth;
+        matrixCanvas.height = window.innerHeight;
+        var columns = Math.floor(matrixCanvas.width / fontSize);
+        drops = [];
+        for (var i = 0; i < columns; i++) {
+            drops[i] = Math.floor(Math.random() * -50);
+        }
+    }
+
+    function drawMatrixRain() {
+        if (!ctx) return;
+        ctx.fillStyle = 'rgba(3, 8, 4, 0.08)';
+        ctx.fillRect(0, 0, matrixCanvas.width, matrixCanvas.height);
+        ctx.fillStyle = '#00ff66';
+        ctx.font = fontSize + 'px "Share Tech Mono", monospace';
+
+        for (var i = 0; i < drops.length; i++) {
+            var text = chars.charAt(Math.floor(Math.random() * chars.length));
+            var x = i * fontSize;
+            var y = drops[i] * fontSize;
+
+            ctx.fillText(text, x, y);
+            if (y > matrixCanvas.height && Math.random() > 0.975) {
+                drops[i] = 0;
+            }
+            drops[i]++;
+        }
+    }
+
+    function startMatrixRain() {
+        initMatrixRain();
+        if (matrixInterval) clearInterval(matrixInterval);
+        matrixInterval = setInterval(drawMatrixRain, 45);
+        window.addEventListener('resize', initMatrixRain);
+    }
+
+    function stopMatrixRain() {
+        if (matrixInterval) {
+            clearInterval(matrixInterval);
+            matrixInterval = null;
+        }
+        window.removeEventListener('resize', initMatrixRain);
+    }
+
+    function applyTheme(themeName) {
+        currentTheme = themeName;
+        document.body.classList.remove('theme-simple', 'theme-matrix');
+        document.body.classList.add('theme-' + themeName);
+        localStorage.setItem('kv_theme', themeName);
+
+        if (currentThemeLabel) {
+            currentThemeLabel.textContent = themeName === 'matrix' ? 'Matrix' : 'Simple';
+        }
+
+        var options = document.querySelectorAll('.theme-option-btn');
+        options.forEach(function(btn) {
+            btn.classList.toggle('active', btn.getAttribute('data-theme') === themeName);
+        });
+
+        if (themeName === 'matrix') {
+            if (matrixCanvas) matrixCanvas.classList.remove('d-none');
+            startMatrixRain();
+            if (btnText && btnText.textContent === 'Fetch Videos') btnText.textContent = '[ INITIATE_SCAN ]';
+        } else {
+            if (matrixCanvas) matrixCanvas.classList.add('d-none');
+            stopMatrixRain();
+            if (btnText && btnText.textContent === '[ INITIATE_SCAN ]') btnText.textContent = 'Fetch Videos';
+        }
+    }
+
+    themeToggleBtn.addEventListener('click', function() {
+        themeModal.classList.remove('d-none');
+    });
+
+    btnCloseThemeModal.addEventListener('click', function() {
+        themeModal.classList.add('d-none');
+    });
+
+    themeModal.addEventListener('click', function(e) {
+        if (e.target === themeModal) themeModal.classList.add('d-none');
+    });
+
+    document.querySelectorAll('.theme-option-btn').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+            var selectedTheme = this.getAttribute('data-theme');
+            applyTheme(selectedTheme);
+            themeModal.classList.add('d-none');
+        });
+    });
+
+    applyTheme(currentTheme);
 
     function formatTime(sec) {
         var m = Math.floor(sec / 60);
@@ -168,7 +315,8 @@
 
     function setLoading(loading, label) {
         submitBtn.disabled = loading;
-        btnText.textContent = loading ? (label || 'Fetching...') : 'Fetch Videos';
+        var defaultBtnText = currentTheme === 'matrix' ? '[ INITIATE_SCAN ]' : 'Fetch Videos';
+        btnText.textContent = loading ? (label || 'Fetching...') : defaultBtnText;
         if (loading) {
             progressContainer.classList.remove('d-none');
             resultsSection.classList.add('d-none');
@@ -252,7 +400,7 @@
         card.className = 'media-card';
         card.innerHTML =
             '<div class="media-preview">' +
-                '<video controls loop class="media-video">' +
+                '<video controls loop class="media-video" preload="metadata">' +
                     '<source src="/download?id=' + encodeURIComponent(m.Id) + '" type="video/mp4">' +
                 '</video>' +
             '</div>' +
@@ -315,7 +463,7 @@
                 stopTimer(false);
                 progressContainer.classList.add('d-none');
                 submitBtn.disabled = false;
-                btnText.textContent = 'Fetch Videos';
+                btnText.textContent = currentTheme === 'matrix' ? '[ INITIATE_SCAN ]' : 'Fetch Videos';
 
                 if (scannedEntries.length > 0) {
                     renderSelectionGrid();
@@ -426,7 +574,8 @@
 
     function updateSelectionCount() {
         var selectedCount = scannedEntries.filter(function(e) { return e.selected; }).length;
-        btnStartDownloadText.textContent = 'Download Selected (' + selectedCount + ')';
+        var downloadLabel = currentTheme === 'matrix' ? '[ DOWNLOAD_SELECTED (' + selectedCount + ') ]' : 'Download Selected (' + selectedCount + ')';
+        btnStartDownloadText.textContent = downloadLabel;
         btnStartDownload.disabled = (selectedCount === 0);
 
         var allSelected = (selectedCount === scannedEntries.length && scannedEntries.length > 0);
@@ -472,7 +621,7 @@
                 progressLabel.textContent = 'All done';
                 stopTimer(true);
                 submitBtn.disabled = false;
-                btnText.textContent = 'Fetch Videos';
+                btnText.textContent = currentTheme === 'matrix' ? '[ INITIATE_SCAN ]' : 'Fetch Videos';
                 return;
             }
 
