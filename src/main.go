@@ -24,6 +24,8 @@ func main() {
 		router.Get("/", media.Index)
 		router.Get("/fetch", media.FetchMedia)
 		router.Get("/api/download", media.FetchMediaApi)
+		router.Get("/api/info", media.FetchMediaInfo)
+		router.Get("/download/zip", media.DownloadAllZip)
 		router.Get("/download", media.ServeMedia)
 	})
 	fileServer(router, "/static", "static/")

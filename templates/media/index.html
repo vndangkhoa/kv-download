@@ -6,28 +6,29 @@
     <meta name="theme-color" content="#000000">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.2/font/bootstrap-icons.min.css">
     <link rel="stylesheet" href="/static/css/style.css">
 </head>
 <body>
 <div class="app-container">
-    <div class="hero-content">
+    <header class="hero-content">
         <h1 class="app-title">
             <i class="bi bi-cloud-arrow-down"></i>
             KV Download
         </h1>
         <p class="app-subtitle">Download videos from social media platforms</p>
-        
-        <form action="/fetch" method="GET" class="url-form" id="downloadForm">
+    </header>
+
+    <main class="main-content">
+        <form class="url-form" id="downloadForm">
             <div class="glass-card">
                 <div class="glass-input">
                     <div class="input-icon">
                         <i class="bi bi-link-45deg"></i>
                     </div>
-                    <input name="url" type="url" class="url-input" 
-                           placeholder="Paste video URL here..." required
-                           value="{{.url}}" autofocus id="urlInput">
+                    <textarea name="url" class="url-input"
+                              placeholder="Paste video URL(s) here... one per line" rows="1"
+                              id="urlInput" autofocus></textarea>
                     <button class="btn-download" type="submit" id="submitBtn">
                         <i class="bi bi-download"></i>
                         <span class="btn-text">Download</span>
@@ -36,6 +37,17 @@
             </div>
         </form>
 
+        <div class="progress-container d-none" id="progressContainer">
+            <div class="progress-bar-track">
+                <div class="progress-bar-fill" id="progressFill"></div>
+            </div>
+            <div class="progress-info">
+                <span class="progress-label" id="progressLabel">Preparing download...</span>
+                <span class="progress-timer" id="progressTimer">0:00</span>
+            </div>
+            <div class="download-queue" id="downloadQueue"></div>
+        </div>
+
         <div class="platforms-wrapper">
             <span class="platform-badge"><i class="bi bi-youtube"></i> YouTube</span>
             <span class="platform-badge"><i class="bi bi-tiktok"></i> TikTok</span>
@@ -43,114 +55,318 @@
             <span class="platform-badge"><i class="bi bi-twitter-x"></i> Twitter/X</span>
             <span class="platform-badge"><i class="bi bi-vimeo"></i> Vimeo</span>
         </div>
-    </div>
+    </main>
 
-    <div class="loading-overlay d-none" id="loadingOverlay">
-        <div class="loading-card">
-            <div class="loading-icon"></div>
-            <h3 class="loading-title"><i class="bi bi-cloud-arrow-down"></i> Downloading</h3>
-            <p class="loading-text">Please wait while we fetch your video</p>
-            <div class="loading-timer">
-                <i class="bi bi-clock"></i>
-                <span id="timer">0:00</span>
-            </div>
-        </div>
-    </div>
-
-    {{ if .media }}
-    <div class="results-section">
+    <section class="results-section d-none" id="resultsSection">
         <div class="section-header">
             <i class="bi bi-check-circle-fill"></i>
             <h2>Download Complete</h2>
+            <button class="btn-download-all d-none" id="downloadAllBtn" title="Download all videos as a ZIP">
+                <i class="bi bi-folder-zip"></i> Download All
+            </button>
         </div>
-        <div class="media-grid">
-            {{range .media}}
-            <div class="media-card">
-                <div class="media-preview">
-                    <video controls loop class="media-video">
-                        <source src="/download?id={{.Id}}" type="video/mp4">
-                    </video>
-                </div>
-                <div class="media-info">
-                    <h5 class="media-name"><i class="bi bi-film"></i> {{.Name}}</h5>
-                    <div class="media-meta">
-                        <span class="media-size"><i class="bi bi-hdd"></i> {{.HumanSize}}</span>
-                        <a href="/download?id={{.Id}}" class="btn-save">
-                            <i class="bi bi-download"></i> Save
-                        </a>
-                    </div>
-                </div>
-            </div>
-            {{ end }}
-        </div>
-    </div>
-    {{ end }}
+        <div class="media-grid" id="mediaGrid"></div>
+    </section>
 
-    {{ if .error }}
-    <div class="error-container">
+    <section class="error-section d-none" id="errorSection">
         <div class="error-card">
             <i class="bi bi-exclamation-triangle-fill"></i>
             <h4>Download Failed</h4>
-            <pre>{{ .error }}</pre>
+            <pre id="errorText"></pre>
         </div>
-    </div>
-    {{ end }}
+    </section>
 
     <footer class="app-footer">
         <p>Powered by <a href="https://github.com/yt-dlp/yt-dlp" target="_blank">yt-dlp</a> {{ $.ytDlpVersion }}</p>
     </footer>
 </div>
 
-<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
 <script>
 (function() {
+    var form = document.getElementById('downloadForm');
+    var urlInput = document.getElementById('urlInput');
+    var submitBtn = document.getElementById('submitBtn');
+    var btnText = submitBtn.querySelector('.btn-text');
+    var progressContainer = document.getElementById('progressContainer');
+    var progressFill = document.getElementById('progressFill');
+    var progressLabel = document.getElementById('progressLabel');
+    var progressTimer = document.getElementById('progressTimer');
+    var downloadQueue = document.getElementById('downloadQueue');
+    var resultsSection = document.getElementById('resultsSection');
+    var mediaGrid = document.getElementById('mediaGrid');
+    var downloadAllBtn = document.getElementById('downloadAllBtn');
+    var errorSection = document.getElementById('errorSection');
+    var errorText = document.getElementById('errorText');
+
+    var mediaIds = [];
+
     var timerInterval = null;
     var startTime = null;
 
-    function formatTime(seconds) {
-        var mins = Math.floor(seconds / 60);
-        var secs = seconds % 60;
-        return mins + ':' + (secs < 10 ? '0' : '') + secs;
+    function formatTime(sec) {
+        var m = Math.floor(sec / 60);
+        var s = sec % 60;
+        return m + ':' + (s < 10 ? '0' : '') + s;
     }
 
     function startTimer() {
         startTime = Date.now();
-        var timerEl = document.getElementById('timer');
-        if (timerEl) {
-            timerEl.textContent = '0:00';
-        }
+        progressTimer.textContent = '0:00';
         timerInterval = setInterval(function() {
-            var elapsed = Math.floor((Date.now() - startTime) / 1000);
-            if (timerEl) {
-                timerEl.textContent = formatTime(elapsed);
-            }
+            progressTimer.textContent = formatTime(Math.floor((Date.now() - startTime) / 1000));
         }, 1000);
     }
 
     function stopTimer() {
-        if (timerInterval) {
-            clearInterval(timerInterval);
-            timerInterval = null;
+        if (timerInterval) { clearInterval(timerInterval); timerInterval = null; }
+    }
+
+    function updateOverallProgress(completed, total) {
+        var pct = total === 0 ? 0 : (completed / total) * 100;
+        progressFill.style.width = pct + '%';
+        progressLabel.textContent = completed + ' of ' + total + ' done';
+    }
+
+    function setLoading(loading) {
+        submitBtn.disabled = loading;
+        btnText.textContent = loading ? 'Downloading...' : 'Download';
+        if (loading) {
+            progressContainer.classList.remove('d-none');
+            resultsSection.classList.add('d-none');
+            errorSection.classList.add('d-none');
+            downloadQueue.innerHTML = '';
+            progressFill.style.width = '0%';
+            startTimer();
+        } else {
+            stopTimer();
         }
     }
 
-    var form = document.getElementById('downloadForm');
-    if (form) {
-        form.addEventListener('submit', function() {
-            var btn = document.getElementById('submitBtn');
-            var btnText = btn ? btn.querySelector('.btn-text') : null;
-            var overlay = document.getElementById('loadingOverlay');
-            
-            if (btn) btn.disabled = true;
-            if (btnText) btnText.textContent = 'Downloading...';
-            if (overlay) overlay.classList.remove('d-none');
-            
-            startTimer();
-        });
+    function getUrls() {
+        var raw = urlInput.value.trim();
+        if (!raw) return [];
+        return raw.split(/\n+/).map(function(u) { return u.trim(); }).filter(function(u) { return u.length > 0; });
     }
 
-    window.addEventListener('beforeunload', function() {
-        stopTimer();
+    function shortenUrl(url) {
+        try {
+            var u = new URL(url);
+            var path = u.pathname + u.search;
+            if (path.length > 50) path = path.substring(0, 47) + '...';
+            return u.hostname + path;
+        } catch(e) {
+            return url.length > 60 ? url.substring(0, 57) + '...' : url;
+        }
+    }
+
+    function addQueueItem(index, url) {
+        var item = document.createElement('div');
+        item.className = 'queue-item';
+        item.id = 'queue-item-' + index;
+        item.innerHTML =
+            '<div class="queue-icon queue-pending"><i class="bi bi-hourglass-split"></i></div>' +
+            '<div class="queue-details">' +
+                '<span class="queue-url" title="' + escapeHtml(url) + '">' + escapeHtml(shortenUrl(url)) + '</span>' +
+                '<span class="queue-status">Waiting...</span>' +
+            '</div>';
+        downloadQueue.appendChild(item);
+        return item;
+    }
+
+    function setQueueItemStatus(index, status, message) {
+        var item = document.getElementById('queue-item-' + index);
+        if (!item) return;
+        var icon = item.querySelector('.queue-icon');
+        var statusEl = item.querySelector('.queue-status');
+
+        icon.className = 'queue-icon';
+        if (status === 'loading') {
+            icon.classList.add('queue-loading');
+            icon.innerHTML = '<div class="spinner"></div>';
+            statusEl.textContent = 'Downloading...';
+            statusEl.className = 'queue-status';
+        } else if (status === 'done') {
+            icon.classList.add('queue-done');
+            icon.innerHTML = '<i class="bi bi-check-lg"></i>';
+            statusEl.textContent = message || 'Done';
+            statusEl.className = 'queue-status queue-status-done';
+        } else if (status === 'error') {
+            icon.classList.add('queue-error');
+            icon.innerHTML = '<i class="bi bi-x-lg"></i>';
+            statusEl.textContent = message || 'Failed';
+            statusEl.className = 'queue-status queue-status-error';
+        }
+    }
+
+    function renderResults(data) {
+        mediaGrid.innerHTML = '';
+        mediaIds = [];
+        var items = data.media || [];
+        if (items.length === 0 && !data.error) return;
+
+        if (items.length > 0) {
+            items.forEach(function(m) {
+                if (m._error) {
+                    var errCard = document.createElement('div');
+                    errCard.className = 'media-card media-card-error';
+                    errCard.innerHTML =
+                        '<div class="media-info">' +
+                            '<h5 class="media-name"><i class="bi bi-exclamation-triangle"></i> ' + escapeHtml(m._url || 'Unknown URL') + '</h5>' +
+                            '<div class="media-error-log"><pre>' + escapeHtml(m._error) + '</pre></div>' +
+                        '</div>';
+                    mediaGrid.appendChild(errCard);
+                    return;
+                }
+                mediaIds.push(m.Id);
+                var card = document.createElement('div');
+                card.className = 'media-card';
+                card.innerHTML =
+                    '<div class="media-preview">' +
+                        '<video controls loop class="media-video">' +
+                            '<source src="/download?id=' + m.Id + '" type="video/mp4">' +
+                        '</video>' +
+                    '</div>' +
+                    '<div class="media-info">' +
+                        '<h5 class="media-name"><i class="bi bi-film"></i> ' + escapeHtml(m.Name) + '</h5>' +
+                        '<div class="media-meta">' +
+                            '<span class="media-size"><i class="bi bi-hdd"></i> ' + escapeHtml(m.HumanSize) + '</span>' +
+                            '<a href="/download?id=' + m.Id + '" class="btn-save" download>' +
+                                '<i class="bi bi-download"></i> Save' +
+                            '</a>' +
+                        '</div>' +
+                    '</div>';
+                mediaGrid.appendChild(card);
+            });
+            if (mediaIds.length > 1) {
+                downloadAllBtn.classList.remove('d-none');
+            }
+            resultsSection.classList.remove('d-none');
+        }
+
+        var errorMessages = items.filter(function(m) { return m._error; }).map(function(m) { return m._error; });
+        if (errorMessages.length > 0) {
+            errorText.textContent = errorMessages.join('\n\n');
+            errorSection.classList.remove('d-none');
+        }
+    }
+
+    function escapeHtml(text) {
+        var d = document.createElement('div');
+        d.appendChild(document.createTextNode(text));
+        return d.innerHTML;
+    }
+
+    form.addEventListener('submit', function(e) {
+        e.preventDefault();
+        var urls = getUrls();
+        if (urls.length === 0) return;
+
+        setLoading(true);
+        progressLabel.textContent = '0 of ' + urls.length + ' done';
+
+        var completed = 0;
+        var total = urls.length;
+        var allResults = [];
+        var hasError = false;
+
+        urls.forEach(function(url, i) { addQueueItem(i, url); });
+
+        function fetchNext() {
+            if (completed >= total) {
+                progressFill.style.width = '100%';
+                progressLabel.textContent = 'All done';
+                setTimeout(function() {
+                    setLoading(false);
+                    renderResults({ media: allResults });
+                }, 500);
+                return;
+            }
+
+            var idx = completed;
+            var url = urls[idx];
+            setQueueItemStatus(idx, 'loading');
+
+            var xhr = new XMLHttpRequest();
+            xhr.open('GET', '/api/info?url=' + encodeURIComponent(url), true);
+            xhr.setRequestHeader('X-Requested-With', 'XMLHttpRequest');
+
+            xhr.onload = function() {
+                completed++;
+                if (xhr.status === 200) {
+                    try {
+                        var data = JSON.parse(xhr.responseText);
+                        if (data.media && data.media.length > 0) {
+                            if (data.media.length > 5 && urls.length === 1) {
+                                var ok = confirm('This URL contains ' + data.media.length + ' videos (playlist/profile).\n\nDownload all of them?');
+                                if (!ok) {
+                                    data.media = [data.media[0]];
+                                    setQueueItemStatus(idx, 'done', '1 file (first only)');
+                                } else {
+                                    setQueueItemStatus(idx, 'done', data.media.length + ' file(s)');
+                                }
+                            } else {
+                                setQueueItemStatus(idx, 'done', data.media.length + ' file(s)');
+                            }
+                            allResults = allResults.concat(data.media);
+                        } else if (data.error) {
+                            hasError = true;
+                            var errMsg = data.error;
+                            setQueueItemStatus(idx, 'error', errMsg);
+                            allResults.push({ _error: errMsg, _url: url });
+                        } else {
+                            setQueueItemStatus(idx, 'done');
+                        }
+                    } catch(err) {
+                        hasError = true;
+                        setQueueItemStatus(idx, 'error', 'Invalid response');
+                        allResults.push({ _error: 'Parse error', _url: url });
+                    }
+                } else {
+                    hasError = true;
+                    var errMsg = 'Download failed';
+                    try {
+                        var errData = JSON.parse(xhr.responseText);
+                        if (errData.error) errMsg = errData.error;
+                    } catch(ex) {
+                        if (xhr.responseText && xhr.responseText.trim()) errMsg = xhr.responseText.trim();
+                    }
+                    setQueueItemStatus(idx, 'error', errMsg);
+                    allResults.push({ _error: errMsg, _url: url });
+                }
+                updateOverallProgress(completed, total);
+                fetchNext();
+            };
+
+            xhr.onerror = function() {
+                completed++;
+                hasError = true;
+                var errMsg = 'Network error';
+                if (xhr.responseText && xhr.responseText.trim()) {
+                    errMsg = xhr.responseText.trim();
+                }
+                setQueueItemStatus(idx, 'error', errMsg);
+                allResults.push({ _error: errMsg, _url: url });
+                updateOverallProgress(completed, total);
+                fetchNext();
+            };
+
+            xhr.send();
+        }
+
+        fetchNext();
+    });
+
+    downloadAllBtn.addEventListener('click', function() {
+        if (mediaIds.length === 0) return;
+        var url = '/download/zip?' + mediaIds.map(function(id) {
+            return 'id=' + encodeURIComponent(id);
+        }).join('&');
+        window.location.href = url;
+    });
+
+    urlInput.addEventListener('input', function() {
+        this.style.height = 'auto';
+        this.style.height = Math.min(this.scrollHeight, 120) + 'px';
     });
 })();
 </script>

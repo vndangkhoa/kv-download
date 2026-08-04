@@ -3,6 +3,7 @@ package media
 import (
 	"bytes"
 	"crypto/md5"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/dustin/go-humanize"
@@ -30,7 +31,7 @@ type Media struct {
 var fetchIndexTmpl = template.Must(template.ParseFiles("templates/media/index.html"))
 
 var downloadDir = getDownloadDir()
-var idCharSet = regexp.MustCompile(`^[a-zA-Z0-9]+$`).MatchString
+var idCharSet = regexp.MustCompile(`^[a-zA-Z0-9._-]+$`).MatchString
 
 func Index(w http.ResponseWriter, _ *http.Request) {
 	data := map[string]string{
@@ -78,6 +79,24 @@ func FetchMediaApi(w http.ResponseWriter, r *http.Request) {
 	}
 
 	streamFileToClientById(w, r, medias[0].Id)
+}
+
+func FetchMediaInfo(w http.ResponseWriter, r *http.Request) {
+	url, args := getUrl(r)
+	media, ytdlpErrorMessage, err := getMediaResults(url, args)
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"error": ytdlpErrorMessage,
+		})
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"media": media,
+		"error": ytdlpErrorMessage,
+	})
 }
 
 func getUrl(r *http.Request) (string, map[string]string) {
@@ -277,7 +296,7 @@ func getAllFilesForId(id string) ([]Media, error) {
 			}
 
 			media := Media{
-				Id:          id,
+				Id:          id + "/" + f,
 				Name:        filepath.Base(f),
 				SizeInBytes: size,
 				HumanSize:   humanize.Bytes(uint64(size)),
@@ -290,23 +309,19 @@ func getAllFilesForId(id string) ([]Media, error) {
 }
 
 func getFileFromId(id string) (string, error) {
-	root := getMediaDirectory(id)
-	file, err := os.Open(root)
-	if err != nil {
-		return "", err
+	dirID, filename, found := strings.Cut(id, "/")
+	if !found {
+		return "", errors.New("invalid id")
 	}
-	files, _ := file.Readdirnames(0)
-	if len(files) == 0 {
-		return "", errors.New("ID not found")
+	root := getMediaDirectory(dirID)
+	if filepath.Base(filename) != filename || strings.HasSuffix(filename, ".json") {
+		return "", errors.New("invalid id")
 	}
-
-	for _, f := range files {
-		if !strings.HasSuffix(f, ".json") {
-			return root + f, nil
-		}
+	full := root + filename
+	if fi, err := os.Stat(full); err != nil || fi.IsDir() {
+		return "", errors.New("file not found")
 	}
-
-	return "", errors.New("unable to find file")
+	return full, nil
 }
 
 func GetMD5Hash(url string, args map[string]string) string {
@@ -323,18 +338,31 @@ func GetMD5Hash(url string, args map[string]string) string {
 }
 
 func isValidId(id string) bool {
-	return idCharSet(id)
+	// Format is "<dirHash>/<filename>" - validate both parts to avoid path traversal
+	parts := strings.Split(id, "/")
+	if len(parts) > 2 {
+		return false
+	}
+	for _, p := range parts {
+		if p == "" || !idCharSet(p) {
+			return false
+		}
+	}
+	return true
 }
 
 func getDownloadDir() string {
 	dir := os.Getenv("MR_DOWNLOAD_DIR")
-	if dir != "" {
-		if !strings.HasSuffix(dir, "/") {
-			return dir + "/"
-		}
-		return dir
+	if dir == "" {
+		dir = "downloads/"
 	}
-	return "downloads/"
+	if abs, err := filepath.Abs(dir); err == nil {
+		dir = abs
+	}
+	if !strings.HasSuffix(dir, "/") {
+		dir += "/"
+	}
+	return dir
 }
 
 func getCookiesPath() string {

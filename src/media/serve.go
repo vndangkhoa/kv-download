@@ -1,7 +1,10 @@
 package media
 
 import (
+	"archive/zip"
+	"fmt"
 	"github.com/rs/zerolog/log"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -24,6 +27,69 @@ func ServeMedia(w http.ResponseWriter, r *http.Request) {
 	}
 
 	streamFileToClientById(w, r, id)
+}
+
+func DownloadAllZip(w http.ResponseWriter, r *http.Request) {
+	ids := r.URL.Query()["id"]
+	if len(ids) == 0 {
+		http.Error(w, "Missing file IDs", http.StatusBadRequest)
+		return
+	}
+
+	var files []string
+	seen := make(map[string]bool)
+	for _, id := range ids {
+		if !isValidId(id) {
+			http.Error(w, "Invalid file ID", http.StatusBadRequest)
+			return
+		}
+		path, err := getFileFromId(id)
+		if err != nil || seen[path] {
+			continue
+		}
+		seen[path] = true
+		files = append(files, path)
+	}
+
+	if len(files) == 0 {
+		http.Error(w, "No files found", http.StatusBadRequest)
+		return
+	}
+
+	log.Info().Msgf("Zipping %d files for download", len(files))
+
+	w.Header().Set("Content-Type", "application/zip")
+	w.Header().Set("Content-Disposition", `attachment; filename="kv-download.zip"`)
+
+	zw := zip.NewWriter(w)
+	defer zw.Close()
+
+	seenNames := make(map[string]int)
+	for _, f := range files {
+		name := filepath.Base(f)
+		seenNames[name]++
+		if seenNames[name] > 1 {
+			name = fmt.Sprintf("%d-%s", seenNames[name]-1, name)
+		}
+
+		entry, err := zw.Create(name)
+		if err != nil {
+			log.Error().Msgf("zip: failed to create entry %s: %v", name, err)
+			return
+		}
+
+		openfile, err := os.Open(f)
+		if err != nil {
+			log.Error().Msgf("zip: failed to open %s: %v", f, err)
+			continue
+		}
+		_, err = io.Copy(entry, openfile)
+		openfile.Close()
+		if err != nil {
+			log.Error().Msgf("zip: failed to copy %s: %v", f, err)
+			return
+		}
+	}
 }
 
 func streamFileToClientById(w http.ResponseWriter, r *http.Request, id string) {
