@@ -520,14 +520,7 @@
                             });
                             setQueueItemStatus(idx, 'done', data.scan.entries.length + ' video(s)');
                         } else {
-                            // Fallback single entry
-                            scannedEntries.push({
-                                id: url,
-                                title: url,
-                                url: url,
-                                thumbnail: '',
-                                selected: true
-                            });
+                            scannedEntries.push({ id: url, title: url, url: url, thumbnail: '', selected: true });
                             setQueueItemStatus(idx, 'done', '1 video');
                         }
                     } catch (err) {
@@ -623,7 +616,7 @@
     function downloadUrls(items) {
         updateStepper(3);
         progressContainer.classList.remove('d-none');
-        resultsSection.classList.remove('d-none');
+        resultsSection.classList.add('d-none'); // Stay hidden until video card is appended!
         errorSection.classList.add('d-none');
         downloadQueue.innerHTML = '';
         mediaGrid.innerHTML = '';

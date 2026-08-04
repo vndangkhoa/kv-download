@@ -16,7 +16,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -42,7 +41,6 @@ func parseIndexTemplate() *template.Template {
 }
 
 var downloadDir = getDownloadDir()
-var idCharSet = regexp.MustCompile(`^[a-zA-Z0-9._-]+$`).MatchString
 
 func Index(w http.ResponseWriter, _ *http.Request) {
 	data := map[string]string{
@@ -359,16 +357,17 @@ func getAllFilesForId(id string) ([]Media, error) {
 }
 
 func getFileFromId(id string) (string, error) {
-	dirID, filename, found := strings.Cut(id, "/")
-	if !found {
+	if !isValidId(id) {
 		return "", errors.New("invalid id")
 	}
+	dirID, filename, _ := strings.Cut(id, "/")
 	root := getMediaDirectory(dirID)
-	if filepath.Base(filename) != filename || strings.HasSuffix(filename, ".json") {
-		return "", errors.New("invalid id")
+	if strings.HasSuffix(filename, ".json") || strings.HasSuffix(filename, ".part") || strings.HasSuffix(filename, ".ytdl") {
+		return "", errors.New("invalid file type")
 	}
-	full := root + filename
-	if fi, err := os.Stat(full); err != nil || fi.IsDir() {
+	full := filepath.Join(root, filename)
+	fi, err := os.Stat(full)
+	if err != nil || fi.IsDir() {
 		return "", errors.New("file not found")
 	}
 	return full, nil
@@ -390,13 +389,15 @@ func GetMD5Hash(url string, args map[string]string) string {
 func isValidId(id string) bool {
 	// Format is "<dirHash>/<filename>" - validate both parts to avoid path traversal
 	parts := strings.Split(id, "/")
-	if len(parts) > 2 {
+	if len(parts) != 2 {
 		return false
 	}
-	for _, p := range parts {
-		if p == "" || !idCharSet(p) {
-			return false
-		}
+	dirHash, filename := parts[0], parts[1]
+	if dirHash == "" || filename == "" {
+		return false
+	}
+	if filepath.Base(filename) != filename || strings.Contains(filename, "..") || strings.Contains(filename, "\\") {
+		return false
 	}
 	return true
 }
