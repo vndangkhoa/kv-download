@@ -102,6 +102,25 @@ func FetchMediaInfo(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func ScanMediaApi(w http.ResponseWriter, r *http.Request) {
+	url, _ := getUrl(r)
+	info, ytdlpErrorMessage, err := ScanUrl(url)
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"error": ytdlpErrorMessage,
+		})
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"scan":   info,
+		"rawUrl": url,
+		"error":  ytdlpErrorMessage,
+	})
+}
+
 func getUrl(r *http.Request) (string, map[string]string) {
 	u := strings.TrimSpace(r.URL.Query().Get("url"))
 

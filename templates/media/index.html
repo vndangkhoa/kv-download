@@ -127,9 +127,9 @@
         progressLabel.textContent = completed + ' of ' + total + ' done';
     }
 
-    function setLoading(loading) {
+    function setLoading(loading, label) {
         submitBtn.disabled = loading;
-        btnText.textContent = loading ? 'Downloading...' : 'Download';
+        btnText.textContent = loading ? (label || 'Downloading...') : 'Download';
         if (loading) {
             progressContainer.classList.remove('d-none');
             resultsSection.classList.add('d-none');
@@ -180,7 +180,12 @@
         var statusEl = item.querySelector('.queue-status');
 
         icon.className = 'queue-icon';
-        if (status === 'loading') {
+        if (status === 'scanning') {
+            icon.classList.add('queue-loading');
+            icon.innerHTML = '<div class="spinner"></div>';
+            statusEl.textContent = 'Scanning...';
+            statusEl.className = 'queue-status';
+        } else if (status === 'loading') {
             icon.classList.add('queue-loading');
             icon.innerHTML = '<div class="spinner"></div>';
             statusEl.textContent = 'Downloading...';
@@ -260,16 +265,122 @@
         e.preventDefault();
         var urls = getUrls();
         if (urls.length === 0) return;
+        startFlow(urls);
+    });
 
-        setLoading(true);
-        progressLabel.textContent = '0 of ' + urls.length + ' done';
+    function startFlow(urls) {
+        setLoading(true, 'Scanning...');
+        progressLabel.textContent = 'Scanning 0 of ' + urls.length;
 
+        var scanned = [];
         var completed = 0;
         var total = urls.length;
+
+        urls.forEach(function(url, i) { addQueueItem(i, url); });
+
+        function scanNext() {
+            if (completed >= total) {
+                progressLabel.textContent = 'Scan done';
+                confirmAndDownload(urls, scanned);
+                return;
+            }
+
+            var idx = completed;
+            var url = urls[idx];
+            setQueueItemStatus(idx, 'scanning');
+
+            var xhr = new XMLHttpRequest();
+            xhr.open('GET', '/api/scan?url=' + encodeURIComponent(url), true);
+            xhr.setRequestHeader('X-Requested-With', 'XMLHttpRequest');
+
+            xhr.onload = function() {
+                completed++;
+                var item = { url: url, media: null, error: null, rawUrl: url };
+                if (xhr.status === 200) {
+                    try {
+                        var data = JSON.parse(xhr.responseText);
+                        if (data.scan && data.scan.count > 0) {
+                            item.media = data.scan;
+                        } else if (data.error) {
+                            item.error = data.error;
+                        }
+                    } catch (err) {
+                        item.error = 'Invalid scan response';
+                    }
+                } else {
+                    item.error = xhr.responseText.trim() || 'Scan failed';
+                }
+                scanned.push(item);
+                if (item.error) {
+                    setQueueItemStatus(idx, 'error', item.error);
+                } else if (item.media.count === 1) {
+                    setQueueItemStatus(idx, 'done', '1 video');
+                } else {
+                    setQueueItemStatus(idx, 'done', item.media.count + ' videos');
+                }
+                progressLabel.textContent = 'Scanning ' + completed + ' of ' + total;
+                scanNext();
+            };
+
+            xhr.onerror = function() {
+                completed++;
+                scanned.push({ url: url, media: null, error: 'Network error', rawUrl: url });
+                setQueueItemStatus(idx, 'error', 'Network error');
+                progressLabel.textContent = 'Scanning ' + completed + ' of ' + total;
+                scanNext();
+            };
+
+            xhr.send();
+        }
+
+        scanNext();
+    }
+
+    function confirmAndDownload(urls, scanned) {
+        // Decide per item: single video downloads immediately, playlists ask first
+        var toDownload = [];
+        var cancelled = [];
+
+        if (urls.length === 0) { setLoading(false); return; }
+
+        scanned.forEach(function(item, idx) {
+            if (item.error) {
+                cancelled.push(idx);
+                return;
+            }
+            if (item.media.count > 5) {
+                var msg = 'This URL contains ' + item.media.count + ' videos' +
+                          (item.media.title ? ' ("' + item.media.title + '")' : '') + '.\n\n' +
+                          'Download all ' + item.media.count + ' videos?';
+                if (!window.confirm(msg)) {
+                    cancelled.push(idx);
+                    return;
+                }
+            }
+            toDownload.push({ idx: idx, url: urls[idx] });
+        });
+
+        if (cancelled.length === urls.length) {
+            // Everything cancelled -> show errors for cancelled item
+            cancelled.forEach(function(idx) { setQueueItemStatus(idx, 'error', 'Cancelled'); });
+            progressFill.style.width = '100%';
+            progressLabel.textContent = 'Cancelled';
+            setTimeout(function() { setLoading(false); }, 500);
+            return;
+        }
+
+        downloadUrls(toDownload, scanned);
+    }
+
+    function downloadUrls(items, scanned) {
+        setLoading(true, 'Downloading...');
+        var completed = 0;
+        var total = items.length;
         var allResults = [];
         var hasError = false;
 
-        urls.forEach(function(url, i) { addQueueItem(i, url); });
+        progressLabel.textContent = '0 of ' + total + ' done';
+        items.forEach(function(item) { setQueueItemStatus(item.idx, 'loading'); });
 
         function fetchNext() {
             if (completed >= total) {
@@ -282,8 +393,9 @@
                 return;
             }
 
-            var idx = completed;
-            var url = urls[idx];
+            var item = items[completed];
+            var idx = item.idx;
+            var url = item.url;
             setQueueItemStatus(idx, 'loading');
 
             var xhr = new XMLHttpRequest();
@@ -296,17 +408,7 @@
                     try {
                         var data = JSON.parse(xhr.responseText);
                         if (data.media && data.media.length > 0) {
-                            if (data.media.length > 5 && urls.length === 1) {
-                                var ok = confirm('This URL contains ' + data.media.length + ' videos (playlist/profile).\n\nDownload all of them?');
-                                if (!ok) {
-                                    data.media = [data.media[0]];
-                                    setQueueItemStatus(idx, 'done', '1 file (first only)');
-                                } else {
-                                    setQueueItemStatus(idx, 'done', data.media.length + ' file(s)');
-                                }
-                            } else {
-                                setQueueItemStatus(idx, 'done', data.media.length + ' file(s)');
-                            }
+                            setQueueItemStatus(idx, 'done', data.media.length + ' file(s)');
                             allResults = allResults.concat(data.media);
                         } else if (data.error) {
                             hasError = true;
@@ -354,7 +456,7 @@
         }
 
         fetchNext();
-    });
+    }
 
     downloadAllBtn.addEventListener('click', function() {
         if (mediaIds.length === 0) return;

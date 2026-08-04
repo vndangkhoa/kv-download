@@ -25,6 +25,7 @@ func main() {
 		router.Get("/fetch", media.FetchMedia)
 		router.Get("/api/download", media.FetchMediaApi)
 		router.Get("/api/info", media.FetchMediaInfo)
+		router.Get("/api/scan", media.ScanMediaApi)
 		router.Get("/download/zip", media.DownloadAllZip)
 		router.Get("/download", media.ServeMedia)
 	})
