@@ -181,13 +181,14 @@ func downloadMedia(url string, requestArgs map[string]string) (string, string, e
 	cookiesPath := getCookiesPath()
 
 	defaultArgs := map[string]string{
-		"--format":                "best",
+		"--format":                "b/bv*+ba/best",
 		"--trim-filenames":        "120",
 		"--recode-video":          "mp4",
 		"--write-info-json":       "",
 		"--output":                name,
 		"--no-check-certificates": "",
-		"--extractor-args":        "instagram:image_persist=1",
+		"--extractor-args":        "instagram:image_persist=1;tiktok:app_version=30.0.0",
+		"--user-agent":            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
 	}
 
 	if impersonate := strings.TrimSpace(os.Getenv("MR_IMPERSONATE")); impersonate != "" {
@@ -277,7 +278,11 @@ func runYtDlp(args []string) (string, string) {
 	err = cmd.Wait()
 	if err != nil {
 		log.Error().Err(err).Msgf("cmd.Run() failed with %s", err)
-		return "", strings.TrimSpace(stderrBuf.String())
+		errMsg := strings.TrimSpace(stderrBuf.String())
+		if errMsg == "" {
+			errMsg = err.Error()
+		}
+		return errMsg, errMsg
 	} else if errStdout != nil {
 		log.Error().Msgf("failed to capture stdout: %v", errStdout)
 	} else if errStderr != nil {
