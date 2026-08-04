@@ -120,11 +120,14 @@ func runScanAttempt(url string) (*ScanInfo, string, error) {
 	}
 
 	var raw struct {
-		Type    string      `json:"_type"`
-		Title   string      `json:"title"`
-		Count   int         `json:"playlist_count"`
-		Entries []ScanEntry `json:"entries"`
-		Thumb   string      `json:"thumbnail"`
+		Id         string      `json:"id"`
+		Type       string      `json:"_type"`
+		Title      string      `json:"title"`
+		Count      int         `json:"playlist_count"`
+		Entries    []ScanEntry `json:"entries"`
+		Thumb      string      `json:"thumbnail"`
+		Url        string      `json:"url"`
+		WebpageUrl string      `json:"webpage_url"`
 	}
 	if err := json.Unmarshal(stdout.Bytes(), &raw); err != nil {
 		msg := "unable to parse scan result"
@@ -149,6 +152,37 @@ func runScanAttempt(url string) (*ScanInfo, string, error) {
 	}
 	if info.Title == "" {
 		info.Title = url
+	}
+
+	if len(info.Entries) == 0 {
+		videoUrl := raw.WebpageUrl
+		if videoUrl == "" {
+			videoUrl = raw.Url
+		}
+		if videoUrl == "" {
+			videoUrl = url
+		}
+		info.Entries = []ScanEntry{
+			{
+				Id:        raw.Id,
+				Title:     info.Title,
+				Url:       videoUrl,
+				Thumbnail: raw.Thumb,
+			},
+		}
+	} else {
+		for i := range info.Entries {
+			if info.Entries[i].Url == "" {
+				if info.Entries[i].Id != "" {
+					info.Entries[i].Url = "https://www.youtube.com/watch?v=" + info.Entries[i].Id
+				} else {
+					info.Entries[i].Url = url
+				}
+			}
+			if info.Entries[i].Title == "" {
+				info.Entries[i].Title = info.Title
+			}
+		}
 	}
 
 	return info, "", nil

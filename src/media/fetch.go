@@ -31,7 +31,17 @@ type Media struct {
 	HumanSize   string
 }
 
-var fetchIndexTmpl = template.Must(template.ParseFiles("templates/media/index.html"))
+var fetchIndexTmpl = parseIndexTemplate()
+
+func parseIndexTemplate() *template.Template {
+	paths := []string{"templates/media/index.html", "../../templates/media/index.html"}
+	for _, p := range paths {
+		if _, err := os.Stat(p); err == nil {
+			return template.Must(template.ParseFiles(p))
+		}
+	}
+	return template.Must(template.ParseFiles("templates/media/index.html"))
+}
 
 var downloadDir = getDownloadDir()
 var idCharSet = regexp.MustCompile(`^[a-zA-Z0-9._-]+$`).MatchString

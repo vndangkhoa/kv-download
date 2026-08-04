@@ -36,8 +36,8 @@
                               placeholder="Paste video URL(s) here... one per line" rows="1"
                               id="urlInput" autofocus></textarea>
                     <button class="btn-download" type="submit" id="submitBtn">
-                        <i class="bi bi-download"></i>
-                        <span class="btn-text">Download</span>
+                        <i class="bi bi-search"></i>
+                        <span class="btn-text">Fetch Videos</span>
                     </button>
                 </div>
             </div>
@@ -52,6 +52,23 @@
                 <span class="progress-timer" id="progressTimer">0:00</span>
             </div>
             <div class="download-queue" id="downloadQueue"></div>
+        </div>
+
+        <div class="selection-section d-none" id="selectionSection">
+            <div class="selection-bar">
+                <div class="selection-count">
+                    <i class="bi bi-collection-play"></i>
+                    <span id="selectionCountText">0 videos found</span>
+                </div>
+                <div class="selection-actions">
+                    <button type="button" class="btn-select-toggle" id="btnSelectToggle">Deselect All</button>
+                    <button type="button" class="btn-start-download" id="btnStartDownload">
+                        <i class="bi bi-download"></i>
+                        <span id="btnStartDownloadText">Download Selected (0)</span>
+                    </button>
+                </div>
+            </div>
+            <div class="selection-grid" id="selectionGrid"></div>
         </div>
 
         <div class="platforms-wrapper">
@@ -98,12 +115,19 @@
     var progressLabel = document.getElementById('progressLabel');
     var progressTimer = document.getElementById('progressTimer');
     var downloadQueue = document.getElementById('downloadQueue');
+    var selectionSection = document.getElementById('selectionSection');
+    var selectionCountText = document.getElementById('selectionCountText');
+    var btnSelectToggle = document.getElementById('btnSelectToggle');
+    var btnStartDownload = document.getElementById('btnStartDownload');
+    var btnStartDownloadText = document.getElementById('btnStartDownloadText');
+    var selectionGrid = document.getElementById('selectionGrid');
     var resultsSection = document.getElementById('resultsSection');
     var mediaGrid = document.getElementById('mediaGrid');
     var downloadAllBtn = document.getElementById('downloadAllBtn');
     var errorSection = document.getElementById('errorSection');
     var errorText = document.getElementById('errorText');
 
+    var scannedEntries = [];
     var mediaIds = [];
 
     var timerInterval = null;
@@ -116,15 +140,24 @@
     }
 
     function startTimer() {
+        stopTimer(false);
         startTime = Date.now();
         progressTimer.textContent = '0:00';
         timerInterval = setInterval(function() {
-            progressTimer.textContent = formatTime(Math.floor((Date.now() - startTime) / 1000));
+            var elapsed = Math.floor((Date.now() - startTime) / 1000);
+            progressTimer.textContent = formatTime(elapsed);
         }, 1000);
     }
 
-    function stopTimer() {
-        if (timerInterval) { clearInterval(timerInterval); timerInterval = null; }
+    function stopTimer(isComplete) {
+        if (timerInterval) {
+            clearInterval(timerInterval);
+            timerInterval = null;
+        }
+        if (isComplete && startTime) {
+            var elapsed = Math.floor((Date.now() - startTime) / 1000);
+            progressTimer.textContent = 'Done (' + formatTime(elapsed) + ')';
+        }
     }
 
     function updateOverallProgress(completed, total) {
@@ -135,16 +168,19 @@
 
     function setLoading(loading, label) {
         submitBtn.disabled = loading;
-        btnText.textContent = loading ? (label || 'Downloading...') : 'Download';
+        btnText.textContent = loading ? (label || 'Fetching...') : 'Fetch Videos';
         if (loading) {
             progressContainer.classList.remove('d-none');
             resultsSection.classList.add('d-none');
+            selectionSection.classList.add('d-none');
             errorSection.classList.add('d-none');
             downloadQueue.innerHTML = '';
+            mediaGrid.innerHTML = '';
+            mediaIds = [];
             progressFill.style.width = '0%';
             startTimer();
         } else {
-            stopTimer();
+            stopTimer(false);
         }
     }
 
@@ -158,10 +194,10 @@
         try {
             var u = new URL(url);
             var path = u.pathname + u.search;
-            if (path.length > 50) path = path.substring(0, 47) + '...';
+            if (path.length > 40) path = path.substring(0, 37) + '...';
             return u.hostname + path;
         } catch(e) {
-            return url.length > 60 ? url.substring(0, 57) + '...' : url;
+            return url.length > 45 ? url.substring(0, 42) + '...' : url;
         }
     }
 
@@ -189,12 +225,12 @@
         if (status === 'scanning') {
             icon.classList.add('queue-loading');
             icon.innerHTML = '<div class="spinner"></div>';
-            statusEl.textContent = 'Scanning...';
+            statusEl.textContent = 'Scanning metadata...';
             statusEl.className = 'queue-status';
         } else if (status === 'loading') {
             icon.classList.add('queue-loading');
             icon.innerHTML = '<div class="spinner"></div>';
-            statusEl.textContent = 'Downloading...';
+            statusEl.textContent = 'Fetching video file...';
             statusEl.className = 'queue-status';
         } else if (status === 'done') {
             icon.classList.add('queue-done');
@@ -209,61 +245,49 @@
         }
     }
 
-    function renderResults(data) {
-        mediaGrid.innerHTML = '';
-        mediaIds = [];
-        var items = data.media || [];
-        if (items.length === 0 && !data.error) return;
+    function appendSingleMediaCard(m) {
+        if (!m || !m.Id) return;
+        mediaIds.push(m.Id);
+        var card = document.createElement('div');
+        card.className = 'media-card';
+        card.innerHTML =
+            '<div class="media-preview">' +
+                '<video controls loop class="media-video">' +
+                    '<source src="/download?id=' + encodeURIComponent(m.Id) + '" type="video/mp4">' +
+                '</video>' +
+            '</div>' +
+            '<div class="media-info">' +
+                '<h5 class="media-name"><i class="bi bi-film"></i> ' + escapeHtml(m.Name) + '</h5>' +
+                '<div class="media-meta">' +
+                    '<span class="media-size"><i class="bi bi-hdd"></i> ' + escapeHtml(m.HumanSize) + '</span>' +
+                    '<a href="/download?id=' + encodeURIComponent(m.Id) + '" class="btn-save" download>' +
+                        '<i class="bi bi-download"></i> Save' +
+                    '</a>' +
+                '</div>' +
+            '</div>';
+        mediaGrid.appendChild(card);
 
-        if (items.length > 0) {
-            items.forEach(function(m) {
-                if (m._error) {
-                    var errCard = document.createElement('div');
-                    errCard.className = 'media-card media-card-error';
-                    errCard.innerHTML =
-                        '<div class="media-info">' +
-                            '<h5 class="media-name"><i class="bi bi-exclamation-triangle"></i> ' + escapeHtml(m._url || 'Unknown URL') + '</h5>' +
-                            '<div class="media-error-log"><pre>' + escapeHtml(m._error) + '</pre></div>' +
-                        '</div>';
-                    mediaGrid.appendChild(errCard);
-                    return;
-                }
-                mediaIds.push(m.Id);
-                var card = document.createElement('div');
-                card.className = 'media-card';
-                card.innerHTML =
-                    '<div class="media-preview">' +
-                        '<video controls loop class="media-video">' +
-                            '<source src="/download?id=' + m.Id + '" type="video/mp4">' +
-                        '</video>' +
-                    '</div>' +
-                    '<div class="media-info">' +
-                        '<h5 class="media-name"><i class="bi bi-film"></i> ' + escapeHtml(m.Name) + '</h5>' +
-                        '<div class="media-meta">' +
-                            '<span class="media-size"><i class="bi bi-hdd"></i> ' + escapeHtml(m.HumanSize) + '</span>' +
-                            '<a href="/download?id=' + m.Id + '" class="btn-save" download>' +
-                                '<i class="bi bi-download"></i> Save' +
-                            '</a>' +
-                        '</div>' +
-                    '</div>';
-                mediaGrid.appendChild(card);
-            });
-            if (mediaIds.length > 1) {
-                downloadAllBtn.classList.remove('d-none');
-            }
-            resultsSection.classList.remove('d-none');
+        if (mediaIds.length > 1) {
+            downloadAllBtn.classList.remove('d-none');
         }
+        resultsSection.classList.remove('d-none');
+    }
 
-        var errorMessages = items.filter(function(m) { return m._error; }).map(function(m) { return m._error; });
-        if (errorMessages.length > 0) {
-            errorText.textContent = errorMessages.join('\n\n');
-            errorSection.classList.remove('d-none');
-        }
+    function appendErrorMediaCard(url, errorMsg) {
+        var errCard = document.createElement('div');
+        errCard.className = 'media-card media-card-error';
+        errCard.innerHTML =
+            '<div class="media-info">' +
+                '<h5 class="media-name"><i class="bi bi-exclamation-triangle"></i> ' + escapeHtml(url || 'Unknown URL') + '</h5>' +
+                '<div class="media-error-log"><pre>' + escapeHtml(errorMsg) + '</pre></div>' +
+            '</div>';
+        mediaGrid.appendChild(errCard);
+        resultsSection.classList.remove('d-none');
     }
 
     function escapeHtml(text) {
         var d = document.createElement('div');
-        d.appendChild(document.createTextNode(text));
+        d.appendChild(document.createTextNode(text || ''));
         return d.innerHTML;
     }
 
@@ -275,19 +299,30 @@
     });
 
     function startFlow(urls) {
+        scannedEntries = [];
         setLoading(true, 'Scanning...');
         progressLabel.textContent = 'Scanning 0 of ' + urls.length;
 
-        var scanned = [];
         var completed = 0;
         var total = urls.length;
+        var hasErrors = false;
+        var errorLogs = [];
 
         urls.forEach(function(url, i) { addQueueItem(i, url); });
 
         function scanNext() {
             if (completed >= total) {
-                progressLabel.textContent = 'Scan done';
-                confirmAndDownload(urls, scanned);
+                stopTimer(false);
+                progressContainer.classList.add('d-none');
+                submitBtn.disabled = false;
+                btnText.textContent = 'Fetch Videos';
+
+                if (scannedEntries.length > 0) {
+                    renderSelectionGrid();
+                } else if (hasErrors) {
+                    errorText.textContent = errorLogs.join('\n\n');
+                    errorSection.classList.remove('d-none');
+                }
                 return;
             }
 
@@ -301,33 +336,41 @@
 
             xhr.onload = function() {
                 completed++;
-                var item = { url: url, media: null, error: null, rawUrl: url };
                 if (xhr.status === 200) {
                     try {
                         var data = JSON.parse(xhr.responseText);
-                        if (data.scan && data.scan.count > 0) {
-                            item.media = data.scan;
+                        if (data.scan && data.scan.entries && data.scan.entries.length > 0) {
+                            data.scan.entries.forEach(function(entry) {
+                                scannedEntries.push({
+                                    id: entry.id,
+                                    title: entry.title || data.scan.title || 'Video',
+                                    url: entry.url || url,
+                                    thumbnail: entry.thumbnail || data.scan.thumbnail || '',
+                                    selected: true
+                                });
+                            });
+                            setQueueItemStatus(idx, 'done', data.scan.entries.length + ' video(s)');
                         } else if (data.error) {
-                            item.error = data.error;
+                            hasErrors = true;
+                            errorLogs.push(data.error);
+                            setQueueItemStatus(idx, 'error', data.error);
+                        } else {
+                            setQueueItemStatus(idx, 'error', 'No videos found');
                         }
                     } catch (err) {
-                        item.error = 'Invalid scan response';
+                        hasErrors = true;
+                        errorLogs.push('Invalid scan response');
+                        setQueueItemStatus(idx, 'error', 'Parse error');
                     }
                 } else {
+                    hasErrors = true;
+                    var errMsg = 'Scan failed';
                     try {
                         var errData = JSON.parse(xhr.responseText);
-                        item.error = errData.error || 'Scan failed';
-                    } catch(ex) {
-                        item.error = xhr.responseText.trim() || 'Scan failed';
-                    }
-                }
-                scanned.push(item);
-                if (item.error) {
-                    setQueueItemStatus(idx, 'error', item.error);
-                } else if (item.media.count === 1) {
-                    setQueueItemStatus(idx, 'done', '1 video');
-                } else {
-                    setQueueItemStatus(idx, 'done', item.media.count + ' videos');
+                        if (errData.error) errMsg = errData.error;
+                    } catch(ex) {}
+                    errorLogs.push(errMsg);
+                    setQueueItemStatus(idx, 'error', errMsg);
                 }
                 progressLabel.textContent = 'Scanning ' + completed + ' of ' + total;
                 scanNext();
@@ -335,7 +378,8 @@
 
             xhr.onerror = function() {
                 completed++;
-                scanned.push({ url: url, media: null, error: 'Network error', rawUrl: url });
+                hasErrors = true;
+                errorLogs.push('Network error during scan');
                 setQueueItemStatus(idx, 'error', 'Network error');
                 progressLabel.textContent = 'Scanning ' + completed + ' of ' + total;
                 scanNext();
@@ -347,74 +391,97 @@
         scanNext();
     }
 
-    function confirmAndDownload(urls, scanned) {
-        // Decide per item: single video downloads immediately, playlists ask first
-        var toDownload = [];
-        var cancelled = [];
+    function renderSelectionGrid() {
+        selectionSection.classList.remove('d-none');
+        selectionCountText.textContent = scannedEntries.length + ' video(s) found';
+        selectionGrid.innerHTML = '';
 
-        if (urls.length === 0) { setLoading(false); return; }
+        scannedEntries.forEach(function(item, i) {
+            var card = document.createElement('div');
+            card.className = 'select-item-card' + (item.selected ? ' is-selected' : '');
 
-        scanned.forEach(function(item, idx) {
-            if (item.error) {
-                cancelled.push(idx);
-                return;
-            }
-            if (item.media.count > 5) {
-                var msg = 'This URL contains ' + item.media.count + ' videos' +
-                          (item.media.title ? ' ("' + item.media.title + '")' : '') + '.\n\n' +
-                          'Download all ' + item.media.count + ' videos?';
-                if (!window.confirm(msg)) {
-                    cancelled.push(idx);
-                    return;
-                }
-            }
-            toDownload.push({ idx: idx, url: urls[idx] });
+            var thumbHtml = item.thumbnail
+                ? '<img src="' + escapeHtml(item.thumbnail) + '" class="select-item-thumb" alt="thumbnail" onerror="this.onerror=null;this.replaceWith(document.createRange().createContextualFragment(\'<div class=\\\ me-placeholder\\\'></div>\'));">'
+                : '<div class="select-item-thumb-placeholder"><i class="bi bi-film"></i></div>';
+
+            card.innerHTML =
+                thumbHtml +
+                '<div class="select-item-info">' +
+                    '<div class="select-item-title" title="' + escapeHtml(item.title) + '">' + escapeHtml(item.title) + '</div>' +
+                    '<div class="select-item-url" title="' + escapeHtml(item.url) + '">' + escapeHtml(shortenUrl(item.url)) + '</div>' +
+                '</div>' +
+                '<div class="select-item-check"><i class="bi bi-check-lg"></i></div>';
+
+            card.addEventListener('click', function() {
+                item.selected = !item.selected;
+                card.classList.toggle('is-selected', item.selected);
+                updateSelectionCount();
+            });
+
+            selectionGrid.appendChild(card);
         });
 
-        if (cancelled.length === urls.length) {
-            // Everything cancelled -> keep original error messages if present
-            cancelled.forEach(function(idx) {
-                if (!scanned[idx].error) {
-                    setQueueItemStatus(idx, 'error', 'Cancelled');
-                }
-            });
-            progressFill.style.width = '100%';
-            progressLabel.textContent = 'Cancelled';
-            setTimeout(function() { setLoading(false); }, 500);
-            return;
-        }
-
-        downloadUrls(toDownload, scanned);
+        updateSelectionCount();
     }
 
-    function downloadUrls(items, scanned) {
-        setLoading(true, 'Downloading...');
+    function updateSelectionCount() {
+        var selectedCount = scannedEntries.filter(function(e) { return e.selected; }).length;
+        btnStartDownloadText.textContent = 'Download Selected (' + selectedCount + ')';
+        btnStartDownload.disabled = (selectedCount === 0);
+
+        var allSelected = (selectedCount === scannedEntries.length && scannedEntries.length > 0);
+        btnSelectToggle.textContent = allSelected ? 'Deselect All' : 'Select All';
+    }
+
+    btnSelectToggle.addEventListener('click', function() {
+        var selectedCount = scannedEntries.filter(function(e) { return e.selected; }).length;
+        var shouldSelectAll = (selectedCount < scannedEntries.length);
+        scannedEntries.forEach(function(e) { e.selected = shouldSelectAll; });
+        renderSelectionGrid();
+    });
+
+    btnStartDownload.addEventListener('click', function() {
+        var selectedItems = scannedEntries.filter(function(e) { return e.selected; });
+        if (selectedItems.length === 0) return;
+
+        selectionSection.classList.add('d-none');
+        downloadUrls(selectedItems);
+    });
+
+    function downloadUrls(items) {
+        progressContainer.classList.remove('d-none');
+        resultsSection.classList.remove('d-none');
+        errorSection.classList.add('d-none');
+        downloadQueue.innerHTML = '';
+        mediaGrid.innerHTML = '';
+        mediaIds = [];
+        downloadAllBtn.classList.add('d-none');
+
+        startTimer();
+
         var completed = 0;
         var total = items.length;
-        var allResults = [];
-        var hasError = false;
-
+        progressFill.style.width = '0%';
         progressLabel.textContent = '0 of ' + total + ' done';
-        items.forEach(function(item) { setQueueItemStatus(item.idx, 'loading'); });
+
+        items.forEach(function(item, i) { addQueueItem(i, item.url); });
 
         function fetchNext() {
             if (completed >= total) {
                 progressFill.style.width = '100%';
                 progressLabel.textContent = 'All done';
-                setTimeout(function() {
-                    setLoading(false);
-                    renderResults({ media: allResults });
-                }, 500);
+                stopTimer(true);
+                submitBtn.disabled = false;
+                btnText.textContent = 'Fetch Videos';
                 return;
             }
 
-            var item = items[completed];
-            var idx = item.idx;
-            var url = item.url;
+            var idx = completed;
+            var item = items[idx];
             setQueueItemStatus(idx, 'loading');
 
             var xhr = new XMLHttpRequest();
-            xhr.open('GET', '/api/info?url=' + encodeURIComponent(url), true);
+            xhr.open('GET', '/api/info?url=' + encodeURIComponent(item.url), true);
             xhr.setRequestHeader('X-Requested-With', 'XMLHttpRequest');
 
             xhr.onload = function() {
@@ -424,22 +491,20 @@
                         var data = JSON.parse(xhr.responseText);
                         if (data.media && data.media.length > 0) {
                             setQueueItemStatus(idx, 'done', data.media.length + ' file(s)');
-                            allResults = allResults.concat(data.media);
+                            data.media.forEach(function(m) {
+                                appendSingleMediaCard(m);
+                            });
                         } else if (data.error) {
-                            hasError = true;
-                            var errMsg = data.error;
-                            setQueueItemStatus(idx, 'error', errMsg);
-                            allResults.push({ _error: errMsg, _url: url });
+                            setQueueItemStatus(idx, 'error', data.error);
+                            appendErrorMediaCard(item.url, data.error);
                         } else {
                             setQueueItemStatus(idx, 'done');
                         }
                     } catch(err) {
-                        hasError = true;
                         setQueueItemStatus(idx, 'error', 'Invalid response');
-                        allResults.push({ _error: 'Parse error', _url: url });
+                        appendErrorMediaCard(item.url, 'Parse error');
                     }
                 } else {
-                    hasError = true;
                     var errMsg = 'Download failed';
                     try {
                         var errData = JSON.parse(xhr.responseText);
@@ -448,7 +513,7 @@
                         if (xhr.responseText && xhr.responseText.trim()) errMsg = xhr.responseText.trim();
                     }
                     setQueueItemStatus(idx, 'error', errMsg);
-                    allResults.push({ _error: errMsg, _url: url });
+                    appendErrorMediaCard(item.url, errMsg);
                 }
                 updateOverallProgress(completed, total);
                 fetchNext();
@@ -456,13 +521,12 @@
 
             xhr.onerror = function() {
                 completed++;
-                hasError = true;
                 var errMsg = 'Network error';
                 if (xhr.responseText && xhr.responseText.trim()) {
                     errMsg = xhr.responseText.trim();
                 }
                 setQueueItemStatus(idx, 'error', errMsg);
-                allResults.push({ _error: errMsg, _url: url });
+                appendErrorMediaCard(item.url, errMsg);
                 updateOverallProgress(completed, total);
                 fetchNext();
             };
