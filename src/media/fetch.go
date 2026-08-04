@@ -19,6 +19,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 
 	"golang.org/x/sys/unix"
 )
@@ -202,6 +203,25 @@ func downloadMedia(url string, requestArgs map[string]string) (string, string, e
 
 	args = append(args, url)
 
+	const maxAttempts = 3
+	var lastErr, lastStderr string
+
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		lastErr, lastStderr = runYtDlp(args)
+		if lastErr == "" {
+			moveJsonFiles(id)
+			return id, "", nil
+		}
+		if attempt < maxAttempts {
+			log.Warn().Msgf("yt-dlp attempt %d/%d failed for %s: %s — retrying", attempt, maxAttempts, url, lastErr)
+			time.Sleep(2 * time.Second)
+		}
+	}
+
+	return "", lastStderr, errors.New(lastErr)
+}
+
+func runYtDlp(args []string) (string, string) {
 	cmd := exec.Command("yt-dlp", args...)
 
 	var stdoutBuf, stderrBuf bytes.Buffer
@@ -215,7 +235,7 @@ func downloadMedia(url string, requestArgs map[string]string) (string, string, e
 	err := cmd.Start()
 	if err != nil {
 		log.Error().Msgf("Error starting command: %v", err)
-		return "", err.Error(), err
+		return err.Error(), err.Error()
 	}
 
 	eg := errgroup.Group{}
@@ -227,21 +247,18 @@ func downloadMedia(url string, requestArgs map[string]string) (string, string, e
 
 	_, errStderr = io.Copy(stderr, stderrIn)
 	_ = eg.Wait()
-	log.Info().Msgf("Done with %s", id)
 
 	err = cmd.Wait()
 	if err != nil {
 		log.Error().Err(err).Msgf("cmd.Run() failed with %s", err)
-		return "", strings.TrimSpace(stderrBuf.String()), err
+		return "", strings.TrimSpace(stderrBuf.String())
 	} else if errStdout != nil {
 		log.Error().Msgf("failed to capture stdout: %v", errStdout)
 	} else if errStderr != nil {
 		log.Error().Msgf("failed to capture stderr: %v", errStderr)
 	}
 
-	moveJsonFiles(id)
-
-	return id, "", nil
+	return "", ""
 }
 
 func moveJsonFiles(id string) {

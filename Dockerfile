@@ -47,6 +47,10 @@ RUN curl -L https://github.com/yt-dlp/yt-dlp/releases/download/2025.09.26/yt-dlp
     echo "9215a371883aea75f0f2102c679333d813d9a5c3bceca212879a4a741a5b4657 /usr/local/bin/yt-dlp" | sha256sum -c - && \
     chmod a+rx /usr/local/bin/yt-dlp
 
+# curl_cffi enables browser impersonation (needed for TikTok, etc.)
+# yt-dlp only supports curl_cffi 0.5.10 and 0.10.x-0.15.x
+RUN pip install --no-cache-dir "curl_cffi>=0.15,<0.16"
+
 RUN yt-dlp --update --update-to nightly
 
 # Sanity check
