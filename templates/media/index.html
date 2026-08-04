@@ -308,7 +308,12 @@
                         item.error = 'Invalid scan response';
                     }
                 } else {
-                    item.error = xhr.responseText.trim() || 'Scan failed';
+                    try {
+                        var errData = JSON.parse(xhr.responseText);
+                        item.error = errData.error || 'Scan failed';
+                    } catch(ex) {
+                        item.error = xhr.responseText.trim() || 'Scan failed';
+                    }
                 }
                 scanned.push(item);
                 if (item.error) {
@@ -361,8 +366,12 @@
         });
 
         if (cancelled.length === urls.length) {
-            // Everything cancelled -> show errors for cancelled item
-            cancelled.forEach(function(idx) { setQueueItemStatus(idx, 'error', 'Cancelled'); });
+            // Everything cancelled -> keep original error messages if present
+            cancelled.forEach(function(idx) {
+                if (!scanned[idx].error) {
+                    setQueueItemStatus(idx, 'error', 'Cancelled');
+                }
+            });
             progressFill.style.width = '100%';
             progressLabel.textContent = 'Cancelled';
             setTimeout(function() { setLoading(false); }, 500);

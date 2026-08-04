@@ -36,19 +36,56 @@ func ScanUrl(inputUrl string) (*ScanInfo, string, error) {
 		return nil, "", errors.New("missing URL")
 	}
 
+	log.Info().Msgf("Scanning %s", url)
+
+	const maxAttempts = 3
+	var lastStderr string
+
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		info, stderr, err := runScanAttempt(url)
+		if err == nil {
+			return info, "", nil
+		}
+		lastStderr = stderr
+		if attempt < maxAttempts {
+			log.Warn().Msgf("scan attempt %d/%d failed for %s: %s — retrying", attempt, maxAttempts, url, stderr)
+			time.Sleep(2 * time.Second)
+		}
+	}
+
+	return nil, lastStderr, errors.New(lastStderr)
+}
+
+func runScanAttempt(url string) (*ScanInfo, string, error) {
 	args := []string{
 		"--dump-single-json",
 		"--flat-playlist",
 		"--skip-download",
 		"--no-warnings",
+		"--no-check-certificates",
 	}
 
-	if cp := getCookiesPath(); isWritableFile(cp) {
+	if impersonate := strings.TrimSpace(os.Getenv("MR_IMPERSONATE")); impersonate != "" {
+		args = append(args, "--impersonate", impersonate)
+	} else {
+		args = append(args, "--impersonate", "chrome")
+	}
+
+	cp := getCookiesPath()
+	if isWritableFile(cp) {
 		args = append(args, "--cookies", cp)
+	} else {
+		log.Warn().Msgf("cookies.txt not found or not writable at %s — TikTok and other protected sites may fail without --impersonate", cp)
 	}
-	args = append(args, url)
 
-	log.Info().Msgf("Scanning %s", url)
+	for arg, value := range getEnvVars() {
+		args = append(args, arg)
+		if value != "" {
+			args = append(args, value)
+		}
+	}
+
+	args = append(args, url)
 
 	cmd := exec.Command("yt-dlp", args...)
 	var stdout, stderr bytes.Buffer
@@ -56,8 +93,9 @@ func ScanUrl(inputUrl string) (*ScanInfo, string, error) {
 	cmd.Stderr = &stderr
 
 	if err := cmd.Start(); err != nil {
-		log.Error().Msgf("error starting scan: %v", err)
-		return nil, err.Error(), err
+		msg := err.Error()
+		log.Error().Msgf("error starting scan: %s", msg)
+		return nil, msg, err
 	}
 
 	done := make(chan error, 1)
@@ -89,8 +127,9 @@ func ScanUrl(inputUrl string) (*ScanInfo, string, error) {
 		Thumb   string      `json:"thumbnail"`
 	}
 	if err := json.Unmarshal(stdout.Bytes(), &raw); err != nil {
-		log.Error().Msgf("failed to parse scan result: %v", err)
-		return nil, "unable to parse scan result", err
+		msg := "unable to parse scan result"
+		log.Error().Msgf("%s: %v", msg, err)
+		return nil, msg, err
 	}
 
 	info := &ScanInfo{

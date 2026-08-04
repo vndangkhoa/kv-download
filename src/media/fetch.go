@@ -408,6 +408,9 @@ func getDownloadDir() string {
 }
 
 func getCookiesPath() string {
+	if p := strings.TrimSpace(os.Getenv("MR_COOKIES_PATH")); p != "" {
+		return p
+	}
 	execDir, _ := filepath.Abs(filepath.Dir(os.Args[0]))
 	return filepath.Join(execDir, "cookies.txt")
 }
