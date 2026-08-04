@@ -49,7 +49,11 @@ Built with **Go** + **[yt-dlp](https://github.com/yt-dlp/yt-dlp)** — deploy an
 
 | 🌙 Dark mode | 🔒 Cookie support | 🐳 One-command deploy |
 |:---:|:---:|:---:|
-| Sleek glassmorphism UI | Authenticate with TikTok, Instagram, Twitter/X | Single Docker image for amd64 & arm64 |
+| Sleek glassmorphism UI | Auto-refresh + manual `cookies.txt` for TikTok/IG/Twitter | Single Docker image for amd64 & arm64 |
+
+| 🛡️ Anti-bot | 🔄 Smart retry | 🧹 Auto cleanup (NAS) |
+|:---:|:---:|:---:|
+| Browser impersonation via curl_cffi | Retries transient failures up to 3× | Cron-based download cleanup for Synology |
 
 ### Supported platforms
 
@@ -241,6 +245,8 @@ On startup, and every 24 hours, it extracts cookies from the configured browser 
 
 > 💡 On a NAS (no browser), generate cookies once on your PC and copy `cookies.txt` to the mounted volume — the app will use it as-is and keep it updated between runs.
 
+> 🚀 **TikTok & impersonation:** TikTok blocks plain downloads. The app ships with `curl_cffi` (pinned `<0.16` — newer versions break yt-dlp) to impersonate a real browser. If TikTok fails with *"no impersonate target is available"*, run `pip install "curl_cffi>=0.15,<0.16"` — and note the app auto-retries transient anti-bot failures up to 3 times.
+
 ### Using cookies.txt
 
 **Local:**
@@ -285,6 +291,9 @@ services:
 |---|---|---|
 | `MR_DOWNLOAD_DIR` | Directory where videos are saved | `/download` (Docker) / `downloads/` (local) |
 | `MR_PROXY` | Proxy URL passed to yt-dlp via `--proxy` | _(empty)_ |
+| `MR_COOKIES_BROWSER` | Auto-extract cookies from browser (`chrome`, `firefox`, `edge`, ...) | _(disabled)_ |
+| `MR_COOKIES_URL` | Page to visit during cookie extraction | `https://www.tiktok.com/` |
+| `MR_COOKIES_MAX_AGE_HOURS` | Refresh `cookies.txt` when older than this | `168` (7 days) |
 
 ---
 
