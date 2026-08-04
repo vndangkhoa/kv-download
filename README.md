@@ -133,7 +133,7 @@ services:
       - "9292:9292"
     volumes:
       - /volume2/docker/kv-download/downloads:/download
-      - /volume2/docker/kv-download/cookies.txt:/app/cookies.txt:ro
+      - /volume2/docker/kv-download/cookies.txt:/app/cookies.txt
     environment:
       - TZ=Asia/Ho_Chi_Minh
 ```
@@ -228,7 +228,7 @@ yt-dlp --cookies-from-browser firefox --cookies cookies.txt "https://www.youtube
 ```bash
 docker run -d -p 9292:9292 \
   -v ./downloads:/download \
-  -v ./cookies.txt:/app/cookies.txt:ro \
+  -v ./cookies.txt:/app/cookies.txt \
   vndangkhoa/kv-download:latest
 ```
 
@@ -243,12 +243,14 @@ services:
       - "9292:9292"
     volumes:
       - ./downloads:/download
-      - ./cookies.txt:/app/cookies.txt:ro
+      - ./cookies.txt:/app/cookies.txt
     environment:
       - TZ=Asia/Ho_Chi_Minh
 ```
 
 > 🔒 **Security:** `cookies.txt` contains session tokens. **Never commit it to git or share it publicly.**
+>
+> ⚠️ **Note:** `cookies.txt` must be **writable** (don't mount it with `:ro`) — yt-dlp saves cookies back to the file on exit. If it's read-only, downloads will fail with an error.
 
 ---
 

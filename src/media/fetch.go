@@ -19,6 +19,8 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+
+	"golang.org/x/sys/unix"
 )
 
 type Media struct {
@@ -164,7 +166,11 @@ func downloadMedia(url string, requestArgs map[string]string) (string, string, e
 	}
 
 	if _, err := os.Stat(cookiesPath); err == nil {
-		defaultArgs["--cookies"] = cookiesPath
+		if err := unix.Access(cookiesPath, unix.W_OK); err == nil {
+			defaultArgs["--cookies"] = cookiesPath
+		} else {
+			log.Warn().Msgf("cookies.txt is not writable (%v), skipping cookie file to avoid yt-dlp save failure", err)
+		}
 	}
 
 	args := make([]string, 0)
