@@ -42,6 +42,7 @@ func main() {
 
 	media.GetInstalledVersion()
 	go startYtDlpUpdater()
+	go startCookieRefresher()
 
 	// The HTTP Server
 	server := &http.Server{Addr: ":9292", Handler: router}
@@ -100,6 +101,26 @@ func startYtDlpUpdater() {
 			case <-ticker.C:
 				_ = media.UpdateYtDlp()
 				log.Info().Msgf("yt-dlp version: %s", media.GetInstalledVersion())
+			case <-quit:
+				ticker.Stop()
+				return
+			}
+		}
+	}()
+}
+
+// startCookieRefresher auto-generates/refreshes cookies.txt from the configured
+// browser (MR_COOKIES_BROWSER) if it is missing or stale, then again every 24h.
+func startCookieRefresher() {
+	media.RefreshCookiesFromBrowser()
+
+	ticker := time.NewTicker(24 * time.Hour)
+	quit := make(chan struct{})
+	go func() {
+		for {
+			select {
+			case <-ticker.C:
+				media.RefreshCookiesFromBrowser()
 			case <-quit:
 				ticker.Stop()
 				return

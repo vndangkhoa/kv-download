@@ -216,6 +216,31 @@ yt-dlp --cookies-from-browser firefox --cookies cookies.txt "https://www.youtube
 
 > ⚠️ **Note:** The browser must be fully closed (not running in background) when extracting cookies.
 
+### Option 3: Automatic (built-in) 🔄
+
+The app can generate and keep `cookies.txt` fresh by itself — no manual export needed.
+
+```bash
+# Local
+MR_COOKIES_BROWSER=chrome ./run.sh
+
+# Docker
+docker run -d -p 9292:9292 \
+  -e MR_COOKIES_BROWSER=chrome \
+  -v ./downloads:/download \
+  vndangkhoa/kv-download:latest
+```
+
+On startup, and every 24 hours, it extracts cookies from the configured browser if `cookies.txt` is **missing or older than 7 days**. The browser must be installed on the same machine and closed during extraction.
+
+| Variable | Description | Default |
+|---|---|---|
+| `MR_COOKIES_BROWSER` | Browser to extract cookies from (`chrome`, `chromium`, `firefox`, `edge`, `brave`, `opera`, `vivaldi`, `safari`) | _(disabled)_ |
+| `MR_COOKIES_URL` | Page to visit during extraction | `https://www.tiktok.com/` |
+| `MR_COOKIES_MAX_AGE_HOURS` | Refresh interval for stale cookies | `168` (7 days) |
+
+> 💡 On a NAS (no browser), generate cookies once on your PC and copy `cookies.txt` to the mounted volume — the app will use it as-is and keep it updated between runs.
+
 ### Using cookies.txt
 
 **Local:**
