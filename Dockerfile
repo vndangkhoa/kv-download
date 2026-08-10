@@ -13,7 +13,7 @@ COPY go.mod go.mod
 COPY go.sum go.sum
 
 RUN go mod download
-RUN GOOS=$TARGETOS GOARCH=$TARGETARCH go build -x -o media-roller ./src
+RUN GOOS=$TARGETOS GOARCH=$TARGETARCH go build -x -o kv-download ./src
 
 # yt-dlp needs python
 FROM --platform=$TARGETPLATFORM python:3.13.7-alpine3.22
@@ -21,7 +21,7 @@ FROM --platform=$TARGETPLATFORM python:3.13.7-alpine3.22
 ARG TARGETARCH
 
 LABEL org.opencontainers.image.source="https://git.khoavo.myds.me/vndangkhoa/kv-download"
-LABEL org.opencontainers.image.description="Media Roller - Mobile friendly video downloader"
+LABEL org.opencontainers.image.description="KV Download - Mobile friendly video downloader"
 LABEL org.opencontainers.image.licenses="MIT"
 
 # This is where the downloaded files will be saved in the container.
@@ -36,7 +36,7 @@ RUN apk add --update --no-cache \
 # https://github.com/wader/static-ffmpeg
 COPY --from=mwader/static-ffmpeg:8.0 /ffmpeg  /usr/local/bin/
 COPY --from=mwader/static-ffmpeg:8.0 /ffprobe /usr/local/bin/
-COPY --from=builder /app/media-roller /app/media-roller
+COPY --from=builder /app/kv-download /app/kv-download
 COPY templates /app/templates
 COPY static /app/static
 
@@ -62,4 +62,4 @@ EXPOSE 9292
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:9292/ || exit 1
 
-ENTRYPOINT ["/app/media-roller"]
+ENTRYPOINT ["/app/kv-download"]

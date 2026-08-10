@@ -1,2 +1,2 @@
 #!/usr/bin/env bash
-go build -x -o media-roller ./src
+go build -x -o kv-download ./src

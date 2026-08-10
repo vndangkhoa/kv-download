@@ -34,6 +34,7 @@ Built with **Go** + **[yt-dlp](https://github.com/yt-dlp/yt-dlp)** — deploy an
 - [📡 API](#-api)
 - [🗂️ File Structure](#️-file-structure)
 - [📄 License](#-license)
+- [☕ Support](#-support)
 
 ---
 
@@ -363,6 +364,16 @@ javascript:(location.href="http://127.0.0.1:9292/fetch?url="+encodeURIComponent(
 ## 📄 License
 
 [MIT](LICENSE)
+
+---
+
+## ☕ Support
+
+If you find KV Download useful, consider supporting its development:
+
+<div align="center">
+  <img src="static/images/donation.jpg" alt="Donation QR code" width="260" style="border-radius: 12px; box-shadow: 0 8px 32px rgba(0,0,0,0.3);">
+</div>
 
 ---
 
