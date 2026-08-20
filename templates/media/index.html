@@ -1,12 +1,12 @@
 <!doctype html>
 <html lang="en">
 <head>
-    <title>KV Download</title>
+    <title>KV Download - Task Watcher & Video Downloader</title>
     <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
     <meta name="theme-color" content="#000000">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-    <meta name="description" content="Download videos from YouTube, TikTok, Instagram, Twitter/X, Vimeo and more">
+    <meta name="description" content="Download videos from YouTube, TikTok, Instagram, Twitter/X, Vimeo and more with real-time MeTube task watcher">
     <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
     <link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32x32.png">
     <link rel="icon" type="image/png" sizes="16x16" href="/static/favicon-16x16.png">
@@ -43,50 +43,49 @@
                         <i class="bi bi-link-45deg"></i>
                     </div>
                     <textarea name="url" class="url-input"
-                              placeholder="Paste video URL(s) here... one per line" rows="1"
+                              placeholder="Paste video or playlist URL(s) here... one per line" rows="1"
                               id="urlInput" autofocus></textarea>
                     <button class="btn-download" type="submit" id="submitBtn">
-                        <i class="bi bi-download"></i>
-                        <span class="btn-text">Fetch Videos</span>
+                        <i class="bi bi-plus-circle"></i>
+                        <span class="btn-text">Add to Queue</span>
                     </button>
+                </div>
+
+                <div class="format-bar">
+                    <span class="format-label"><i class="bi bi-sliders"></i> Quality:</span>
+                    <button type="button" class="format-pill active" data-format="best">Auto (Best)</button>
+                    <button type="button" class="format-pill" data-format="1080p">1080p</button>
+                    <button type="button" class="format-pill" data-format="720p">720p</button>
+                    <button type="button" class="format-pill" data-format="480p">480p</button>
+                    <button type="button" class="format-pill" data-format="audio_mp3"><i class="bi bi-music-note"></i> Audio MP3</button>
+                    <button type="button" class="format-pill" data-format="audio_m4a"><i class="bi bi-music-note-beamed"></i> Audio M4A</button>
                 </div>
             </div>
         </form>
 
-        <div class="progress-container d-none" id="progressContainer">
-            <div class="progress-bar-track">
-                <div class="progress-bar-fill" id="progressFill"></div>
-            </div>
-            <div class="progress-info">
-                <span class="progress-label" id="progressLabel">Preparing download...</span>
-                <span class="progress-timer" id="progressTimer">0:00</span>
-            </div>
-            <div class="stepper-bar" id="stepperBar">
-                <div class="step-item" id="step1"><span class="step-number">1</span><span>Fetch Link</span></div>
-                <div class="step-line" id="line1"></div>
-                <div class="step-item" id="step2"><span class="step-number">2</span><span>Download</span></div>
-                <div class="step-line" id="line2"></div>
-                <div class="step-item" id="step3"><span class="step-number">3</span><span>Play & Save</span></div>
-            </div>
-            <div class="download-queue" id="downloadQueue"></div>
-        </div>
-
-        <div class="selection-section d-none" id="selectionSection">
-            <div class="selection-bar">
-                <div class="selection-count">
-                    <i class="bi bi-collection-play"></i>
-                    <span id="selectionCountText">0 videos found</span>
-                </div>
-                <div class="selection-actions">
-                    <button type="button" class="btn-select-toggle" id="btnSelectToggle">Deselect All</button>
-                    <button type="button" class="btn-start-download" id="btnStartDownload">
-                        <i class="bi bi-download"></i>
-                        <span id="btnStartDownloadText">Download Selected (0)</span>
+        <section class="task-dashboard">
+            <div class="task-tabs">
+                <div class="tab-group">
+                    <button type="button" class="task-tab active" data-filter="all">
+                        <i class="bi bi-collection"></i> All <span class="task-tab-badge" id="countAll">0</span>
+                    </button>
+                    <button type="button" class="task-tab" data-filter="downloading">
+                        <i class="bi bi-arrow-down-circle"></i> Active <span class="task-tab-badge" id="countActive">0</span>
+                    </button>
+                    <button type="button" class="task-tab" data-filter="queued">
+                        <i class="bi bi-hourglass-split"></i> Queued <span class="task-tab-badge" id="countQueued">0</span>
+                    </button>
+                    <button type="button" class="task-tab" data-filter="completed">
+                        <i class="bi bi-check-circle"></i> Completed <span class="task-tab-badge" id="countCompleted">0</span>
+                    </button>
+                    <button type="button" class="task-tab" data-filter="failed">
+                        <i class="bi bi-exclamation-triangle"></i> Failed <span class="task-tab-badge" id="countFailed">0</span>
                     </button>
                 </div>
             </div>
-            <div class="selection-grid" id="selectionGrid"></div>
-        </div>
+
+            <div class="task-list" id="taskList"></div>
+        </section>
 
         <div class="platforms-wrapper">
             <span class="platform-badge"><i class="bi bi-youtube"></i> YouTube</span>
@@ -96,32 +95,6 @@
             <span class="platform-badge"><i class="bi bi-vimeo"></i> Vimeo</span>
         </div>
     </main>
-
-    <section class="results-section d-none" id="resultsSection">
-        <div class="section-header">
-            <div class="header-left">
-                <i class="bi bi-check-circle-fill"></i>
-                <h2>Download Complete</h2>
-            </div>
-            <div class="header-actions">
-                <button type="button" class="btn-go-back d-none" id="btnGoBack" title="Return to video selection grid">
-                    <i class="bi bi-arrow-left"></i> Select More Videos
-                </button>
-                <button class="btn-download-all d-none" id="downloadAllBtn" title="Download all videos as a ZIP">
-                    <i class="bi bi-folder-zip"></i> Download All
-                </button>
-            </div>
-        </div>
-        <div class="media-grid" id="mediaGrid"></div>
-    </section>
-
-    <section class="error-section d-none" id="errorSection">
-        <div class="error-card">
-            <i class="bi bi-exclamation-triangle-fill"></i>
-            <h4>Download Failed</h4>
-            <pre id="errorText"></pre>
-        </div>
-    </section>
 
     <footer class="app-footer">
         <p>Powered by <a href="https://github.com/yt-dlp/yt-dlp" target="_blank">yt-dlp</a> {{ $.ytDlpVersion }}</p>
@@ -134,32 +107,13 @@
     var urlInput = document.getElementById('urlInput');
     var submitBtn = document.getElementById('submitBtn');
     var btnText = submitBtn.querySelector('.btn-text');
-    var progressContainer = document.getElementById('progressContainer');
-    var progressFill = document.getElementById('progressFill');
-    var progressLabel = document.getElementById('progressLabel');
-    var progressTimer = document.getElementById('progressTimer');
-    var downloadQueue = document.getElementById('downloadQueue');
-    var selectionSection = document.getElementById('selectionSection');
-    var selectionCountText = document.getElementById('selectionCountText');
-    var btnSelectToggle = document.getElementById('btnSelectToggle');
-    var btnStartDownload = document.getElementById('btnStartDownload');
-    var btnStartDownloadText = document.getElementById('btnStartDownloadText');
-    var selectionGrid = document.getElementById('selectionGrid');
-    var resultsSection = document.getElementById('resultsSection');
-    var mediaGrid = document.getElementById('mediaGrid');
-    var downloadAllBtn = document.getElementById('downloadAllBtn');
-    var btnGoBack = document.getElementById('btnGoBack');
-    var errorSection = document.getElementById('errorSection');
-    var errorText = document.getElementById('errorText');
-
+    var taskList = document.getElementById('taskList');
     var matrixCanvas = document.getElementById('matrixCanvas');
 
-    var scannedEntries = [];
-    var mediaIds = [];
+    var tasksMap = {};
+    var currentFilter = 'all';
+    var selectedFormat = 'best';
     var currentTheme = localStorage.getItem('kv_theme') || 'simple';
-
-    var timerInterval = null;
-    var startTime = null;
 
     // Matrix Rain animation engine
     var ctx = matrixCanvas ? matrixCanvas.getContext('2d') : null;
@@ -228,11 +182,11 @@
         if (themeName === 'matrix') {
             if (matrixCanvas) matrixCanvas.classList.remove('d-none');
             startMatrixRain();
-            if (btnText && btnText.textContent === 'Fetch Videos') btnText.textContent = '[ INITIATE_DOWNLOAD ]';
+            if (btnText) btnText.textContent = '[ ENQUEUE_TASK ]';
         } else {
             if (matrixCanvas) matrixCanvas.classList.add('d-none');
             stopMatrixRain();
-            if (btnText && btnText.textContent === '[ INITIATE_DOWNLOAD ]') btnText.textContent = 'Fetch Videos';
+            if (btnText) btnText.textContent = 'Add to Queue';
         }
     }
 
@@ -243,55 +197,50 @@
         });
     });
 
+    document.querySelectorAll('.format-pill').forEach(function(pill) {
+        pill.addEventListener('click', function() {
+            document.querySelectorAll('.format-pill').forEach(function(p) { p.classList.remove('active'); });
+            this.classList.add('active');
+            selectedFormat = this.getAttribute('data-format');
+        });
+    });
+
+    document.querySelectorAll('.task-tab').forEach(function(tab) {
+        tab.addEventListener('click', function() {
+            document.querySelectorAll('.task-tab').forEach(function(t) { t.classList.remove('active'); });
+            this.classList.add('active');
+            currentFilter = this.getAttribute('data-filter');
+            renderTasks();
+        });
+    });
+
     applyTheme(currentTheme);
 
-    function updateStepper(step) {
-        for (var i = 1; i <= 3; i++) {
-            var stepEl = document.getElementById('step' + i);
-            var lineEl = document.getElementById('line' + (i - 1));
-            if (stepEl) {
-                stepEl.classList.remove('active', 'completed');
-                if (i < step) stepEl.classList.add('completed');
-                else if (i === step) stepEl.classList.add('active');
+    function initSSE() {
+        var evtSource = new EventSource('/api/events');
+
+        evtSource.onmessage = function(e) {
+            try {
+                var data = JSON.parse(e.data);
+                if (data.type === 'init' && Array.isArray(data.tasks)) {
+                    tasksMap = {};
+                    data.tasks.forEach(function(t) { tasksMap[t.id] = t; });
+                    renderTasks();
+                } else if (data.type === 'task_update' && data.task) {
+                    tasksMap[data.task.id] = data.task;
+                    renderTasks();
+                } else if (data.type === 'task_deleted' && data.taskId) {
+                    delete tasksMap[data.taskId];
+                    renderTasks();
+                }
+            } catch(err) {
+                console.error('SSE JSON error:', err);
             }
-            if (lineEl) {
-                lineEl.classList.remove('completed');
-                if (i <= step) lineEl.classList.add('completed');
-            }
-        }
-    }
+        };
 
-    function formatTime(sec) {
-        var m = Math.floor(sec / 60);
-        var s = sec % 60;
-        return m + ':' + (s < 10 ? '0' : '') + s;
-    }
-
-    function startTimer() {
-        stopTimer(false);
-        startTime = Date.now();
-        progressTimer.textContent = '0:00';
-        timerInterval = setInterval(function() {
-            var elapsed = Math.floor((Date.now() - startTime) / 1000);
-            progressTimer.textContent = formatTime(elapsed);
-        }, 1000);
-    }
-
-    function stopTimer(isComplete) {
-        if (timerInterval) {
-            clearInterval(timerInterval);
-            timerInterval = null;
-        }
-        if (isComplete && startTime) {
-            var elapsed = Math.floor((Date.now() - startTime) / 1000);
-            progressTimer.textContent = 'Done (' + formatTime(elapsed) + ')';
-        }
-    }
-
-    function updateOverallProgress(completed, total) {
-        var pct = total === 0 ? 0 : (completed / total) * 100;
-        progressFill.style.width = pct + '%';
-        progressLabel.textContent = completed + ' of ' + total + ' done';
+        evtSource.onerror = function() {
+            console.warn('SSE connection lost, reconnecting...');
+        };
     }
 
     function getUrls() {
@@ -300,101 +249,178 @@
         return raw.split(/\n+/).map(function(u) { return u.trim(); }).filter(function(u) { return u.length > 0; });
     }
 
-    function shortenUrl(url) {
-        try {
-            var u = new URL(url);
-            var path = u.pathname + u.search;
-            if (path.length > 40) path = path.substring(0, 37) + '...';
-            return u.hostname + path;
-        } catch(e) {
-            return url.length > 45 ? url.substring(0, 42) + '...' : url;
+    form.addEventListener('submit', function(e) {
+        e.preventDefault();
+        var urls = getUrls();
+        if (urls.length === 0) return;
+
+        submitBtn.disabled = true;
+        btnText.textContent = 'Enqueuing...';
+
+        var xhr = new XMLHttpRequest();
+        xhr.open('POST', '/api/queue/add', true);
+        xhr.setRequestHeader('Content-Type', 'application/json');
+
+        xhr.onload = function() {
+            submitBtn.disabled = false;
+            btnText.textContent = currentTheme === 'matrix' ? '[ ENQUEUE_TASK ]' : 'Add to Queue';
+            if (xhr.status === 200) {
+                urlInput.value = '';
+                urlInput.style.height = 'auto';
+            }
+        };
+
+        xhr.onerror = function() {
+            submitBtn.disabled = false;
+            btnText.textContent = currentTheme === 'matrix' ? '[ ENQUEUE_TASK ]' : 'Add to Queue';
+        };
+
+        xhr.send(JSON.stringify({
+            urls: urls,
+            format: selectedFormat
+        }));
+    });
+
+    function cancelTask(id) {
+        var xhr = new XMLHttpRequest();
+        xhr.open('POST', '/api/queue/cancel?id=' + encodeURIComponent(id), true);
+        xhr.send();
+    }
+
+    function retryTask(id) {
+        var xhr = new XMLHttpRequest();
+        xhr.open('POST', '/api/queue/retry?id=' + encodeURIComponent(id), true);
+        xhr.send();
+    }
+
+    function deleteTask(id, deleteFile) {
+        var xhr = new XMLHttpRequest();
+        xhr.open('DELETE', '/api/queue/item?id=' + encodeURIComponent(id) + '&deleteFile=' + (deleteFile ? 'true' : 'false'), true);
+        xhr.send();
+    }
+
+    function updateCounts(allTasks) {
+        var cAll = allTasks.length;
+        var cActive = allTasks.filter(function(t) { return t.status === 'downloading'; }).length;
+        var cQueued = allTasks.filter(function(t) { return t.status === 'queued'; }).length;
+        var cCompleted = allTasks.filter(function(t) { return t.status === 'completed'; }).length;
+        var cFailed = allTasks.filter(function(t) { return t.status === 'failed' || t.status === 'cancelled'; }).length;
+
+        document.getElementById('countAll').textContent = cAll;
+        document.getElementById('countActive').textContent = cActive;
+        document.getElementById('countQueued').textContent = cQueued;
+        document.getElementById('countCompleted').textContent = cCompleted;
+        document.getElementById('countFailed').textContent = cFailed;
+    }
+
+    function renderTasks() {
+        var allTasks = Object.values(tasksMap);
+        allTasks.sort(function(a, b) {
+            return new Date(b.createdAt) - new Date(a.createdAt);
+        });
+
+        updateCounts(allTasks);
+
+        var filtered = allTasks.filter(function(t) {
+            if (currentFilter === 'all') return true;
+            if (currentFilter === 'active' || currentFilter === 'downloading') return t.status === 'downloading';
+            if (currentFilter === 'queued') return t.status === 'queued';
+            if (currentFilter === 'completed') return t.status === 'completed';
+            if (currentFilter === 'failed') return t.status === 'failed' || t.status === 'cancelled';
+            return true;
+        });
+
+        taskList.innerHTML = '';
+
+        if (filtered.length === 0) {
+            var emptyState = document.createElement('div');
+            emptyState.className = 'media-card';
+            emptyState.style.textAlign = 'center';
+            emptyState.style.padding = '32px';
+            emptyState.innerHTML = '<i class="bi bi-inbox" style="font-size:2rem; opacity:0.5;"></i><p style="margin-top:8px; color:var(--text-tertiary);">No tasks found in this view.</p>';
+            taskList.appendChild(emptyState);
+            return;
         }
-    }
 
-    function addQueueItem(index, url) {
-        var item = document.createElement('div');
-        item.className = 'queue-item';
-        item.id = 'queue-item-' + index;
-        item.innerHTML =
-            '<div class="queue-icon queue-pending"><i class="bi bi-hourglass-split"></i></div>' +
-            '<div class="queue-details">' +
-                '<span class="queue-url" title="' + escapeHtml(url) + '">' + escapeHtml(shortenUrl(url)) + '</span>' +
-                '<span class="queue-status">Waiting...</span>' +
-            '</div>';
-        downloadQueue.appendChild(item);
-        return item;
-    }
+        filtered.forEach(function(t) {
+            var card = document.createElement('div');
+            card.className = 'task-card';
+            card.id = 'task-card-' + t.id;
 
-    function setQueueItemStatus(index, status, message) {
-        var item = document.getElementById('queue-item-' + index);
-        if (!item) return;
-        var icon = item.querySelector('.queue-icon');
-        var statusEl = item.querySelector('.queue-status');
+            var percent = Math.min(100, Math.max(0, t.percent || 0)).toFixed(1);
 
-        icon.className = 'queue-icon';
-        if (status === 'scanning' || status === 'loading') {
-            icon.classList.add('queue-loading');
-            icon.innerHTML = '<div class="spinner"></div>';
-            statusEl.textContent = 'Fetching video file...';
-            statusEl.className = 'queue-status';
-        } else if (status === 'done') {
-            icon.classList.add('queue-done');
-            icon.innerHTML = '<i class="bi bi-check-lg"></i>';
-            statusEl.textContent = message || 'Done';
-            statusEl.className = 'queue-status queue-status-done';
-        } else if (status === 'error') {
-            icon.classList.add('queue-error');
-            icon.innerHTML = '<i class="bi bi-x-lg"></i>';
-            statusEl.textContent = message || 'Failed';
-            statusEl.className = 'queue-status queue-status-error';
-        }
-    }
+            var downloadUrl = t.mediaId ? ('/download?id=' + encodeURIComponent(t.mediaId)) : '#';
 
-    function appendSingleMediaCard(m) {
-        if (!m || !m.Id) return;
-        mediaIds.push(m.Id);
-        var card = document.createElement('div');
-        card.className = 'media-card';
+            var statsLine = '';
+            if (t.status === 'downloading') {
+                statsLine = 'Speed: ' + (t.speed || '--') + ' | ETA: ' + (t.eta || '--') + ' | ' + percent + '%';
+            } else if (t.status === 'completed') {
+                statsLine = 'Size: ' + (t.humanSize || 'Done');
+            } else if (t.status === 'failed') {
+                statsLine = 'Error: ' + escapeHtml(t.errorMessage || 'Failed');
+            } else if (t.status === 'cancelled') {
+                statsLine = 'Cancelled by user';
+            } else {
+                statsLine = 'Waiting in download queue...';
+            }
 
-        var downloadUrl = '/download?id=' + encodeURIComponent(m.Id);
+            var actionsHtml = '';
+            if (t.status === 'queued' || t.status === 'downloading') {
+                actionsHtml += '<button type="button" class="btn-task-action btn-task-cancel" data-id="' + t.id + '"><i class="bi bi-x-circle"></i> Cancel</button>';
+            }
+            if (t.status === 'failed' || t.status === 'cancelled') {
+                actionsHtml += '<button type="button" class="btn-task-action btn-task-retry" data-id="' + t.id + '"><i class="bi bi-arrow-counterclockwise"></i> Retry</button>';
+            }
+            if (t.status === 'completed') {
+                actionsHtml += '<a href="' + downloadUrl + '" class="btn-task-action" download="' + escapeHtml(t.mediaName || t.title) + '"><i class="bi bi-download"></i> Save to Device</a>';
+            }
+            actionsHtml += '<button type="button" class="btn-task-action btn-task-delete" data-id="' + t.id + '"><i class="bi bi-trash"></i> Delete</button>';
 
-        card.innerHTML =
-            '<div class="media-preview">' +
-                '<video controls loop playsinline class="media-video" preload="metadata">' +
-                    '<source src="' + downloadUrl + '" type="video/mp4">' +
-                    'Your browser does not support the video tag.' +
-                '</video>' +
-            '</div>' +
-            '<div class="media-info">' +
-                '<h5 class="media-name" title="' + escapeHtml(m.Name) + '"><i class="bi bi-film"></i> ' + escapeHtml(m.Name) + '</h5>' +
-                '<div class="media-meta">' +
-                    '<span class="media-size"><i class="bi bi-hdd"></i> ' + escapeHtml(m.HumanSize) + '</span>' +
-                    '<a href="' + downloadUrl + '" class="btn-save" download="' + escapeHtml(m.Name) + '">' +
-                        '<i class="bi bi-download"></i> Save' +
-                    '</a>' +
+            var videoPreviewHtml = '';
+            if (t.status === 'completed' && t.mediaId) {
+                videoPreviewHtml =
+                    '<div class="media-preview" style="margin-top:12px; margin-bottom:12px;">' +
+                        '<video controls loop playsinline class="media-video" preload="metadata">' +
+                            '<source src="' + downloadUrl + '" type="video/mp4">' +
+                            'Your browser does not support the video tag.' +
+                        '</video>' +
+                    '</div>';
+            }
+
+            card.innerHTML =
+                '<div class="task-card-header">' +
+                    '<div class="task-title-group">' +
+                        '<i class="bi bi-film"></i>' +
+                        '<span class="task-title" title="' + escapeHtml(t.url) + '">' + escapeHtml(t.title) + '</span>' +
+                    '</div>' +
+                    '<div class="task-badges">' +
+                        '<span class="badge-format">' + escapeHtml(t.format) + '</span>' +
+                        '<span class="badge-status badge-status-' + t.status + '">' + t.status + '</span>' +
+                    '</div>' +
                 '</div>' +
-            '</div>';
+                '<div class="task-progress-track">' +
+                    '<div class="task-progress-fill" style="width: ' + percent + '%;"></div>' +
+                '</div>' +
+                '<div class="task-stats-row">' +
+                    '<span>' + statsLine + '</span>' +
+                    '<span>' + percent + '%</span>' +
+                '</div>' +
+                videoPreviewHtml +
+                '<div class="task-actions">' + actionsHtml + '</div>';
 
-        mediaGrid.appendChild(card);
+            taskList.appendChild(card);
+        });
 
-        if (mediaIds.length > 1) {
-            downloadAllBtn.classList.remove('d-none');
-        }
-
-        // Un-hide results section ONLY when a video card is ready!
-        resultsSection.classList.remove('d-none');
-    }
-
-    function appendErrorMediaCard(url, errorMsg) {
-        var errCard = document.createElement('div');
-        errCard.className = 'media-card media-card-error';
-        errCard.innerHTML =
-            '<div class="media-info">' +
-                '<h5 class="media-name"><i class="bi bi-exclamation-triangle"></i> ' + escapeHtml(url || 'Unknown URL') + '</h5>' +
-                '<div class="media-error-log"><pre>' + escapeHtml(errorMsg) + '</pre></div>' +
-            '</div>';
-        mediaGrid.appendChild(errCard);
-        resultsSection.classList.remove('d-none');
+        // Event Listeners for Task Actions
+        document.querySelectorAll('.btn-task-cancel').forEach(function(btn) {
+            btn.addEventListener('click', function() { cancelTask(this.getAttribute('data-id')); });
+        });
+        document.querySelectorAll('.btn-task-retry').forEach(function(btn) {
+            btn.addEventListener('click', function() { retryTask(this.getAttribute('data-id')); });
+        });
+        document.querySelectorAll('.btn-task-delete').forEach(function(btn) {
+            btn.addEventListener('click', function() { deleteTask(this.getAttribute('data-id'), true); });
+        });
     }
 
     function escapeHtml(text) {
@@ -403,143 +429,12 @@
         return d.innerHTML;
     }
 
-    form.addEventListener('submit', function(e) {
-        e.preventDefault();
-        var urls = getUrls();
-        if (urls.length === 0) return;
-        startFlow(urls);
-    });
-
-    function startFlow(urls) {
-        var items = urls.map(function(u) { return { url: u }; });
-        downloadUrls(items);
-    }
-
-    function downloadUrls(items) {
-        updateStepper(1);
-        submitBtn.disabled = true;
-        btnText.textContent = 'Fetching...';
-
-        progressContainer.classList.remove('d-none');
-        selectionSection.classList.add('d-none');
-        resultsSection.classList.add('d-none');
-        errorSection.classList.add('d-none');
-        downloadQueue.innerHTML = '';
-        mediaGrid.innerHTML = '';
-        mediaIds = [];
-        downloadAllBtn.classList.add('d-none');
-        btnGoBack.classList.add('d-none');
-
-        startTimer();
-
-        var completed = 0;
-        var total = items.length;
-        var hasErrors = false;
-        var errorLogs = [];
-
-        progressFill.style.width = '0%';
-        progressLabel.textContent = '0 of ' + total + ' done';
-
-        items.forEach(function(item, i) { addQueueItem(i, item.url); });
-
-        function fetchNext() {
-            if (completed >= total) {
-                progressFill.style.width = '100%';
-                progressLabel.textContent = 'All done';
-                stopTimer(true);
-                updateStepper(3);
-                submitBtn.disabled = false;
-                btnText.textContent = currentTheme === 'matrix' ? '[ INITIATE_DOWNLOAD ]' : 'Fetch Videos';
-
-                if (mediaIds.length === 0 && hasErrors) {
-                    errorText.textContent = errorLogs.join('\n\n');
-                    errorSection.classList.remove('d-none');
-                }
-                return;
-            }
-
-            var idx = completed;
-            var item = items[idx];
-            setQueueItemStatus(idx, 'loading');
-            updateStepper(2);
-
-            var xhr = new XMLHttpRequest();
-            xhr.open('GET', '/api/info?url=' + encodeURIComponent(item.url), true);
-            xhr.setRequestHeader('X-Requested-With', 'XMLHttpRequest');
-
-            xhr.onload = function() {
-                completed++;
-                if (xhr.status === 200) {
-                    try {
-                        var data = JSON.parse(xhr.responseText);
-                        if (data.media && data.media.length > 0) {
-                            setQueueItemStatus(idx, 'done', data.media.length + ' file(s)');
-                            data.media.forEach(function(m) {
-                                appendSingleMediaCard(m);
-                            });
-                        } else if (data.error) {
-                            hasErrors = true;
-                            errorLogs.push(data.error);
-                            setQueueItemStatus(idx, 'error', data.error);
-                            appendErrorMediaCard(item.url, data.error);
-                        } else {
-                            setQueueItemStatus(idx, 'done');
-                        }
-                    } catch(err) {
-                        hasErrors = true;
-                        errorLogs.push('Invalid JSON response');
-                        setQueueItemStatus(idx, 'error', 'Invalid response');
-                        appendErrorMediaCard(item.url, 'Parse error');
-                    }
-                } else {
-                    hasErrors = true;
-                    var errMsg = 'Download failed';
-                    try {
-                        var errData = JSON.parse(xhr.responseText);
-                        if (errData.error) errMsg = errData.error;
-                    } catch(ex) {
-                        if (xhr.responseText && xhr.responseText.trim()) errMsg = xhr.responseText.trim();
-                    }
-                    errorLogs.push(errMsg);
-                    setQueueItemStatus(idx, 'error', errMsg);
-                    appendErrorMediaCard(item.url, errMsg);
-                }
-                updateOverallProgress(completed, total);
-                fetchNext();
-            };
-
-            xhr.onerror = function() {
-                completed++;
-                hasErrors = true;
-                var errMsg = 'Network error';
-                if (xhr.responseText && xhr.responseText.trim()) {
-                    errMsg = xhr.responseText.trim();
-                }
-                errorLogs.push(errMsg);
-                setQueueItemStatus(idx, 'error', errMsg);
-                appendErrorMediaCard(item.url, errMsg);
-                updateOverallProgress(completed, total);
-                fetchNext();
-            };
-
-            xhr.send();
-        }
-
-        fetchNext();
-    }
-
-    downloadAllBtn.addEventListener('click', function() {
-        if (mediaIds.length === 0) return;
-        var url = '/download/zip?' + mediaIds.map(function(id) {
-            return 'id=' + encodeURIComponent(id);
-        }).join('&');
-        window.location.href = url;
-    });
-
     urlInput.addEventListener('input', function() {
         this.style.height = 'auto';
         this.style.height = Math.min(this.scrollHeight, 120) + 'px';
     });
+
+    initSSE();
 })();
 </script>
 </body>
