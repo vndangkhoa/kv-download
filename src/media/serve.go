@@ -129,7 +129,11 @@ func streamFileToClient(w http.ResponseWriter, r *http.Request, filename string)
 
 	// Send the headers
 	baseName := filepath.Base(filename)
-	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"; filename*=UTF-8''%s`, baseName, url.PathEscape(baseName)))
+	disposition := "attachment"
+	if r.URL.Query().Get("inline") == "true" || r.Header.Get("Range") != "" {
+		disposition = "inline"
+	}
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`%s; filename="%s"; filename*=UTF-8''%s`, disposition, baseName, url.PathEscape(baseName)))
 	w.Header().Set("Content-Type", fileContentType)
 
 	log.Info().Msgf("Opening file for streaming %s", filename)

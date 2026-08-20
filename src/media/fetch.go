@@ -340,7 +340,8 @@ func getAllFilesForId(id string) ([]Media, error) {
 	var medias []Media
 
 	for _, f := range files {
-		if !strings.HasSuffix(f, ".json") && !strings.HasSuffix(f, ".part") && !strings.HasSuffix(f, ".ytdl") {
+		ext := strings.ToLower(filepath.Ext(f))
+		if ext != ".json" && ext != ".part" && ext != ".ytdl" && ext != ".temp" {
 			fi, err2 := os.Stat(root + f)
 			var size int64 = 0
 			if err2 == nil {
@@ -357,6 +358,27 @@ func getAllFilesForId(id string) ([]Media, error) {
 			}
 		}
 	}
+
+	// Sort so playable video/audio files come first
+	isPlayable := func(name string) int {
+		ext := strings.ToLower(filepath.Ext(name))
+		switch ext {
+		case ".mp4", ".webm", ".mkv", ".mov", ".avi":
+			return 1
+		case ".mp3", ".m4a", ".aac", ".flac", ".ogg", ".wav":
+			return 2
+		default:
+			return 3
+		}
+	}
+
+	sort.Slice(medias, func(i, j int) bool {
+		pi, pj := isPlayable(medias[i].Name), isPlayable(medias[j].Name)
+		if pi != pj {
+			return pi < pj
+		}
+		return medias[i].SizeInBytes > medias[j].SizeInBytes
+	})
 
 	return medias, nil
 }

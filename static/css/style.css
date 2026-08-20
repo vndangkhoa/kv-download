@@ -80,14 +80,16 @@ body::after {
     display: flex;
     flex-direction: column;
     align-items: center;
-    padding: 60px 24px 80px;
+    padding: 36px 20px 60px;
     position: relative;
     z-index: 1;
+    max-width: 900px;
+    margin: 0 auto;
 }
 
 .hero-content {
     text-align: center;
-    max-width: 560px;
+    max-width: 860px;
     width: 100%;
     animation: fadeInUp 0.8s cubic-bezier(0.08, 0.82, 0.17, 1) forwards;
     opacity: 0;
@@ -96,7 +98,7 @@ body::after {
 
 .main-content {
     width: 100%;
-    max-width: 560px;
+    max-width: 860px;
     margin-top: 0;
 }
 

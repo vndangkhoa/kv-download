@@ -249,6 +249,19 @@
         return raw.split(/\n+/).map(function(u) { return u.trim(); }).filter(function(u) { return u.length > 0; });
     }
 
+    function showToast(msg) {
+        var toast = document.createElement('div');
+        toast.className = 'toast-notification';
+        toast.style.cssText = 'position:fixed; bottom:24px; right:24px; background:rgba(41,151,255,0.95); color:#fff; padding:12px 20px; border-radius:14px; font-weight:600; font-size:0.88rem; z-index:9999; box-shadow:0 10px 30px rgba(0,0,0,0.5); backdrop-filter:blur(10px); transition:all 0.3s ease;';
+        toast.innerHTML = '<i class="bi bi-check-circle-fill" style="margin-right:8px;"></i> ' + escapeHtml(msg);
+        document.body.appendChild(toast);
+        setTimeout(function() {
+            toast.style.opacity = '0';
+            toast.style.transform = 'translateY(10px)';
+            setTimeout(function() { if (toast.parentNode) toast.parentNode.removeChild(toast); }, 300);
+        }, 3000);
+    }
+
     form.addEventListener('submit', function(e) {
         e.preventDefault();
         var urls = getUrls();
@@ -267,6 +280,24 @@
             if (xhr.status === 200) {
                 urlInput.value = '';
                 urlInput.style.height = 'auto';
+
+                try {
+                    var res = JSON.parse(xhr.responseText);
+                    if (res.tasks && Array.isArray(res.tasks)) {
+                        res.tasks.forEach(function(t) {
+                            tasksMap[t.id] = t;
+                        });
+                    }
+                } catch(err) {}
+
+                // Immediately activate 'all' or 'queued' tab so user sees the action
+                document.querySelectorAll('.task-tab').forEach(function(t) { t.classList.remove('active'); });
+                var defaultTab = document.querySelector('.task-tab[data-filter="all"]');
+                if (defaultTab) defaultTab.classList.add('active');
+                currentFilter = 'all';
+
+                renderTasks();
+                showToast(urls.length + (urls.length === 1 ? ' task added to queue!' : ' tasks added to queue!'));
             }
         };
 
@@ -337,6 +368,7 @@
             emptyState.className = 'media-card';
             emptyState.style.textAlign = 'center';
             emptyState.style.padding = '32px';
+            emptyState.style.width = '100%';
             emptyState.innerHTML = '<i class="bi bi-inbox" style="font-size:2rem; opacity:0.5;"></i><p style="margin-top:8px; color:var(--text-tertiary);">No tasks found in this view.</p>';
             taskList.appendChild(emptyState);
             return;
@@ -348,7 +380,7 @@
             card.id = 'task-card-' + t.id;
 
             var percent = Math.min(100, Math.max(0, t.percent || 0)).toFixed(1);
-
+            var inlineStreamUrl = t.mediaId ? ('/download?id=' + encodeURIComponent(t.mediaId) + '&inline=true') : '#';
             var downloadUrl = t.mediaId ? ('/download?id=' + encodeURIComponent(t.mediaId)) : '#';
 
             var statsLine = '';
@@ -371,20 +403,32 @@
             if (t.status === 'failed' || t.status === 'cancelled') {
                 actionsHtml += '<button type="button" class="btn-task-action btn-task-retry" data-id="' + t.id + '"><i class="bi bi-arrow-counterclockwise"></i> Retry</button>';
             }
-            if (t.status === 'completed') {
+            if (t.status === 'completed' && t.mediaId) {
+                actionsHtml += '<a href="' + inlineStreamUrl + '" target="_blank" class="btn-task-action"><i class="bi bi-play-circle-fill"></i> Play Video</a>';
                 actionsHtml += '<a href="' + downloadUrl + '" class="btn-task-action" download="' + escapeHtml(t.mediaName || t.title) + '"><i class="bi bi-download"></i> Save to Device</a>';
             }
             actionsHtml += '<button type="button" class="btn-task-action btn-task-delete" data-id="' + t.id + '"><i class="bi bi-trash"></i> Delete</button>';
 
             var videoPreviewHtml = '';
             if (t.status === 'completed' && t.mediaId) {
-                videoPreviewHtml =
-                    '<div class="media-preview" style="margin-top:12px; margin-bottom:12px;">' +
-                        '<video controls loop playsinline class="media-video" preload="metadata">' +
-                            '<source src="' + downloadUrl + '" type="video/mp4">' +
-                            'Your browser does not support the video tag.' +
-                        '</video>' +
-                    '</div>';
+                var isAudio = (t.format && t.format.indexOf('audio') !== -1) || (t.mediaName && (t.mediaName.endsWith('.mp3') || t.mediaName.endsWith('.m4a')));
+                if (isAudio) {
+                    videoPreviewHtml =
+                        '<div class="media-preview-container" style="margin-top:12px; margin-bottom:12px;">' +
+                            '<audio controls playsinline style="width:100%; border-radius:12px; background:#000;">' +
+                                '<source src="' + inlineStreamUrl + '" type="audio/mpeg">' +
+                                'Your browser does not support audio playback.' +
+                            '</audio>' +
+                        '</div>';
+                } else {
+                    videoPreviewHtml =
+                        '<div class="media-preview-container" style="margin-top:12px; margin-bottom:12px;">' +
+                            '<video controls playsinline preload="metadata" style="width:100%; max-height:380px; border-radius:12px; background:#000; object-fit:contain;">' +
+                                '<source src="' + inlineStreamUrl + '" type="video/mp4">' +
+                                'Your browser does not support video playback.' +
+                            '</video>' +
+                        '</div>';
+                }
             }
 
             card.innerHTML =
@@ -399,11 +443,11 @@
                     '</div>' +
                 '</div>' +
                 '<div class="task-progress-track">' +
-                    '<div class="task-progress-fill" style="width: ' + percent + '%;"></div>' +
+                    '<div class="task-progress-fill" style="width: ' + (t.status === 'completed' ? '100' : percent) + '%;"></div>' +
                 '</div>' +
                 '<div class="task-stats-row">' +
                     '<span>' + statsLine + '</span>' +
-                    '<span>' + percent + '%</span>' +
+                    '<span>' + (t.status === 'completed' ? '100' : percent) + '%</span>' +
                 '</div>' +
                 videoPreviewHtml +
                 '<div class="task-actions">' + actionsHtml + '</div>';
