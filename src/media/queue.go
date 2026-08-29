@@ -212,20 +212,71 @@ func (q *QueueManager) Delete(id string, deleteFile bool) bool {
 	return true
 }
 
-func (q *QueueManager) GetTasks() []*DownloadTask {
-	q.mu.RLock()
-	defer q.mu.RUnlock()
+func (q *QueueManager) ClearCompleted() int {
+	q.mu.Lock()
+	defer q.mu.Unlock()
 
+	count := 0
+	for id, t := range q.tasks {
+		if t.Status == StatusCompleted {
+			delete(q.tasks, id)
+			count++
+		}
+	}
+	if count > 0 {
+		q.saveStateLocked()
+		GlobalBroadcaster.Broadcast(map[string]interface{}{
+			"type":   "init",
+			"tasks":  q.getTasksLocked(),
+		})
+	}
+	return count
+}
+
+func (q *QueueManager) RetryAllFailed() int {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
+	count := 0
+	for id, t := range q.tasks {
+		if t.Status == StatusFailed || t.Status == StatusCancelled {
+			t.Status = StatusQueued
+			t.Percent = 0
+			t.Speed = ""
+			t.ETA = ""
+			t.ErrorMessage = ""
+			t.CompletedAt = nil
+			q.queue = append(q.queue, id)
+			q.broadcastTaskUpdate(t)
+			select {
+			case q.workChan <- id:
+			default:
+			}
+			count++
+		}
+	}
+	if count > 0 {
+		q.saveStateLocked()
+	}
+	return count
+}
+
+func (q *QueueManager) getTasksLocked() []*DownloadTask {
 	list := make([]*DownloadTask, 0, len(q.tasks))
 	for _, t := range q.tasks {
 		list = append(list, t)
 	}
-
 	sort.Slice(list, func(i, j int) bool {
 		return list[i].CreatedAt.After(list[j].CreatedAt)
 	})
-
 	return list
+}
+
+func (q *QueueManager) GetTasks() []*DownloadTask {
+	q.mu.RLock()
+	defer q.mu.RUnlock()
+
+	return q.getTasksLocked()
 }
 
 func (q *QueueManager) workerLoop() {
@@ -581,5 +632,23 @@ func QueueDeleteHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
 		"success": ok,
+	})
+}
+
+func QueueClearCompletedHandler(w http.ResponseWriter, r *http.Request) {
+	count := GlobalQueue.ClearCompleted()
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"cleared": count,
+	})
+}
+
+func QueueRetryFailedHandler(w http.ResponseWriter, r *http.Request) {
+	count := GlobalQueue.RetryAllFailed()
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"retried": count,
 	})
 }

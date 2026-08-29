@@ -31,6 +31,8 @@ func main() {
 		router.Post("/api/queue/add", media.QueueAddHandler)
 		router.Post("/api/queue/cancel", media.QueueCancelHandler)
 		router.Post("/api/queue/retry", media.QueueRetryHandler)
+		router.Post("/api/queue/clear-completed", media.QueueClearCompletedHandler)
+		router.Post("/api/queue/retry-failed", media.QueueRetryFailedHandler)
 		router.Delete("/api/queue/item", media.QueueDeleteHandler)
 		router.Get("/download/zip", media.DownloadAllZip)
 		router.Get("/download", media.ServeMedia)

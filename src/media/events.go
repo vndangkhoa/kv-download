@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/rs/zerolog/log"
 )
@@ -61,6 +62,7 @@ func EventsHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("X-Accel-Buffering", "no")
 
 	flusher, ok := w.(http.Flusher)
 	if !ok {
@@ -80,11 +82,18 @@ func EventsHandler(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "data: %s\n\n", initialPayload)
 	flusher.Flush()
 
+	ticker := time.NewTicker(15 * time.Second)
+	defer ticker.Stop()
+
 	notify := r.Context().Done()
 	for {
 		select {
 		case <-notify:
 			return
+		case <-ticker.C:
+			// Heartbeat comment to keep connection alive through proxies
+			fmt.Fprintf(w, ": ping\n\n")
+			flusher.Flush()
 		case msg, ok := <-ch:
 			if !ok {
 				return

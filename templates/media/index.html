@@ -245,28 +245,28 @@
                     <span class="platforms-badge-pill">Auto-Extractor</span>
                 </div>
                 <div class="platform-chips-grid">
-                    <div class="platform-chip chip-yt" title="YouTube Videos, Shorts & Playlists">
+                    <div class="platform-chip chip-yt" title="Click to focus for YouTube URLs">
                         <i class="bi bi-youtube"></i> <span>YouTube</span>
                     </div>
-                    <div class="platform-chip chip-tiktok" title="TikTok Videos Without Watermark">
+                    <div class="platform-chip chip-tiktok" title="Click to focus for TikTok URLs">
                         <i class="bi bi-tiktok"></i> <span>TikTok</span>
                     </div>
-                    <div class="platform-chip chip-insta" title="Instagram Reels, Posts & Stories">
+                    <div class="platform-chip chip-insta" title="Click to focus for Instagram URLs">
                         <i class="bi bi-instagram"></i> <span>Instagram</span>
                     </div>
-                    <div class="platform-chip chip-x" title="Twitter/X Videos & Clips">
+                    <div class="platform-chip chip-x" title="Click to focus for Twitter / X URLs">
                         <i class="bi bi-twitter-x"></i> <span>Twitter / X</span>
                     </div>
-                    <div class="platform-chip chip-reddit" title="Reddit Media & Audio">
+                    <div class="platform-chip chip-reddit" title="Click to focus for Reddit URLs">
                         <i class="bi bi-reddit"></i> <span>Reddit</span>
                     </div>
-                    <div class="platform-chip chip-fb" title="Facebook Reels & Videos">
+                    <div class="platform-chip chip-fb" title="Click to focus for Facebook URLs">
                         <i class="bi bi-facebook"></i> <span>Facebook</span>
                     </div>
-                    <div class="platform-chip chip-vimeo" title="Vimeo HQ Streams">
+                    <div class="platform-chip chip-vimeo" title="Click to focus for Vimeo URLs">
                         <i class="bi bi-vimeo"></i> <span>Vimeo</span>
                     </div>
-                    <div class="platform-chip chip-twitch" title="Twitch Clips & VODs">
+                    <div class="platform-chip chip-twitch" title="Click to focus for Twitch URLs">
                         <i class="bi bi-twitch"></i> <span>Twitch</span>
                     </div>
                 </div>
@@ -274,7 +274,7 @@
         </section>
 
         <!-- Task Dashboard & Live Watcher -->
-        <section class="task-dashboard-section">
+        <section class="task-dashboard-section" id="taskDashboardSection">
             <!-- Filter Bar & View Mode Switcher -->
             <div class="dashboard-controls-bar glass-surface">
                 <div class="task-tabs-slider" role="tablist">
@@ -533,6 +533,17 @@
         });
     });
 
+    // Interactive Platform Chips
+    document.querySelectorAll('.platform-chip').forEach(function(chip) {
+        chip.style.cursor = 'pointer';
+        chip.addEventListener('click', function() {
+            var span = this.querySelector('span');
+            var name = span ? span.textContent : 'Platform';
+            urlInput.focus();
+            showToast('Ready for ' + name + ' links! Paste URL above.', 'info');
+        });
+    });
+
     // Filter Tabs (Desktop Tabs + Mobile Dock)
     function setFilter(filterName) {
         currentFilter = filterName;
@@ -546,6 +557,12 @@
         });
 
         renderTasks();
+
+        // Smooth scroll to task dashboard on mobile if clicked
+        var dashboard = document.getElementById('taskDashboardSection');
+        if (dashboard && window.innerWidth <= 768) {
+            dashboard.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        }
     }
 
     document.querySelectorAll('.task-tab-btn').forEach(function(tab) {
@@ -692,6 +709,25 @@
         }, 320);
     }
 
+    // Initial Fetch for Instant UI Population
+    function fetchQueueTasks() {
+        var xhr = new XMLHttpRequest();
+        xhr.open('GET', '/api/queue', true);
+        xhr.onload = function() {
+            if (xhr.status === 200) {
+                try {
+                    var res = JSON.parse(xhr.responseText);
+                    if (res.tasks && Array.isArray(res.tasks)) {
+                        tasksMap = {};
+                        res.tasks.forEach(function(t) { tasksMap[t.id] = t; });
+                        renderTasks();
+                    }
+                } catch(e) {}
+            }
+        };
+        xhr.send();
+    }
+
     // SSE Real-Time Event Stream
     function initSSE() {
         var evtSource = new EventSource('/api/events');
@@ -825,17 +861,56 @@
         xhr.send();
     }
 
-    // Batch Actions
+    // Event Delegation for All Task Card Actions (Cancel, Retry, Delete)
+    taskList.addEventListener('click', function(e) {
+        var cancelBtn = e.target.closest('.btn-action-cancel');
+        if (cancelBtn) {
+            cancelTask(cancelBtn.getAttribute('data-id'));
+            return;
+        }
+
+        var retryBtn = e.target.closest('.btn-action-retry');
+        if (retryBtn) {
+            retryTask(retryBtn.getAttribute('data-id'));
+            return;
+        }
+
+        var deleteBtn = e.target.closest('.btn-action-delete');
+        if (deleteBtn) {
+            deleteTask(deleteBtn.getAttribute('data-id'), true);
+            return;
+        }
+
+        var sampleBtn = e.target.closest('#btnTrySampleUrl');
+        if (sampleBtn) {
+            urlInput.value = 'https://www.youtube.com/watch?v=aqz-KE-bpKQ'; // Big Buck Bunny sample
+            urlInput.dispatchEvent(new Event('input'));
+            urlInput.focus();
+            showToast('Sample URL loaded! Click "Add to Download Queue" to test.', 'info');
+            return;
+        }
+    });
+
+    // Atomic Server Batch Actions
     document.getElementById('btnClearCompleted').addEventListener('click', function() {
         var completedTasks = Object.values(tasksMap).filter(function(t) { return t.status === 'completed'; });
         if (completedTasks.length === 0) {
             showToast('No completed tasks to clear', 'info');
             return;
         }
-        completedTasks.forEach(function(t) {
-            deleteTask(t.id, false);
-        });
-        showToast('Cleared ' + completedTasks.length + ' completed task(s)', 'success');
+
+        var xhr = new XMLHttpRequest();
+        xhr.open('POST', '/api/queue/clear-completed', true);
+        xhr.onload = function() {
+            if (xhr.status === 200) {
+                completedTasks.forEach(function(t) { delete tasksMap[t.id]; });
+                renderTasks();
+                showToast('Cleared ' + completedTasks.length + ' completed task(s)', 'success');
+            } else {
+                showToast('Failed to clear tasks', 'error');
+            }
+        };
+        xhr.send();
     });
 
     document.getElementById('btnRetryFailed').addEventListener('click', function() {
@@ -844,10 +919,22 @@
             showToast('No failed tasks to retry', 'info');
             return;
         }
-        failedTasks.forEach(function(t) {
-            retryTask(t.id);
-        });
-        showToast('Retrying ' + failedTasks.length + ' failed task(s)', 'info');
+
+        var xhr = new XMLHttpRequest();
+        xhr.open('POST', '/api/queue/retry-failed', true);
+        xhr.onload = function() {
+            if (xhr.status === 200) {
+                failedTasks.forEach(function(t) {
+                    t.status = 'queued';
+                    t.percent = 0;
+                });
+                renderTasks();
+                showToast('Retrying ' + failedTasks.length + ' failed task(s)', 'info');
+            } else {
+                showToast('Failed to retry tasks', 'error');
+            }
+        };
+        xhr.send();
     });
 
     // Dashboard Telemetry Calculations
@@ -913,13 +1000,43 @@
         if (filtered.length === 0) {
             var emptyCard = document.createElement('div');
             emptyCard.className = 'empty-state-bento glass-surface';
+
+            var emptyIcon = 'bi-inboxes-fill';
+            var emptyTitle = 'No downloads found';
+            var emptyDesc = 'Paste a video or audio link above to start downloading media at ultra-fast speeds.';
+            var emptyAction = '<button type="button" class="btn-empty-sample" id="btnTrySampleUrl"><i class="bi bi-magic"></i> Try Sample Video Link</button>';
+
+            if (currentFilter === 'downloading' || currentFilter === 'active') {
+                emptyIcon = 'bi-arrow-down-circle-fill text-cyan';
+                emptyTitle = 'No active downloads in progress';
+                emptyDesc = 'When you enqueue tasks, active downloads will stream real-time speed & progress here.';
+                emptyAction = '';
+            } else if (currentFilter === 'queued') {
+                emptyIcon = 'bi-hourglass-split text-amber';
+                emptyTitle = 'Download queue is clear';
+                emptyDesc = 'No tasks are currently waiting for a worker slot.';
+                emptyAction = '';
+            } else if (currentFilter === 'completed') {
+                emptyIcon = 'bi-check-circle-fill text-emerald';
+                emptyTitle = 'No completed downloads yet';
+                emptyDesc = 'Finished downloads will appear here with an embedded cinema player and direct save button.';
+                emptyAction = '';
+            } else if (currentFilter === 'failed') {
+                emptyIcon = 'bi-shield-check text-emerald';
+                emptyTitle = 'Zero failed tasks';
+                emptyDesc = 'All media tasks completed without errors. If a download ever fails, it will be listed here with retry options.';
+                emptyAction = '';
+            }
+
             emptyCard.innerHTML =
                 '<div class="empty-state-aura"></div>' +
                 '<div class="empty-icon-halo">' +
-                    '<i class="bi bi-inboxes-fill"></i>' +
+                    '<i class="bi ' + emptyIcon + '"></i>' +
                 '</div>' +
-                '<h3 class="empty-state-title">No downloads found</h3>' +
-                '<p class="empty-state-desc">Paste a link above to start downloading media at ultra-fast speeds.</p>';
+                '<h3 class="empty-state-title">' + emptyTitle + '</h3>' +
+                '<p class="empty-state-desc">' + emptyDesc + '</p>' +
+                (emptyAction ? '<div class="empty-state-actions">' + emptyAction + '</div>' : '');
+
             taskList.appendChild(emptyCard);
             return;
         }
@@ -1023,17 +1140,6 @@
 
             taskList.appendChild(card);
         });
-
-        // Attach Event Listeners to Action Buttons
-        document.querySelectorAll('.btn-action-cancel').forEach(function(btn) {
-            btn.addEventListener('click', function() { cancelTask(this.getAttribute('data-id')); });
-        });
-        document.querySelectorAll('.btn-action-retry').forEach(function(btn) {
-            btn.addEventListener('click', function() { retryTask(this.getAttribute('data-id')); });
-        });
-        document.querySelectorAll('.btn-action-delete').forEach(function(btn) {
-            btn.addEventListener('click', function() { deleteTask(this.getAttribute('data-id'), true); });
-        });
     }
 
     function escapeHtml(text) {
@@ -1042,9 +1148,10 @@
         return d.innerHTML;
     }
 
-    // Initialize State & SSE
+    // Initialize State, Initial Queue Fetch, and SSE Stream
     applyTheme(currentTheme);
     applyViewMode(currentViewMode);
+    fetchQueueTasks();
     initSSE();
 })();
 </script>

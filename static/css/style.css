@@ -1699,26 +1699,79 @@ body.theme-matrix .glass-textarea {
     text-shadow: 0 0 6px rgba(0, 255, 102, 0.6);
 }
 
+/* Empty State Actions & Sample Button */
+.empty-state-actions {
+    margin-top: 14px;
+    position: relative;
+    z-index: 1;
+}
+
+.btn-empty-sample {
+    background: rgba(6, 182, 212, 0.12);
+    border: 1px solid rgba(6, 182, 212, 0.35);
+    border-radius: var(--radius-full);
+    color: var(--accent-cyan-glow);
+    padding: 8px 18px;
+    font-size: 0.8rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: var(--transition);
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    font-family: inherit;
+    box-shadow: 0 4px 14px rgba(6, 182, 212, 0.2);
+}
+
+.btn-empty-sample:hover {
+    background: var(--grad-primary);
+    color: #ffffff;
+    border-color: transparent;
+    transform: translateY(-1px);
+    box-shadow: 0 6px 20px rgba(6, 182, 212, 0.4);
+}
+
+body.theme-matrix .btn-empty-sample {
+    background: rgba(0, 255, 102, 0.1);
+    border-color: #00ff66;
+    color: #00ff66;
+    box-shadow: 0 0 10px rgba(0, 255, 102, 0.2);
+}
+
+body.theme-matrix .btn-empty-sample:hover {
+    background: #00ff66;
+    color: #020603;
+    box-shadow: 0 0 20px rgba(0, 255, 102, 0.6);
+}
+
 /* ── Responsive: Tablet Breakpoint (max-width: 980px) ────────────────── */
 @media (max-width: 980px) {
+    .main-content-layout {
+        display: flex;
+        flex-direction: column;
+        gap: 20px;
+    }
+
     .bento-hero-grid {
-        grid-template-columns: 1fr;
-        grid-template-rows: auto;
+        display: flex;
+        flex-direction: column;
+        gap: 20px;
     }
 
     .bento-card-main {
-        grid-column: 1 / -1;
-        grid-row: auto;
+        order: 1;
+    }
+
+    .task-dashboard-section {
+        order: 2; /* Placed immediately below the download station */
     }
 
     .bento-card-telemetry {
-        grid-column: 1 / -1;
-        grid-row: auto;
+        order: 3;
     }
 
     .bento-card-platforms {
-        grid-column: 1 / -1;
-        grid-row: auto;
+        order: 4;
     }
 }
 
@@ -1733,19 +1786,19 @@ body.theme-matrix .glass-textarea {
     }
 
     .top-nav-glass {
-        padding: 10px 16px;
+        padding: 10px 14px;
     }
 
     .brand-title {
-        font-size: 1rem;
+        font-size: 0.96rem;
     }
 
     .bento-card-main {
-        padding: 18px 16px;
+        padding: 18px 14px;
     }
 
     .card-heading {
-        font-size: 1.1rem;
+        font-size: 1.08rem;
     }
 
     .input-inner-container {
@@ -1770,16 +1823,23 @@ body.theme-matrix .glass-textarea {
         padding: 14px;
     }
 
+    .dashboard-controls-bar {
+        padding: 6px 10px;
+        overflow-x: auto;
+    }
+
+    .task-tabs-slider {
+        width: 100%;
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+    }
+
     .task-items-container.view-grid {
         grid-template-columns: 1fr;
     }
 
     .task-bento-card {
-        padding: 16px;
-    }
-
-    .dashboard-controls-bar {
-        display: none; /* Replaced by floating bottom dock on mobile */
+        padding: 14px;
     }
 
     .mobile-bottom-dock {
