@@ -1,223 +1,705 @@
 <!doctype html>
 <html lang="en">
 <head>
-    <title>KV Download - Task Watcher & Video Downloader</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
-    <meta name="theme-color" content="#000000">
+    <meta charset="utf-8">
+    <title>KV Download — Next-Gen High-Speed Media Downloader</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, shrink-to-fit=no">
+    <meta name="theme-color" content="#07090e">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-    <meta name="description" content="Download videos from YouTube, TikTok, Instagram, Twitter/X, Vimeo and more with real-time MeTube task watcher">
+    <meta name="description" content="Ultra-modern, high-performance media downloader for YouTube, TikTok, Instagram, Twitter/X, Reddit, Vimeo and more.">
     <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
     <link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32x32.png">
     <link rel="icon" type="image/png" sizes="16x16" href="/static/favicon-16x16.png">
     <link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon.png">
     <link rel="manifest" href="/static/manifest.json">
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.2/font/bootstrap-icons.min.css">
+    <!-- Google Fonts & Bootstrap Icons -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Share+Tech+Mono&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
     <link rel="stylesheet" href="/static/css/style.css">
 </head>
 <body class="theme-simple">
 
 <canvas id="matrixCanvas" class="matrix-canvas d-none"></canvas>
 
-<div class="app-container">
-    <div class="top-nav">
-        <div class="brand">
-            <img src="/static/logo.svg" alt="KV Download" width="32" height="32" class="app-logo">
-            <span class="brand-name">KV Download</span>
-        </div>
-        <div class="theme-switch-group">
-            <button type="button" class="btn-theme-switch active" data-theme="simple">
-                <i class="bi bi-moon-stars-fill"></i> Simple
-            </button>
-            <button type="button" class="btn-theme-switch" data-theme="matrix">
-                <i class="bi bi-terminal-fill"></i> Matrix
-            </button>
-        </div>
-    </div>
+<!-- Ambient dynamic backdrop mesh -->
+<div class="ambient-glow-mesh">
+    <div class="glow-orb orb-1"></div>
+    <div class="glow-orb orb-2"></div>
+    <div class="glow-orb orb-3"></div>
+</div>
 
-    <main class="main-content">
-        <form class="url-form" id="downloadForm">
-            <div class="glass-card">
-                <div class="glass-input">
-                    <div class="input-icon">
-                        <i class="bi bi-link-45deg"></i>
+<div class="app-wrapper">
+    <!-- Floating Top Navigation -->
+    <header class="top-nav-container">
+        <div class="top-nav-glass">
+            <div class="nav-brand-group">
+                <div class="brand-logo-wrapper">
+                    <img src="/static/logo.svg" alt="KV Download" width="34" height="34" class="brand-logo">
+                    <div class="logo-glow-ring"></div>
+                </div>
+                <div class="brand-text-col">
+                    <div class="brand-name-row">
+                        <span class="brand-title">KV DOWNLOAD</span>
+                        <span class="brand-version-badge">PRO v2.4</span>
                     </div>
-                    <textarea name="url" class="url-input"
-                              placeholder="Paste video or playlist URL(s) here... one per line" rows="1"
-                              id="urlInput" autofocus></textarea>
-                    <button class="btn-download" type="submit" id="submitBtn">
-                        <i class="bi bi-plus-circle"></i>
-                        <span class="btn-text">Add to Queue</span>
-                    </button>
-                </div>
-
-                <div class="format-bar">
-                    <span class="format-label"><i class="bi bi-sliders"></i> Quality:</span>
-                    <button type="button" class="format-pill active" data-format="best">Auto (Best)</button>
-                    <button type="button" class="format-pill" data-format="1080p">1080p</button>
-                    <button type="button" class="format-pill" data-format="720p">720p</button>
-                    <button type="button" class="format-pill" data-format="480p">480p</button>
-                    <button type="button" class="format-pill" data-format="audio_mp3"><i class="bi bi-music-note"></i> Audio MP3</button>
-                    <button type="button" class="format-pill" data-format="audio_m4a"><i class="bi bi-music-note-beamed"></i> Audio M4A</button>
-                </div>
-            </div>
-        </form>
-
-        <section class="task-dashboard">
-            <div class="task-tabs">
-                <div class="tab-group">
-                    <button type="button" class="task-tab active" data-filter="all">
-                        <i class="bi bi-collection"></i> All <span class="task-tab-badge" id="countAll">0</span>
-                    </button>
-                    <button type="button" class="task-tab" data-filter="downloading">
-                        <i class="bi bi-arrow-down-circle"></i> Active <span class="task-tab-badge" id="countActive">0</span>
-                    </button>
-                    <button type="button" class="task-tab" data-filter="queued">
-                        <i class="bi bi-hourglass-split"></i> Queued <span class="task-tab-badge" id="countQueued">0</span>
-                    </button>
-                    <button type="button" class="task-tab" data-filter="completed">
-                        <i class="bi bi-check-circle"></i> Completed <span class="task-tab-badge" id="countCompleted">0</span>
-                    </button>
-                    <button type="button" class="task-tab" data-filter="failed">
-                        <i class="bi bi-exclamation-triangle"></i> Failed <span class="task-tab-badge" id="countFailed">0</span>
-                    </button>
+                    <div class="connection-status-pill" id="connStatus">
+                        <span class="status-dot pulse-emerald"></span>
+                        <span class="status-label">SSE Live</span>
+                    </div>
                 </div>
             </div>
 
-            <div class="task-list" id="taskList"></div>
+            <!-- Center Telemetry Chips (Desktop Only) -->
+            <div class="nav-telemetry-cluster d-none-mobile">
+                <div class="nav-telemetry-chip">
+                    <i class="bi bi-arrow-down-up"></i>
+                    <span>Speed: <strong id="navGlobalSpeed">0 KB/s</strong></span>
+                </div>
+                <div class="nav-telemetry-chip">
+                    <i class="bi bi-stack"></i>
+                    <span>Active: <strong id="navActiveCount">0</strong></span>
+                </div>
+            </div>
+
+            <!-- Right Theme Switcher -->
+            <div class="nav-actions-group">
+                <div class="theme-pill-switch" role="group" aria-label="Theme selection">
+                    <button type="button" class="theme-pill-btn active" data-theme="simple" title="Motion Liquid Glass Mode">
+                        <i class="bi bi-droplet-half"></i>
+                        <span class="d-none-mobile">Glass</span>
+                    </button>
+                    <button type="button" class="theme-pill-btn" data-theme="matrix" title="Matrix Cyberdeck Mode">
+                        <i class="bi bi-terminal-fill"></i>
+                        <span class="d-none-mobile">Matrix</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main App Content -->
+    <main class="main-content-layout">
+        <!-- Bento Hero Section -->
+        <section class="bento-hero-grid">
+            <!-- Main Bento Card: Media Enqueue Console -->
+            <div class="bento-card bento-card-main glass-surface">
+                <div class="card-header-bar">
+                    <div class="card-title-group">
+                        <div class="card-icon-halo">
+                            <i class="bi bi-cloud-arrow-down-fill"></i>
+                        </div>
+                        <div>
+                            <h2 class="card-heading">Media Download Station</h2>
+                            <p class="card-subheading">Paste links from YouTube, TikTok, Instagram, Twitter/X, Reddit & more</p>
+                        </div>
+                    </div>
+                    <div class="detected-platform-badge" id="detectedPlatformBadge">
+                        <i class="bi bi-link-45deg"></i>
+                        <span id="detectedPlatformText">Ready for URL</span>
+                    </div>
+                </div>
+
+                <form class="download-form" id="downloadForm">
+                    <div class="input-glow-wrapper">
+                        <div class="input-inner-container">
+                            <div class="input-icon-box">
+                                <i class="bi bi-link-45deg input-icon-lead"></i>
+                            </div>
+                            <textarea name="url" class="glass-textarea"
+                                      placeholder="Paste single or multiple video/audio URLs here (one per line)..."
+                                      rows="1" id="urlInput" autofocus></textarea>
+                            <div class="input-floating-actions">
+                                <button type="button" class="btn-input-action" id="btnPasteClipboard" title="Paste from clipboard">
+                                    <i class="bi bi-clipboard-pulse"></i>
+                                    <span class="d-none-mobile">Paste</span>
+                                </button>
+                                <button type="button" class="btn-input-action d-none" id="btnClearInput" title="Clear input">
+                                    <i class="bi bi-x-lg"></i>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Quality / Format Selector Carousel -->
+                    <div class="format-selection-container">
+                        <div class="format-header-row">
+                            <span class="format-section-label">
+                                <i class="bi bi-sliders2"></i> Output Quality / Format:
+                            </span>
+                            <span class="format-hint d-none-mobile">Supports audio extraction & max video resolution</span>
+                        </div>
+                        <div class="format-pill-carousel" id="formatCarousel">
+                            <button type="button" class="format-pill-card active" data-format="best">
+                                <span class="format-pill-icon"><i class="bi bi-stars"></i></span>
+                                <div class="format-pill-meta">
+                                    <span class="format-pill-title">Auto (Best)</span>
+                                    <span class="format-pill-sub">Max Quality</span>
+                                </div>
+                            </button>
+                            <button type="button" class="format-pill-card" data-format="1080p">
+                                <span class="format-pill-icon"><i class="bi bi-badge-hd-fill"></i></span>
+                                <div class="format-pill-meta">
+                                    <span class="format-pill-title">1080p FHD</span>
+                                    <span class="format-pill-sub">High Def</span>
+                                </div>
+                            </button>
+                            <button type="button" class="format-pill-card" data-format="720p">
+                                <span class="format-pill-icon"><i class="bi bi-display"></i></span>
+                                <div class="format-pill-meta">
+                                    <span class="format-pill-title">720p HD</span>
+                                    <span class="format-pill-sub">Standard</span>
+                                </div>
+                            </button>
+                            <button type="button" class="format-pill-card" data-format="480p">
+                                <span class="format-pill-icon"><i class="bi bi-phone"></i></span>
+                                <div class="format-pill-meta">
+                                    <span class="format-pill-title">480p SD</span>
+                                    <span class="format-pill-sub">Compact</span>
+                                </div>
+                            </button>
+                            <button type="button" class="format-pill-card" data-format="audio_mp3">
+                                <span class="format-pill-icon"><i class="bi bi-music-note-beamed"></i></span>
+                                <div class="format-pill-meta">
+                                    <span class="format-pill-title">Audio MP3</span>
+                                    <span class="format-pill-sub">320kbps</span>
+                                </div>
+                            </button>
+                            <button type="button" class="format-pill-card" data-format="audio_m4a">
+                                <span class="format-pill-icon"><i class="bi bi-soundwave"></i></span>
+                                <div class="format-pill-meta">
+                                    <span class="format-pill-title">Audio M4A</span>
+                                    <span class="format-pill-sub">Apple Lossless</span>
+                                </div>
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Enqueue CTA Button -->
+                    <div class="form-submit-row">
+                        <div class="url-count-indicator" id="urlCountIndicator">
+                            <i class="bi bi-list-check"></i> <span id="urlCountNumber">0</span> URL(s) detected
+                        </div>
+                        <button class="btn-cta-submit" type="submit" id="submitBtn">
+                            <span class="btn-cta-shimmer"></span>
+                            <span class="btn-cta-content">
+                                <i class="bi bi-plus-circle-fill" id="submitBtnIcon"></i>
+                                <span class="btn-cta-text" id="submitBtnText">Add to Download Queue</span>
+                            </span>
+                        </button>
+                    </div>
+                </form>
+            </div>
+
+            <!-- Bento Side Card 1: Live Engine Telemetry -->
+            <div class="bento-card bento-card-telemetry glass-surface">
+                <div class="telemetry-card-header">
+                    <div class="telemetry-icon-box">
+                        <i class="bi bi-cpu-fill"></i>
+                    </div>
+                    <div>
+                        <h3 class="telemetry-card-title">Engine Telemetry</h3>
+                        <span class="telemetry-card-sub">yt-dlp {{ $.ytDlpVersion }}</span>
+                    </div>
+                </div>
+
+                <div class="telemetry-stat-grid">
+                    <div class="telemetry-stat-box">
+                        <div class="stat-box-label">Global Speed</div>
+                        <div class="stat-box-val text-cyan" id="telemetrySpeed">0 KB/s</div>
+                    </div>
+                    <div class="telemetry-stat-box">
+                        <div class="stat-box-label">Active Tasks</div>
+                        <div class="stat-box-val text-indigo" id="telemetryActive">0</div>
+                    </div>
+                    <div class="telemetry-stat-box">
+                        <div class="stat-box-label">Queued</div>
+                        <div class="stat-box-val text-amber" id="telemetryQueued">0</div>
+                    </div>
+                    <div class="telemetry-stat-box">
+                        <div class="stat-box-label">Completed</div>
+                        <div class="stat-box-val text-emerald" id="telemetryCompleted">0</div>
+                    </div>
+                </div>
+
+                <!-- Batch Actions -->
+                <div class="telemetry-batch-actions">
+                    <button type="button" class="btn-batch-action" id="btnClearCompleted" title="Clear all completed tasks">
+                        <i class="bi bi-check2-all"></i> Clear Done
+                    </button>
+                    <button type="button" class="btn-batch-action" id="btnRetryFailed" title="Retry all failed tasks">
+                        <i class="bi bi-arrow-clockwise"></i> Retry Failed
+                    </button>
+                </div>
+            </div>
+
+            <!-- Bento Side Card 2: Supported Platforms Matrix -->
+            <div class="bento-card bento-card-platforms glass-surface">
+                <div class="platforms-header-bar">
+                    <div class="platforms-title-group">
+                        <i class="bi bi-shield-check text-cyan"></i>
+                        <span>High-Speed Platforms</span>
+                    </div>
+                    <span class="platforms-badge-pill">Auto-Extractor</span>
+                </div>
+                <div class="platform-chips-grid">
+                    <div class="platform-chip chip-yt" title="YouTube Videos, Shorts & Playlists">
+                        <i class="bi bi-youtube"></i> <span>YouTube</span>
+                    </div>
+                    <div class="platform-chip chip-tiktok" title="TikTok Videos Without Watermark">
+                        <i class="bi bi-tiktok"></i> <span>TikTok</span>
+                    </div>
+                    <div class="platform-chip chip-insta" title="Instagram Reels, Posts & Stories">
+                        <i class="bi bi-instagram"></i> <span>Instagram</span>
+                    </div>
+                    <div class="platform-chip chip-x" title="Twitter/X Videos & Clips">
+                        <i class="bi bi-twitter-x"></i> <span>Twitter / X</span>
+                    </div>
+                    <div class="platform-chip chip-reddit" title="Reddit Media & Audio">
+                        <i class="bi bi-reddit"></i> <span>Reddit</span>
+                    </div>
+                    <div class="platform-chip chip-fb" title="Facebook Reels & Videos">
+                        <i class="bi bi-facebook"></i> <span>Facebook</span>
+                    </div>
+                    <div class="platform-chip chip-vimeo" title="Vimeo HQ Streams">
+                        <i class="bi bi-vimeo"></i> <span>Vimeo</span>
+                    </div>
+                    <div class="platform-chip chip-twitch" title="Twitch Clips & VODs">
+                        <i class="bi bi-twitch"></i> <span>Twitch</span>
+                    </div>
+                </div>
+            </div>
         </section>
 
-        <div class="platforms-wrapper">
-            <span class="platform-badge"><i class="bi bi-youtube"></i> YouTube</span>
-            <span class="platform-badge"><i class="bi bi-tiktok"></i> TikTok</span>
-            <span class="platform-badge"><i class="bi bi-instagram"></i> Instagram</span>
-            <span class="platform-badge"><i class="bi bi-twitter-x"></i> Twitter/X</span>
-            <span class="platform-badge"><i class="bi bi-vimeo"></i> Vimeo</span>
-        </div>
+        <!-- Task Dashboard & Live Watcher -->
+        <section class="task-dashboard-section">
+            <!-- Filter Bar & View Mode Switcher -->
+            <div class="dashboard-controls-bar glass-surface">
+                <div class="task-tabs-slider" role="tablist">
+                    <button type="button" class="task-tab-btn active" data-filter="all">
+                        <i class="bi bi-collection-play"></i>
+                        <span class="tab-label">All</span>
+                        <span class="tab-badge" id="countAll">0</span>
+                    </button>
+                    <button type="button" class="task-tab-btn" data-filter="downloading">
+                        <i class="bi bi-arrow-down-circle-fill tab-icon-pulse text-cyan"></i>
+                        <span class="tab-label">Active</span>
+                        <span class="tab-badge" id="countActive">0</span>
+                    </button>
+                    <button type="button" class="task-tab-btn" data-filter="queued">
+                        <i class="bi bi-hourglass-split text-amber"></i>
+                        <span class="tab-label">Queued</span>
+                        <span class="tab-badge" id="countQueued">0</span>
+                    </button>
+                    <button type="button" class="task-tab-btn" data-filter="completed">
+                        <i class="bi bi-check-circle-fill text-emerald"></i>
+                        <span class="tab-label">Completed</span>
+                        <span class="tab-badge" id="countCompleted">0</span>
+                    </button>
+                    <button type="button" class="task-tab-btn" data-filter="failed">
+                        <i class="bi bi-exclamation-octagon-fill text-red"></i>
+                        <span class="tab-label">Failed</span>
+                        <span class="tab-badge" id="countFailed">0</span>
+                    </button>
+                </div>
+
+                <div class="dashboard-right-tools">
+                    <div class="view-mode-toggle" role="group" aria-label="Task layout view">
+                        <button type="button" class="view-toggle-btn active" data-view="grid" title="Bento Grid View">
+                            <i class="bi bi-grid-fill"></i>
+                        </button>
+                        <button type="button" class="view-toggle-btn" data-view="list" title="Compact List View">
+                            <i class="bi bi-list-ul"></i>
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Task List Container -->
+            <div class="task-items-container view-grid" id="taskList">
+                <!-- Rendered dynamically by JavaScript -->
+            </div>
+        </section>
     </main>
 
-    <footer class="app-footer">
-        <p>Powered by <a href="https://github.com/yt-dlp/yt-dlp" target="_blank">yt-dlp</a> {{ $.ytDlpVersion }}</p>
+    <!-- Mobile Floating Bottom Navigation Dock -->
+    <nav class="mobile-bottom-dock glass-surface">
+        <button type="button" class="mobile-dock-item active" data-filter="all">
+            <i class="bi bi-collection-play-fill"></i>
+            <span>All</span>
+            <span class="dock-badge" id="dockCountAll">0</span>
+        </button>
+        <button type="button" class="mobile-dock-item" data-filter="downloading">
+            <i class="bi bi-arrow-down-circle-fill"></i>
+            <span>Active</span>
+            <span class="dock-badge" id="dockCountActive">0</span>
+        </button>
+        <button type="button" class="mobile-dock-item" data-filter="queued">
+            <i class="bi bi-hourglass-split"></i>
+            <span>Queue</span>
+            <span class="dock-badge" id="dockCountQueued">0</span>
+        </button>
+        <button type="button" class="mobile-dock-item" data-filter="completed">
+            <i class="bi bi-check-circle-fill"></i>
+            <span>Done</span>
+            <span class="dock-badge" id="dockCountCompleted">0</span>
+        </button>
+        <button type="button" class="mobile-dock-item" data-filter="failed">
+            <i class="bi bi-exclamation-triangle-fill"></i>
+            <span>Failed</span>
+            <span class="dock-badge" id="dockCountFailed">0</span>
+        </button>
+    </nav>
+
+    <!-- App Footer -->
+    <footer class="app-footer-bar">
+        <div class="footer-inner">
+            <div class="footer-brand">
+                <i class="bi bi-lightning-charge-fill text-cyan"></i>
+                <span>KV Download &bull; High-Performance Engine</span>
+            </div>
+            <div class="footer-meta">
+                <span>Powered by <a href="https://github.com/yt-dlp/yt-dlp" target="_blank" rel="noopener">yt-dlp</a> {{ $.ytDlpVersion }}</span>
+            </div>
+        </div>
     </footer>
 </div>
 
+<!-- Toast Notification Container -->
+<div class="toast-container" id="toastContainer"></div>
+
+<!-- Application Logic -->
 <script>
 (function() {
+    'use strict';
+
+    // DOM Elements
     var form = document.getElementById('downloadForm');
     var urlInput = document.getElementById('urlInput');
     var submitBtn = document.getElementById('submitBtn');
-    var btnText = submitBtn.querySelector('.btn-text');
+    var submitBtnText = document.getElementById('submitBtnText');
+    var submitBtnIcon = document.getElementById('submitBtnIcon');
     var taskList = document.getElementById('taskList');
     var matrixCanvas = document.getElementById('matrixCanvas');
+    var btnPasteClipboard = document.getElementById('btnPasteClipboard');
+    var btnClearInput = document.getElementById('btnClearInput');
+    var detectedPlatformBadge = document.getElementById('detectedPlatformBadge');
+    var detectedPlatformText = document.getElementById('detectedPlatformText');
+    var urlCountIndicator = document.getElementById('urlCountIndicator');
+    var urlCountNumber = document.getElementById('urlCountNumber');
+    var connStatus = document.getElementById('connStatus');
 
+    // App State
     var tasksMap = {};
     var currentFilter = 'all';
     var selectedFormat = 'best';
+    var currentViewMode = localStorage.getItem('kv_view_mode') || 'grid';
     var currentTheme = localStorage.getItem('kv_theme') || 'simple';
 
-    // Matrix Rain animation engine
+    // Matrix Animation Engine
     var ctx = matrixCanvas ? matrixCanvas.getContext('2d') : null;
-    var matrixInterval = null;
-    var chars = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZアイウエオカキクケコサシスセソタチツテトナニヌネノハヒフヘホマミムメモヤユヨラリルレロワヲン';
-    var fontSize = 14;
+    var matrixAnimFrame = null;
+    var chars = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZｱｲｳｴｵｶｷｸｹｺｻｼｽｾｿﾀﾁﾂﾃﾄﾅﾆﾇﾈﾉﾊﾋﾌﾍﾎﾏﾐﾑﾒﾓﾔﾕﾖﾗﾘﾙﾚﾛﾜﾝ⚡⌥⌘∇⊞⊗';
+    var fontSize = 15;
     var drops = [];
+    var lastMatrixTime = 0;
 
     function initMatrixRain() {
         if (!matrixCanvas || !ctx) return;
-        matrixCanvas.width = window.innerWidth;
-        matrixCanvas.height = window.innerHeight;
-        var columns = Math.floor(matrixCanvas.width / fontSize);
+        var dpr = window.devicePixelRatio || 1;
+        matrixCanvas.width = window.innerWidth * dpr;
+        matrixCanvas.height = window.innerHeight * dpr;
+        matrixCanvas.style.width = window.innerWidth + 'px';
+        matrixCanvas.style.height = window.innerHeight + 'px';
+        ctx.scale(dpr, dpr);
+
+        var columns = Math.floor(window.innerWidth / fontSize);
         drops = [];
         for (var i = 0; i < columns; i++) {
-            drops[i] = Math.floor(Math.random() * -50);
+            drops[i] = Math.floor(Math.random() * -60);
         }
     }
 
-    function drawMatrixRain() {
-        if (!ctx) return;
-        ctx.fillStyle = 'rgba(3, 8, 4, 0.08)';
-        ctx.fillRect(0, 0, matrixCanvas.width, matrixCanvas.height);
-        ctx.fillStyle = '#00ff66';
-        ctx.font = fontSize + 'px "Share Tech Mono", monospace';
+    function renderMatrixFrame(timestamp) {
+        if (!ctx || currentTheme !== 'matrix') return;
+        if (!lastMatrixTime) lastMatrixTime = timestamp;
+        var elapsed = timestamp - lastMatrixTime;
 
-        for (var i = 0; i < drops.length; i++) {
-            var text = chars.charAt(Math.floor(Math.random() * chars.length));
-            var x = i * fontSize;
-            var y = drops[i] * fontSize;
+        if (elapsed > 40) { // ~25-30fps terminal feel
+            lastMatrixTime = timestamp;
+            ctx.fillStyle = 'rgba(2, 6, 3, 0.09)';
+            ctx.fillRect(0, 0, window.innerWidth, window.innerHeight);
 
-            ctx.fillText(text, x, y);
-            if (y > matrixCanvas.height && Math.random() > 0.975) {
-                drops[i] = 0;
+            ctx.font = fontSize + 'px "Share Tech Mono", monospace';
+
+            for (var i = 0; i < drops.length; i++) {
+                var text = chars.charAt(Math.floor(Math.random() * chars.length));
+                var x = i * fontSize;
+                var y = drops[i] * fontSize;
+
+                // Glowing leading glyph
+                if (Math.random() > 0.85) {
+                    ctx.fillStyle = '#ffffff';
+                    ctx.shadowColor = '#00ff66';
+                    ctx.shadowBlur = 8;
+                } else {
+                    ctx.fillStyle = '#00ff66';
+                    ctx.shadowBlur = 0;
+                }
+
+                ctx.fillText(text, x, y);
+
+                if (y > window.innerHeight && Math.random() > 0.98) {
+                    drops[i] = 0;
+                }
+                drops[i]++;
             }
-            drops[i]++;
         }
+        matrixAnimFrame = requestAnimationFrame(renderMatrixFrame);
     }
 
     function startMatrixRain() {
         initMatrixRain();
-        if (matrixInterval) clearInterval(matrixInterval);
-        matrixInterval = setInterval(drawMatrixRain, 45);
+        if (matrixAnimFrame) cancelAnimationFrame(matrixAnimFrame);
+        lastMatrixTime = 0;
+        matrixAnimFrame = requestAnimationFrame(renderMatrixFrame);
         window.addEventListener('resize', initMatrixRain);
     }
 
     function stopMatrixRain() {
-        if (matrixInterval) {
-            clearInterval(matrixInterval);
-            matrixInterval = null;
+        if (matrixAnimFrame) {
+            cancelAnimationFrame(matrixAnimFrame);
+            matrixAnimFrame = null;
         }
         window.removeEventListener('resize', initMatrixRain);
     }
 
+    // Theme Management
     function applyTheme(themeName) {
         currentTheme = themeName;
         document.body.classList.remove('theme-simple', 'theme-matrix');
         document.body.classList.add('theme-' + themeName);
         localStorage.setItem('kv_theme', themeName);
 
-        var buttons = document.querySelectorAll('.btn-theme-switch');
-        buttons.forEach(function(btn) {
+        document.querySelectorAll('.theme-pill-btn').forEach(function(btn) {
             btn.classList.toggle('active', btn.getAttribute('data-theme') === themeName);
         });
 
         if (themeName === 'matrix') {
             if (matrixCanvas) matrixCanvas.classList.remove('d-none');
             startMatrixRain();
-            if (btnText) btnText.textContent = '[ ENQUEUE_TASK ]';
+            if (submitBtnText) submitBtnText.textContent = '[ ENQUEUE_TASK ]';
         } else {
             if (matrixCanvas) matrixCanvas.classList.add('d-none');
             stopMatrixRain();
-            if (btnText) btnText.textContent = 'Add to Queue';
+            if (submitBtnText) submitBtnText.textContent = 'Add to Download Queue';
         }
     }
 
-    document.querySelectorAll('.btn-theme-switch').forEach(function(btn) {
+    document.querySelectorAll('.theme-pill-btn').forEach(function(btn) {
         btn.addEventListener('click', function() {
             var selectedTheme = this.getAttribute('data-theme');
             applyTheme(selectedTheme);
+            showToast('Theme switched to ' + (selectedTheme === 'matrix' ? 'Matrix Cyberdeck' : 'Motion Liquid Glass'), 'info');
         });
     });
 
-    document.querySelectorAll('.format-pill').forEach(function(pill) {
+    // View Mode Management (Grid vs List)
+    function applyViewMode(mode) {
+        currentViewMode = mode;
+        localStorage.setItem('kv_view_mode', mode);
+        taskList.classList.remove('view-grid', 'view-list');
+        taskList.classList.add('view-' + mode);
+
+        document.querySelectorAll('.view-toggle-btn').forEach(function(btn) {
+            btn.classList.toggle('active', btn.getAttribute('data-view') === mode);
+        });
+    }
+
+    document.querySelectorAll('.view-toggle-btn').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+            applyViewMode(this.getAttribute('data-view'));
+        });
+    });
+
+    // Format Selector Pills
+    document.querySelectorAll('.format-pill-card').forEach(function(pill) {
         pill.addEventListener('click', function() {
-            document.querySelectorAll('.format-pill').forEach(function(p) { p.classList.remove('active'); });
+            document.querySelectorAll('.format-pill-card').forEach(function(p) { p.classList.remove('active'); });
             this.classList.add('active');
             selectedFormat = this.getAttribute('data-format');
         });
     });
 
-    document.querySelectorAll('.task-tab').forEach(function(tab) {
+    // Filter Tabs (Desktop Tabs + Mobile Dock)
+    function setFilter(filterName) {
+        currentFilter = filterName;
+
+        document.querySelectorAll('.task-tab-btn').forEach(function(btn) {
+            btn.classList.toggle('active', btn.getAttribute('data-filter') === filterName);
+        });
+
+        document.querySelectorAll('.mobile-dock-item').forEach(function(item) {
+            item.classList.toggle('active', item.getAttribute('data-filter') === filterName);
+        });
+
+        renderTasks();
+    }
+
+    document.querySelectorAll('.task-tab-btn').forEach(function(tab) {
         tab.addEventListener('click', function() {
-            document.querySelectorAll('.task-tab').forEach(function(t) { t.classList.remove('active'); });
-            this.classList.add('active');
-            currentFilter = this.getAttribute('data-filter');
-            renderTasks();
+            setFilter(this.getAttribute('data-filter'));
         });
     });
 
-    applyTheme(currentTheme);
+    document.querySelectorAll('.mobile-dock-item').forEach(function(item) {
+        item.addEventListener('click', function() {
+            setFilter(this.getAttribute('data-filter'));
+        });
+    });
 
+    // URL Detection and Live Platform Tagging
+    function detectPlatform(url) {
+        if (!url) return null;
+        var u = url.toLowerCase();
+        if (u.indexOf('youtube.com') !== -1 || u.indexOf('youtu.be') !== -1) return { name: 'YouTube', icon: 'bi-youtube', color: '#ff0000' };
+        if (u.indexOf('tiktok.com') !== -1) return { name: 'TikTok', icon: 'bi-tiktok', color: '#00f2fe' };
+        if (u.indexOf('instagram.com') !== -1) return { name: 'Instagram', icon: 'bi-instagram', color: '#e1306c' };
+        if (u.indexOf('twitter.com') !== -1 || u.indexOf('x.com') !== -1) return { name: 'Twitter / X', icon: 'bi-twitter-x', color: '#1da1f2' };
+        if (u.indexOf('reddit.com') !== -1) return { name: 'Reddit', icon: 'bi-reddit', color: '#ff4500' };
+        if (u.indexOf('facebook.com') !== -1 || u.indexOf('fb.watch') !== -1) return { name: 'Facebook', icon: 'bi-facebook', color: '#1877f2' };
+        if (u.indexOf('vimeo.com') !== -1) return { name: 'Vimeo', icon: 'bi-vimeo', color: '#1ab7ea' };
+        if (u.indexOf('twitch.tv') !== -1) return { name: 'Twitch', icon: 'bi-twitch', color: '#9146ff' };
+        if (u.indexOf('soundcloud.com') !== -1) return { name: 'SoundCloud', icon: 'bi-soundwave', color: '#ff5500' };
+        if (u.indexOf('bilibili.com') !== -1) return { name: 'Bilibili', icon: 'bi-tv', color: '#00a1d6' };
+        if (u.indexOf('http://') !== -1 || u.indexOf('https://') !== -1) return { name: 'Web Media', icon: 'bi-globe2', color: '#2997ff' };
+        return null;
+    }
+
+    function updateInputDetection() {
+        var raw = urlInput.value.trim();
+        var urls = getUrls();
+
+        btnClearInput.classList.toggle('d-none', raw.length === 0);
+        urlCountIndicator.classList.toggle('visible', urls.length > 0);
+        urlCountNumber.textContent = urls.length;
+
+        if (urls.length === 0) {
+            detectedPlatformBadge.className = 'detected-platform-badge';
+            detectedPlatformBadge.innerHTML = '<i class="bi bi-link-45deg"></i> <span>Ready for URL</span>';
+            return;
+        }
+
+        if (urls.length === 1) {
+            var plat = detectPlatform(urls[0]);
+            if (plat) {
+                detectedPlatformBadge.className = 'detected-platform-badge platform-active';
+                detectedPlatformBadge.innerHTML = '<i class="bi ' + plat.icon + '"></i> <span>' + escapeHtml(plat.name) + ' Detected</span>';
+            } else {
+                detectedPlatformBadge.className = 'detected-platform-badge';
+                detectedPlatformBadge.innerHTML = '<i class="bi bi-link-45deg"></i> <span>Custom URL</span>';
+            }
+        } else {
+            detectedPlatformBadge.className = 'detected-platform-badge platform-active';
+            detectedPlatformBadge.innerHTML = '<i class="bi bi-layers-fill"></i> <span>Batch: ' + urls.length + ' URLs</span>';
+        }
+    }
+
+    urlInput.addEventListener('input', function() {
+        this.style.height = 'auto';
+        this.style.height = Math.min(this.scrollHeight, 180) + 'px';
+        updateInputDetection();
+    });
+
+    // Clipboard One-Tap Paste
+    btnPasteClipboard.addEventListener('click', async function() {
+        try {
+            if (navigator.clipboard && navigator.clipboard.readText) {
+                var text = await navigator.clipboard.readText();
+                if (text && text.trim()) {
+                    if (urlInput.value.trim()) {
+                        urlInput.value += '\n' + text.trim();
+                    } else {
+                        urlInput.value = text.trim();
+                    }
+                    urlInput.dispatchEvent(new Event('input'));
+                    urlInput.focus();
+                    showToast('Pasted URL from clipboard', 'success');
+                } else {
+                    showToast('Clipboard is empty', 'warning');
+                }
+            } else {
+                urlInput.focus();
+                document.execCommand('paste');
+            }
+        } catch(err) {
+            urlInput.focus();
+            showToast('Please paste manually (Ctrl+V / Cmd+V)', 'info');
+        }
+    });
+
+    btnClearInput.addEventListener('click', function() {
+        urlInput.value = '';
+        urlInput.style.height = 'auto';
+        updateInputDetection();
+        urlInput.focus();
+    });
+
+    // Toast Notifications Engine
+    function showToast(msg, type) {
+        type = type || 'success';
+        var toastContainer = document.getElementById('toastContainer');
+        if (!toastContainer) return;
+
+        var toast = document.createElement('div');
+        toast.className = 'toast-notification toast-' + type;
+
+        var iconMap = {
+            success: 'bi-check-circle-fill',
+            error: 'bi-exclamation-octagon-fill',
+            warning: 'bi-exclamation-triangle-fill',
+            info: 'bi-info-circle-fill'
+        };
+
+        toast.innerHTML =
+            '<div class="toast-inner">' +
+                '<i class="bi ' + (iconMap[type] || 'bi-bell-fill') + ' toast-icon"></i>' +
+                '<span class="toast-message">' + escapeHtml(msg) + '</span>' +
+                '<button type="button" class="toast-close" aria-label="Close">&times;</button>' +
+            '</div>' +
+            '<div class="toast-progress-bar"></div>';
+
+        var closeBtn = toast.querySelector('.toast-close');
+        closeBtn.addEventListener('click', function() {
+            dismissToast(toast);
+        });
+
+        toastContainer.appendChild(toast);
+
+        // Auto dismiss
+        setTimeout(function() {
+            dismissToast(toast);
+        }, 3800);
+    }
+
+    function dismissToast(toast) {
+        if (!toast || toast.classList.contains('toast-dismissing')) return;
+        toast.classList.add('toast-dismissing');
+        setTimeout(function() {
+            if (toast.parentNode) toast.parentNode.removeChild(toast);
+        }, 320);
+    }
+
+    // SSE Real-Time Event Stream
     function initSSE() {
         var evtSource = new EventSource('/api/events');
+
+        evtSource.onopen = function() {
+            connStatus.className = 'connection-status-pill connected';
+            connStatus.innerHTML = '<span class="status-dot pulse-emerald"></span> <span class="status-label">SSE Live</span>';
+        };
 
         evtSource.onmessage = function(e) {
             try {
@@ -234,12 +716,13 @@
                     renderTasks();
                 }
             } catch(err) {
-                console.error('SSE JSON error:', err);
+                console.error('SSE parsing error:', err);
             }
         };
 
         evtSource.onerror = function() {
-            console.warn('SSE connection lost, reconnecting...');
+            connStatus.className = 'connection-status-pill reconnecting';
+            connStatus.innerHTML = '<span class="status-dot pulse-amber"></span> <span class="status-label">Reconnecting</span>';
         };
     }
 
@@ -249,26 +732,19 @@
         return raw.split(/\n+/).map(function(u) { return u.trim(); }).filter(function(u) { return u.length > 0; });
     }
 
-    function showToast(msg) {
-        var toast = document.createElement('div');
-        toast.className = 'toast-notification';
-        toast.style.cssText = 'position:fixed; bottom:24px; right:24px; background:rgba(41,151,255,0.95); color:#fff; padding:12px 20px; border-radius:14px; font-weight:600; font-size:0.88rem; z-index:9999; box-shadow:0 10px 30px rgba(0,0,0,0.5); backdrop-filter:blur(10px); transition:all 0.3s ease;';
-        toast.innerHTML = '<i class="bi bi-check-circle-fill" style="margin-right:8px;"></i> ' + escapeHtml(msg);
-        document.body.appendChild(toast);
-        setTimeout(function() {
-            toast.style.opacity = '0';
-            toast.style.transform = 'translateY(10px)';
-            setTimeout(function() { if (toast.parentNode) toast.parentNode.removeChild(toast); }, 300);
-        }, 3000);
-    }
-
+    // Form Enqueue Handler
     form.addEventListener('submit', function(e) {
         e.preventDefault();
         var urls = getUrls();
-        if (urls.length === 0) return;
+        if (urls.length === 0) {
+            urlInput.focus();
+            showToast('Please enter at least one video or audio URL', 'warning');
+            return;
+        }
 
         submitBtn.disabled = true;
-        btnText.textContent = 'Enqueuing...';
+        submitBtnIcon.className = 'bi bi-arrow-repeat btn-icon-spin';
+        submitBtnText.textContent = 'Enqueuing ' + urls.length + ' task(s)...';
 
         var xhr = new XMLHttpRequest();
         xhr.open('POST', '/api/queue/add', true);
@@ -276,10 +752,13 @@
 
         xhr.onload = function() {
             submitBtn.disabled = false;
-            btnText.textContent = currentTheme === 'matrix' ? '[ ENQUEUE_TASK ]' : 'Add to Queue';
+            submitBtnIcon.className = 'bi bi-plus-circle-fill';
+            submitBtnText.textContent = currentTheme === 'matrix' ? '[ ENQUEUE_TASK ]' : 'Add to Download Queue';
+
             if (xhr.status === 200) {
                 urlInput.value = '';
                 urlInput.style.height = 'auto';
+                updateInputDetection();
 
                 try {
                     var res = JSON.parse(xhr.responseText);
@@ -290,20 +769,18 @@
                     }
                 } catch(err) {}
 
-                // Immediately activate 'all' or 'queued' tab so user sees the action
-                document.querySelectorAll('.task-tab').forEach(function(t) { t.classList.remove('active'); });
-                var defaultTab = document.querySelector('.task-tab[data-filter="all"]');
-                if (defaultTab) defaultTab.classList.add('active');
-                currentFilter = 'all';
-
-                renderTasks();
-                showToast(urls.length + (urls.length === 1 ? ' task added to queue!' : ' tasks added to queue!'));
+                setFilter('all');
+                showToast(urls.length + (urls.length === 1 ? ' task added to queue!' : ' tasks added to queue!'), 'success');
+            } else {
+                showToast('Failed to add tasks: ' + xhr.statusText, 'error');
             }
         };
 
         xhr.onerror = function() {
             submitBtn.disabled = false;
-            btnText.textContent = currentTheme === 'matrix' ? '[ ENQUEUE_TASK ]' : 'Add to Queue';
+            submitBtnIcon.className = 'bi bi-plus-circle-fill';
+            submitBtnText.textContent = currentTheme === 'matrix' ? '[ ENQUEUE_TASK ]' : 'Add to Download Queue';
+            showToast('Network error while connecting to server', 'error');
         };
 
         xhr.send(JSON.stringify({
@@ -312,45 +789,115 @@
         }));
     });
 
+    // Keyboard Shortcuts (Ctrl+Enter / Cmd+Enter to enqueue)
+    urlInput.addEventListener('keydown', function(e) {
+        if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+            e.preventDefault();
+            form.dispatchEvent(new Event('submit'));
+        }
+    });
+
+    // API Task Actions
     function cancelTask(id) {
         var xhr = new XMLHttpRequest();
         xhr.open('POST', '/api/queue/cancel?id=' + encodeURIComponent(id), true);
+        xhr.onload = function() {
+            showToast('Download task cancelled', 'info');
+        };
         xhr.send();
     }
 
     function retryTask(id) {
         var xhr = new XMLHttpRequest();
         xhr.open('POST', '/api/queue/retry?id=' + encodeURIComponent(id), true);
+        xhr.onload = function() {
+            showToast('Task re-enqueued for download', 'info');
+        };
         xhr.send();
     }
 
     function deleteTask(id, deleteFile) {
         var xhr = new XMLHttpRequest();
         xhr.open('DELETE', '/api/queue/item?id=' + encodeURIComponent(id) + '&deleteFile=' + (deleteFile ? 'true' : 'false'), true);
+        xhr.onload = function() {
+            showToast('Task removed', 'info');
+        };
         xhr.send();
     }
 
-    function updateCounts(allTasks) {
+    // Batch Actions
+    document.getElementById('btnClearCompleted').addEventListener('click', function() {
+        var completedTasks = Object.values(tasksMap).filter(function(t) { return t.status === 'completed'; });
+        if (completedTasks.length === 0) {
+            showToast('No completed tasks to clear', 'info');
+            return;
+        }
+        completedTasks.forEach(function(t) {
+            deleteTask(t.id, false);
+        });
+        showToast('Cleared ' + completedTasks.length + ' completed task(s)', 'success');
+    });
+
+    document.getElementById('btnRetryFailed').addEventListener('click', function() {
+        var failedTasks = Object.values(tasksMap).filter(function(t) { return t.status === 'failed' || t.status === 'cancelled'; });
+        if (failedTasks.length === 0) {
+            showToast('No failed tasks to retry', 'info');
+            return;
+        }
+        failedTasks.forEach(function(t) {
+            retryTask(t.id);
+        });
+        showToast('Retrying ' + failedTasks.length + ' failed task(s)', 'info');
+    });
+
+    // Dashboard Telemetry Calculations
+    function updateTelemetryAndCounts(allTasks) {
         var cAll = allTasks.length;
         var cActive = allTasks.filter(function(t) { return t.status === 'downloading'; }).length;
         var cQueued = allTasks.filter(function(t) { return t.status === 'queued'; }).length;
         var cCompleted = allTasks.filter(function(t) { return t.status === 'completed'; }).length;
         var cFailed = allTasks.filter(function(t) { return t.status === 'failed' || t.status === 'cancelled'; }).length;
 
+        // Header / Desktop badges
         document.getElementById('countAll').textContent = cAll;
         document.getElementById('countActive').textContent = cActive;
         document.getElementById('countQueued').textContent = cQueued;
         document.getElementById('countCompleted').textContent = cCompleted;
         document.getElementById('countFailed').textContent = cFailed;
+
+        // Mobile Dock badges
+        document.getElementById('dockCountAll').textContent = cAll;
+        document.getElementById('dockCountActive').textContent = cActive;
+        document.getElementById('dockCountQueued').textContent = cQueued;
+        document.getElementById('dockCountCompleted').textContent = cCompleted;
+        document.getElementById('dockCountFailed').textContent = cFailed;
+
+        // Side Telemetry Card
+        document.getElementById('telemetryActive').textContent = cActive;
+        document.getElementById('telemetryQueued').textContent = cQueued;
+        document.getElementById('telemetryCompleted').textContent = cCompleted;
+
+        // Global Speed Aggregator
+        var activeSpeeds = [];
+        allTasks.forEach(function(t) {
+            if (t.status === 'downloading' && t.speed) {
+                activeSpeeds.push(t.speed);
+            }
+        });
+        var speedDisplay = activeSpeeds.length > 0 ? activeSpeeds[0] : '0 KB/s';
+        document.getElementById('telemetrySpeed').textContent = speedDisplay;
+        document.getElementById('navGlobalSpeed').textContent = speedDisplay;
+        document.getElementById('navActiveCount').textContent = cActive;
     }
 
+    // Render Tasks Grid/List
     function renderTasks() {
         var allTasks = Object.values(tasksMap);
         allTasks.sort(function(a, b) {
             return new Date(b.createdAt) - new Date(a.createdAt);
         });
 
-        updateCounts(allTasks);
+        updateTelemetryAndCounts(allTasks);
 
         var filtered = allTasks.filter(function(t) {
             if (currentFilter === 'all') return true;
@@ -364,105 +911,127 @@
         taskList.innerHTML = '';
 
         if (filtered.length === 0) {
-            var emptyState = document.createElement('div');
-            emptyState.className = 'media-card';
-            emptyState.style.textAlign = 'center';
-            emptyState.style.padding = '32px';
-            emptyState.style.width = '100%';
-            emptyState.innerHTML = '<i class="bi bi-inbox" style="font-size:2rem; opacity:0.5;"></i><p style="margin-top:8px; color:var(--text-tertiary);">No tasks found in this view.</p>';
-            taskList.appendChild(emptyState);
+            var emptyCard = document.createElement('div');
+            emptyCard.className = 'empty-state-bento glass-surface';
+            emptyCard.innerHTML =
+                '<div class="empty-state-aura"></div>' +
+                '<div class="empty-icon-halo">' +
+                    '<i class="bi bi-inboxes-fill"></i>' +
+                '</div>' +
+                '<h3 class="empty-state-title">No downloads found</h3>' +
+                '<p class="empty-state-desc">Paste a link above to start downloading media at ultra-fast speeds.</p>';
+            taskList.appendChild(emptyCard);
             return;
         }
 
         filtered.forEach(function(t) {
             var card = document.createElement('div');
-            card.className = 'task-card';
+            card.className = 'task-bento-card glass-surface task-status-' + t.status;
             card.id = 'task-card-' + t.id;
 
             var percent = Math.min(100, Math.max(0, t.percent || 0)).toFixed(1);
             var inlineStreamUrl = t.mediaId ? ('/download?id=' + encodeURIComponent(t.mediaId) + '&inline=true') : '#';
             var downloadUrl = t.mediaId ? ('/download?id=' + encodeURIComponent(t.mediaId)) : '#';
 
+            // Platform Detection from Task URL
+            var plat = detectPlatform(t.url) || { name: 'Video', icon: 'bi-film' };
+
             var statsLine = '';
             if (t.status === 'downloading') {
-                statsLine = 'Speed: ' + (t.speed || '--') + ' | ETA: ' + (t.eta || '--') + ' | ' + percent + '%';
+                statsLine = '<span class="stat-highlight text-cyan"><i class="bi bi-speedometer2"></i> ' + (t.speed || '--') + '</span>' +
+                            '<span class="stat-divider">&bull;</span>' +
+                            '<span><i class="bi bi-clock-history"></i> ETA: ' + (t.eta || '--') + '</span>';
             } else if (t.status === 'completed') {
-                statsLine = 'Size: ' + (t.humanSize || 'Done');
+                statsLine = '<span class="stat-highlight text-emerald"><i class="bi bi-hdd-fill"></i> ' + (t.humanSize || 'Finished') + '</span>';
             } else if (t.status === 'failed') {
-                statsLine = 'Error: ' + escapeHtml(t.errorMessage || 'Failed');
+                statsLine = '<span class="stat-highlight text-red"><i class="bi bi-exclamation-triangle"></i> Error</span>';
             } else if (t.status === 'cancelled') {
-                statsLine = 'Cancelled by user';
+                statsLine = '<span class="text-tertiary"><i class="bi bi-slash-circle"></i> Cancelled by user</span>';
             } else {
-                statsLine = 'Waiting in download queue...';
+                statsLine = '<span class="text-amber"><i class="bi bi-hourglass"></i> In Queue &bull; Waiting for worker</span>';
             }
 
             var actionsHtml = '';
             if (t.status === 'queued' || t.status === 'downloading') {
-                actionsHtml += '<button type="button" class="btn-task-action btn-task-cancel" data-id="' + t.id + '"><i class="bi bi-x-circle"></i> Cancel</button>';
+                actionsHtml += '<button type="button" class="btn-card-action btn-action-cancel" data-id="' + t.id + '"><i class="bi bi-x-circle"></i> Cancel</button>';
             }
             if (t.status === 'failed' || t.status === 'cancelled') {
-                actionsHtml += '<button type="button" class="btn-task-action btn-task-retry" data-id="' + t.id + '"><i class="bi bi-arrow-counterclockwise"></i> Retry</button>';
+                actionsHtml += '<button type="button" class="btn-card-action btn-action-retry" data-id="' + t.id + '"><i class="bi bi-arrow-counterclockwise"></i> Retry</button>';
             }
             if (t.status === 'completed' && t.mediaId) {
-                actionsHtml += '<a href="' + inlineStreamUrl + '" target="_blank" class="btn-task-action"><i class="bi bi-play-circle-fill"></i> Play Video</a>';
-                actionsHtml += '<a href="' + downloadUrl + '" class="btn-task-action" download="' + escapeHtml(t.mediaName || t.title) + '"><i class="bi bi-download"></i> Save to Device</a>';
+                actionsHtml += '<a href="' + inlineStreamUrl + '" target="_blank" class="btn-card-action btn-action-play"><i class="bi bi-play-circle-fill"></i> Stream</a>';
+                actionsHtml += '<a href="' + downloadUrl + '" class="btn-card-action btn-action-download" download="' + escapeHtml(t.mediaName || t.title) + '"><i class="bi bi-download"></i> Save to Device</a>';
             }
-            actionsHtml += '<button type="button" class="btn-task-action btn-task-delete" data-id="' + t.id + '"><i class="bi bi-trash"></i> Delete</button>';
+            actionsHtml += '<button type="button" class="btn-card-action btn-action-delete" data-id="' + t.id + '" title="Delete Task & Files"><i class="bi bi-trash3"></i></button>';
 
-            var videoPreviewHtml = '';
+            var mediaPreviewHtml = '';
             if (t.status === 'completed' && t.mediaId) {
                 var isAudio = (t.format && t.format.indexOf('audio') !== -1) || (t.mediaName && (t.mediaName.endsWith('.mp3') || t.mediaName.endsWith('.m4a')));
                 if (isAudio) {
-                    videoPreviewHtml =
-                        '<div class="media-preview-container" style="margin-top:12px; margin-bottom:12px;">' +
-                            '<audio controls playsinline style="width:100%; border-radius:12px; background:#000;">' +
+                    mediaPreviewHtml =
+                        '<div class="media-player-box audio-player-box">' +
+                            '<div class="audio-player-header"><i class="bi bi-soundwave text-cyan"></i> <span>Audio Playback</span></div>' +
+                            '<audio controls playsinline preload="metadata" class="custom-audio-player">' +
                                 '<source src="' + inlineStreamUrl + '" type="audio/mpeg">' +
-                                'Your browser does not support audio playback.' +
+                                'Audio playback not supported.' +
                             '</audio>' +
                         '</div>';
                 } else {
-                    videoPreviewHtml =
-                        '<div class="media-preview-container" style="margin-top:12px; margin-bottom:12px;">' +
-                            '<video controls playsinline preload="metadata" style="width:100%; max-height:380px; border-radius:12px; background:#000; object-fit:contain;">' +
+                    mediaPreviewHtml =
+                        '<div class="media-player-box video-player-box">' +
+                            '<video controls playsinline preload="metadata" class="custom-video-player">' +
                                 '<source src="' + inlineStreamUrl + '" type="video/mp4">' +
-                                'Your browser does not support video playback.' +
+                                'Video playback not supported.' +
                             '</video>' +
                         '</div>';
                 }
+            } else if (t.status === 'failed' && t.errorMessage) {
+                mediaPreviewHtml =
+                    '<div class="error-log-drawer">' +
+                        '<div class="error-log-header"><i class="bi bi-bug-fill"></i> Error Details</div>' +
+                        '<pre class="error-log-text">' + escapeHtml(t.errorMessage) + '</pre>' +
+                    '</div>';
             }
 
             card.innerHTML =
-                '<div class="task-card-header">' +
-                    '<div class="task-title-group">' +
-                        '<i class="bi bi-film"></i>' +
-                        '<span class="task-title" title="' + escapeHtml(t.url) + '">' + escapeHtml(t.title) + '</span>' +
+                '<div class="task-card-top">' +
+                    '<div class="task-info-left">' +
+                        '<div class="platform-icon-bubble">' +
+                            '<i class="bi ' + plat.icon + '"></i>' +
+                        '</div>' +
+                        '<div class="task-title-stack">' +
+                            '<h4 class="task-main-title" title="' + escapeHtml(t.title || t.url) + '">' + escapeHtml(t.title || t.url) + '</h4>' +
+                            '<span class="task-url-sub" title="' + escapeHtml(t.url) + '">' + escapeHtml(t.url) + '</span>' +
+                        '</div>' +
                     '</div>' +
-                    '<div class="task-badges">' +
-                        '<span class="badge-format">' + escapeHtml(t.format) + '</span>' +
-                        '<span class="badge-status badge-status-' + t.status + '">' + t.status + '</span>' +
+                    '<div class="task-badges-right">' +
+                        '<span class="badge-format-tag">' + escapeHtml(t.format) + '</span>' +
+                        '<span class="badge-status-pill status-' + t.status + '">' + t.status + '</span>' +
                     '</div>' +
                 '</div>' +
-                '<div class="task-progress-track">' +
-                    '<div class="task-progress-fill" style="width: ' + (t.status === 'completed' ? '100' : percent) + '%;"></div>' +
+                '<div class="task-progress-section">' +
+                    '<div class="progress-bar-wrapper">' +
+                        '<div class="progress-bar-fill fill-' + t.status + '" style="width: ' + (t.status === 'completed' ? '100' : percent) + '%;"></div>' +
+                    '</div>' +
+                    '<div class="progress-metrics-row">' +
+                        '<div class="metrics-left">' + statsLine + '</div>' +
+                        '<div class="metrics-right font-mono">' + (t.status === 'completed' ? '100%' : (percent + '%')) + '</div>' +
+                    '</div>' +
                 '</div>' +
-                '<div class="task-stats-row">' +
-                    '<span>' + statsLine + '</span>' +
-                    '<span>' + (t.status === 'completed' ? '100' : percent) + '%</span>' +
-                '</div>' +
-                videoPreviewHtml +
-                '<div class="task-actions">' + actionsHtml + '</div>';
+                mediaPreviewHtml +
+                '<div class="task-card-footer">' + actionsHtml + '</div>';
 
             taskList.appendChild(card);
         });
 
-        // Event Listeners for Task Actions
-        document.querySelectorAll('.btn-task-cancel').forEach(function(btn) {
+        // Attach Event Listeners to Action Buttons
+        document.querySelectorAll('.btn-action-cancel').forEach(function(btn) {
             btn.addEventListener('click', function() { cancelTask(this.getAttribute('data-id')); });
         });
-        document.querySelectorAll('.btn-task-retry').forEach(function(btn) {
+        document.querySelectorAll('.btn-action-retry').forEach(function(btn) {
             btn.addEventListener('click', function() { retryTask(this.getAttribute('data-id')); });
         });
-        document.querySelectorAll('.btn-task-delete').forEach(function(btn) {
+        document.querySelectorAll('.btn-action-delete').forEach(function(btn) {
             btn.addEventListener('click', function() { deleteTask(this.getAttribute('data-id'), true); });
         });
     }
@@ -473,11 +1042,9 @@
         return d.innerHTML;
     }
 
-    urlInput.addEventListener('input', function() {
-        this.style.height = 'auto';
-        this.style.height = Math.min(this.scrollHeight, 120) + 'px';
-    });
-
+    // Initialize State & SSE
+    applyTheme(currentTheme);
+    applyViewMode(currentViewMode);
     initSSE();
 })();
 </script>
