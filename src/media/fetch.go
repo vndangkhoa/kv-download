@@ -186,7 +186,6 @@ func downloadMedia(url string, requestArgs map[string]string) (string, string, e
 		"--no-playlist":            "",
 		"--remux-video":           "mp4",
 		"--merge-output-format":   "mp4",
-		"--write-info-json":       "",
 		"--output":                name,
 		"--no-check-certificates": "",
 		"--extractor-args":        "instagram:image_persist=1;tiktok:app_version=30.0.0",

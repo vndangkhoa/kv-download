@@ -96,7 +96,7 @@
                             <p class="card-subheading">Paste links from YouTube, TikTok, Instagram, Twitter/X, Reddit & more</p>
                         </div>
                     </div>
-                    <div class="detected-platform-badge" id="detectedPlatformBadge">
+                    <div class="detected-platform-badge" id="detectedPlatformBadge" title="Click to inspect playlist/album if detected">
                         <i class="bi bi-link-45deg"></i>
                         <span id="detectedPlatformText">Ready for URL</span>
                     </div>
@@ -367,6 +367,58 @@
     </footer>
 </div>
 
+<!-- Album / Playlist Track Selector Modal -->
+<div class="modal-backdrop-blur d-none" id="albumModal">
+    <div class="album-modal-card glass-surface">
+        <div class="album-modal-header">
+            <div class="album-modal-title-stack">
+                <div class="album-badge-pill"><i class="bi bi-collection-play-fill"></i> Album / Playlist Detected</div>
+                <h3 class="album-modal-heading" id="albumModalTitle">Inspecting album contents...</h3>
+                <span class="album-modal-count" id="albumModalCount">Scanning metadata...</span>
+            </div>
+            <button type="button" class="btn-modal-close" id="btnCloseAlbumModal" aria-label="Close modal">&times;</button>
+        </div>
+
+        <div class="album-modal-toolbar">
+            <div class="album-selection-controls">
+                <button type="button" class="btn-album-tool" id="btnAlbumSelectAll"><i class="bi bi-check-all"></i> Select All</button>
+                <button type="button" class="btn-album-tool" id="btnAlbumDeselectAll"><i class="bi bi-dash-circle"></i> Deselect All</button>
+                <span class="album-selected-indicator" id="albumSelectedCount">0 selected</span>
+            </div>
+            <div class="album-format-control">
+                <label for="albumFormatSelect" class="album-format-label"><i class="bi bi-sliders"></i> Quality:</label>
+                <select id="albumFormatSelect" class="album-glass-select">
+                    <option value="best" selected>Auto (Best)</option>
+                    <option value="1080p">1080p FHD</option>
+                    <option value="720p">720p HD</option>
+                    <option value="480p">480p SD</option>
+                    <option value="audio_mp3">Audio MP3 (320kbps)</option>
+                    <option value="audio_m4a">Audio M4A (Lossless)</option>
+                </select>
+            </div>
+        </div>
+
+        <!-- Album Loading State -->
+        <div class="album-modal-loading" id="albumModalLoading">
+            <div class="album-spinner"></div>
+            <p class="album-loading-text">Fetching playlist tracks & cover thumbnails...</p>
+        </div>
+
+        <!-- Album Items Grid -->
+        <div class="album-items-grid d-none" id="albumItemsGrid">
+            <!-- Dynamically populated -->
+        </div>
+
+        <div class="album-modal-footer">
+            <button type="button" class="btn-album-cancel" id="btnCancelAlbumModal">Cancel</button>
+            <button type="button" class="btn-album-download-cta" id="btnDownloadAlbumSelected">
+                <i class="bi bi-cloud-arrow-down-fill"></i>
+                <span id="btnDownloadAlbumText">Download Selected (0)</span>
+            </button>
+        </div>
+    </div>
+</div>
+
 <!-- Toast Notification Container -->
 <div class="toast-container" id="toastContainer"></div>
 
@@ -391,12 +443,28 @@
     var urlCountNumber = document.getElementById('urlCountNumber');
     var connStatus = document.getElementById('connStatus');
 
+    // Album Modal Elements
+    var albumModal = document.getElementById('albumModal');
+    var albumModalTitle = document.getElementById('albumModalTitle');
+    var albumModalCount = document.getElementById('albumModalCount');
+    var albumModalLoading = document.getElementById('albumModalLoading');
+    var albumItemsGrid = document.getElementById('albumItemsGrid');
+    var albumSelectedCount = document.getElementById('albumSelectedCount');
+    var btnAlbumSelectAll = document.getElementById('btnAlbumSelectAll');
+    var btnAlbumDeselectAll = document.getElementById('btnAlbumDeselectAll');
+    var albumFormatSelect = document.getElementById('albumFormatSelect');
+    var btnDownloadAlbumSelected = document.getElementById('btnDownloadAlbumSelected');
+    var btnDownloadAlbumText = document.getElementById('btnDownloadAlbumText');
+    var btnCloseAlbumModal = document.getElementById('btnCloseAlbumModal');
+    var btnCancelAlbumModal = document.getElementById('btnCancelAlbumModal');
+
     // App State
     var tasksMap = {};
     var currentFilter = 'all';
     var selectedFormat = 'best';
     var currentViewMode = localStorage.getItem('kv_view_mode') || 'grid';
     var currentTheme = localStorage.getItem('kv_theme') || 'simple';
+    var currentAlbumEntries = [];
 
     // Matrix Animation Engine
     var ctx = matrixCanvas ? matrixCanvas.getContext('2d') : null;
@@ -530,6 +598,7 @@
             document.querySelectorAll('.format-pill-card').forEach(function(p) { p.classList.remove('active'); });
             this.classList.add('active');
             selectedFormat = this.getAttribute('data-format');
+            if (albumFormatSelect) albumFormatSelect.value = selectedFormat;
         });
     });
 
@@ -578,6 +647,16 @@
     });
 
     // URL Detection and Live Platform Tagging
+    function isPlaylistUrl(url) {
+        if (!url) return false;
+        var u = url.toLowerCase();
+        return u.indexOf('list=') !== -1 ||
+               u.indexOf('/playlist') !== -1 ||
+               u.indexOf('/album/') !== -1 ||
+               u.indexOf('/sets/') !== -1 ||
+               u.indexOf('/collection/') !== -1;
+    }
+
     function detectPlatform(url) {
         if (!url) return null;
         var u = url.toLowerCase();
@@ -610,8 +689,14 @@
         }
 
         if (urls.length === 1) {
-            var plat = detectPlatform(urls[0]);
-            if (plat) {
+            var singleUrl = urls[0];
+            var isPlaylist = isPlaylistUrl(singleUrl);
+            var plat = detectPlatform(singleUrl);
+
+            if (isPlaylist) {
+                detectedPlatformBadge.className = 'detected-platform-badge platform-active platform-interactive';
+                detectedPlatformBadge.innerHTML = '<i class="bi bi-collection-play-fill"></i> <span>Album / Playlist &bull; Select Items</span>';
+            } else if (plat) {
                 detectedPlatformBadge.className = 'detected-platform-badge platform-active';
                 detectedPlatformBadge.innerHTML = '<i class="bi ' + plat.icon + '"></i> <span>' + escapeHtml(plat.name) + ' Detected</span>';
             } else {
@@ -628,6 +713,13 @@
         this.style.height = 'auto';
         this.style.height = Math.min(this.scrollHeight, 180) + 'px';
         updateInputDetection();
+    });
+
+    detectedPlatformBadge.addEventListener('click', function() {
+        var urls = getUrls();
+        if (urls.length === 1 && isPlaylistUrl(urls[0])) {
+            openAlbumModal(urls[0]);
+        }
     });
 
     // Clipboard One-Tap Paste
@@ -709,6 +801,181 @@
         }, 320);
     }
 
+    // ── Album / Playlist Inspector & Selector Modal ─────────────────────────
+    function openAlbumModal(playlistUrl) {
+        albumModal.classList.remove('d-none');
+        albumModalLoading.classList.remove('d-none');
+        albumItemsGrid.classList.add('d-none');
+        albumModalTitle.textContent = 'Inspecting playlist metadata...';
+        albumModalCount.textContent = 'Scanning items with yt-dlp...';
+        currentAlbumEntries = [];
+        updateAlbumSelectionCount();
+
+        var xhr = new XMLHttpRequest();
+        xhr.open('GET', '/api/scan?url=' + encodeURIComponent(playlistUrl), true);
+        xhr.onload = function() {
+            if (xhr.status === 200) {
+                try {
+                    var res = JSON.parse(xhr.responseText);
+                    var scan = res.scan;
+                    if (scan && scan.entries && scan.entries.length > 0) {
+                        currentAlbumEntries = scan.entries;
+                        albumModalTitle.textContent = scan.title || 'Playlist / Album';
+                        albumModalCount.textContent = scan.entries.length + ' tracks found';
+                        renderAlbumEntries(scan.entries);
+                        albumModalLoading.classList.add('d-none');
+                        albumItemsGrid.classList.remove('d-none');
+                        updateAlbumSelectionCount();
+                        return;
+                    }
+                } catch(e) {
+                    console.error('Scan parse error:', e);
+                }
+            }
+            // If scan failed or returned single item, fallback to direct download
+            closeAlbumModal();
+            enqueueUrlsDirectly([playlistUrl], selectedFormat);
+        };
+        xhr.onerror = function() {
+            closeAlbumModal();
+            enqueueUrlsDirectly([playlistUrl], selectedFormat);
+        };
+        xhr.send();
+    }
+
+    function closeAlbumModal() {
+        albumModal.classList.add('d-none');
+        currentAlbumEntries = [];
+    }
+
+    btnCloseAlbumModal.addEventListener('click', closeAlbumModal);
+    btnCancelAlbumModal.addEventListener('click', closeAlbumModal);
+
+    function renderAlbumEntries(entries) {
+        albumItemsGrid.innerHTML = '';
+        entries.forEach(function(item, idx) {
+            var itemCard = document.createElement('div');
+            itemCard.className = 'album-item-card selected';
+            itemCard.setAttribute('data-idx', idx);
+
+            var thumbUrl = item.thumbnail || '/static/logo.svg';
+
+            itemCard.innerHTML =
+                '<div class="album-item-thumb-wrapper">' +
+                    '<img src="' + escapeHtml(thumbUrl) + '" alt="Thumbnail" class="album-item-thumb" loading="lazy" onerror="this.src=\'/static/logo.svg\'">' +
+                    '<span class="album-item-idx">#' + (idx + 1) + '</span>' +
+                    '<div class="album-item-checkbox-halo">' +
+                        '<input type="checkbox" class="album-item-checkbox" checked data-idx="' + idx + '">' +
+                    '</div>' +
+                '</div>' +
+                '<div class="album-item-meta">' +
+                    '<h5 class="album-item-title" title="' + escapeHtml(item.title) + '">' + escapeHtml(item.title) + '</h5>' +
+                '</div>';
+
+            itemCard.addEventListener('click', function(e) {
+                if (e.target.tagName !== 'INPUT') {
+                    var chk = itemCard.querySelector('.album-item-checkbox');
+                    chk.checked = !chk.checked;
+                }
+                itemCard.classList.toggle('selected', itemCard.querySelector('.album-item-checkbox').checked);
+                updateAlbumSelectionCount();
+            });
+
+            albumItemsGrid.appendChild(itemCard);
+        });
+    }
+
+    function updateAlbumSelectionCount() {
+        var checkboxes = albumItemsGrid.querySelectorAll('.album-item-checkbox:checked');
+        var count = checkboxes.length;
+        albumSelectedCount.textContent = count + ' of ' + currentAlbumEntries.length + ' selected';
+        btnDownloadAlbumText.textContent = 'Download Selected (' + count + ')';
+        btnDownloadAlbumSelected.disabled = count === 0;
+    }
+
+    btnAlbumSelectAll.addEventListener('click', function() {
+        albumItemsGrid.querySelectorAll('.album-item-card').forEach(function(card) {
+            card.classList.add('selected');
+            card.querySelector('.album-item-checkbox').checked = true;
+        });
+        updateAlbumSelectionCount();
+    });
+
+    btnAlbumDeselectAll.addEventListener('click', function() {
+        albumItemsGrid.querySelectorAll('.album-item-card').forEach(function(card) {
+            card.classList.remove('selected');
+            card.querySelector('.album-item-checkbox').checked = false;
+        });
+        updateAlbumSelectionCount();
+    });
+
+    btnDownloadAlbumSelected.addEventListener('click', function() {
+        var selectedUrls = [];
+        albumItemsGrid.querySelectorAll('.album-item-checkbox:checked').forEach(function(chk) {
+            var idx = parseInt(chk.getAttribute('data-idx'), 10);
+            if (currentAlbumEntries[idx] && currentAlbumEntries[idx].url) {
+                selectedUrls.push(currentAlbumEntries[idx].url);
+            }
+        });
+
+        if (selectedUrls.length === 0) {
+            showToast('Please select at least 1 track to download', 'warning');
+            return;
+        }
+
+        var format = albumFormatSelect.value || selectedFormat;
+        closeAlbumModal();
+        urlInput.value = '';
+        updateInputDetection();
+        enqueueUrlsDirectly(selectedUrls, format);
+    });
+
+    function enqueueUrlsDirectly(urls, format) {
+        if (urls.length === 0) return;
+
+        submitBtn.disabled = true;
+        submitBtnIcon.className = 'bi bi-arrow-repeat btn-icon-spin';
+        submitBtnText.textContent = 'Enqueuing ' + urls.length + ' task(s)...';
+
+        var xhr = new XMLHttpRequest();
+        xhr.open('POST', '/api/queue/add', true);
+        xhr.setRequestHeader('Content-Type', 'application/json');
+
+        xhr.onload = function() {
+            submitBtn.disabled = false;
+            submitBtnIcon.className = 'bi bi-plus-circle-fill';
+            submitBtnText.textContent = currentTheme === 'matrix' ? '[ ENQUEUE_TASK ]' : 'Add to Download Queue';
+
+            if (xhr.status === 200) {
+                try {
+                    var res = JSON.parse(xhr.responseText);
+                    if (res.tasks && Array.isArray(res.tasks)) {
+                        res.tasks.forEach(function(t) {
+                            tasksMap[t.id] = t;
+                        });
+                    }
+                } catch(err) {}
+
+                setFilter('all');
+                showToast(urls.length + (urls.length === 1 ? ' task added to queue!' : ' tasks added to queue!'), 'success');
+            } else {
+                showToast('Failed to add tasks: ' + xhr.statusText, 'error');
+            }
+        };
+
+        xhr.onerror = function() {
+            submitBtn.disabled = false;
+            submitBtnIcon.className = 'bi bi-plus-circle-fill';
+            submitBtnText.textContent = currentTheme === 'matrix' ? '[ ENQUEUE_TASK ]' : 'Add to Download Queue';
+            showToast('Network error while connecting to server', 'error');
+        };
+
+        xhr.send(JSON.stringify({
+            urls: urls,
+            format: format
+        }));
+    }
+
     // Initial Fetch for Instant UI Population
     function fetchQueueTasks() {
         var xhr = new XMLHttpRequest();
@@ -778,51 +1045,13 @@
             return;
         }
 
-        submitBtn.disabled = true;
-        submitBtnIcon.className = 'bi bi-arrow-repeat btn-icon-spin';
-        submitBtnText.textContent = 'Enqueuing ' + urls.length + ' task(s)...';
+        // If single URL is an Album / Playlist link, open inspector modal
+        if (urls.length === 1 && isPlaylistUrl(urls[0])) {
+            openAlbumModal(urls[0]);
+            return;
+        }
 
-        var xhr = new XMLHttpRequest();
-        xhr.open('POST', '/api/queue/add', true);
-        xhr.setRequestHeader('Content-Type', 'application/json');
-
-        xhr.onload = function() {
-            submitBtn.disabled = false;
-            submitBtnIcon.className = 'bi bi-plus-circle-fill';
-            submitBtnText.textContent = currentTheme === 'matrix' ? '[ ENQUEUE_TASK ]' : 'Add to Download Queue';
-
-            if (xhr.status === 200) {
-                urlInput.value = '';
-                urlInput.style.height = 'auto';
-                updateInputDetection();
-
-                try {
-                    var res = JSON.parse(xhr.responseText);
-                    if (res.tasks && Array.isArray(res.tasks)) {
-                        res.tasks.forEach(function(t) {
-                            tasksMap[t.id] = t;
-                        });
-                    }
-                } catch(err) {}
-
-                setFilter('all');
-                showToast(urls.length + (urls.length === 1 ? ' task added to queue!' : ' tasks added to queue!'), 'success');
-            } else {
-                showToast('Failed to add tasks: ' + xhr.statusText, 'error');
-            }
-        };
-
-        xhr.onerror = function() {
-            submitBtn.disabled = false;
-            submitBtnIcon.className = 'bi bi-plus-circle-fill';
-            submitBtnText.textContent = currentTheme === 'matrix' ? '[ ENQUEUE_TASK ]' : 'Add to Download Queue';
-            showToast('Network error while connecting to server', 'error');
-        };
-
-        xhr.send(JSON.stringify({
-            urls: urls,
-            format: selectedFormat
-        }));
+        enqueueUrlsDirectly(urls, selectedFormat);
     });
 
     // Keyboard Shortcuts (Ctrl+Enter / Cmd+Enter to enqueue)

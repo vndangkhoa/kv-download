@@ -317,7 +317,6 @@ func (q *QueueManager) processTask(ctx context.Context, task *DownloadTask) {
 		"--trim-filenames", "120",
 		"--remux-video", "mp4",
 		"--merge-output-format", "mp4",
-		"--write-info-json",
 		"--output", outputTemplate,
 		"--no-check-certificates",
 		"--extractor-args", "instagram:image_persist=1;tiktok:app_version=30.0.0",
