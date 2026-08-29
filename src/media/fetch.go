@@ -183,6 +183,7 @@ func downloadMedia(url string, requestArgs map[string]string) (string, string, e
 	defaultArgs := map[string]string{
 		"--format":                "b/bv*+ba/best",
 		"--trim-filenames":        "120",
+		"--no-playlist":            "",
 		"--remux-video":           "mp4",
 		"--merge-output-format":   "mp4",
 		"--write-info-json":       "",

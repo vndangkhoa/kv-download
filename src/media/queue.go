@@ -313,6 +313,7 @@ func (q *QueueManager) processTask(ctx context.Context, task *DownloadTask) {
 	args := []string{
 		"--newline",
 		"--progress-template", "%(progress._percent_str)s|%(progress._speed_str)s|%(progress._eta_str)s|%(progress.downloaded_bytes)s|%(progress.total_bytes)s",
+		"--no-playlist",
 		"--trim-filenames", "120",
 		"--remux-video", "mp4",
 		"--merge-output-format", "mp4",
