@@ -29,19 +29,19 @@ type ScanInfo struct {
 
 // ScanUrl inspects a URL with yt-dlp metadata-only extraction (no download).
 // For playlists/profiles it returns the entry list without fetching each video.
-func ScanUrl(inputUrl string) (*ScanInfo, string, error) {
+func ScanUrl(inputUrl string, cookies string) (*ScanInfo, string, error) {
 	url := strings.TrimSpace(inputUrl)
 	if url == "" {
 		return nil, "", errors.New("missing URL")
 	}
 
-	log.Info().Msgf("Scanning %s", url)
+	log.Info().Msgf("Scanning %s (hasCustomCookies: %t)", url, cookies != "")
 
 	const maxAttempts = 2
 	var lastStderr string
 
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		info, stderr, err := runScanAttempt(url)
+		info, stderr, err := runScanAttempt(url, cookies)
 		if err == nil {
 			return info, "", nil
 		}
@@ -69,13 +69,14 @@ func ScanUrl(inputUrl string) (*ScanInfo, string, error) {
 	}, "", nil
 }
 
-func runScanAttempt(url string) (*ScanInfo, string, error) {
+func runScanAttempt(url string, cookies string) (*ScanInfo, string, error) {
 	args := []string{
 		"--dump-single-json",
 		"--flat-playlist",
 		"--skip-download",
 		"--no-warnings",
 		"--no-check-certificates",
+		"--extractor-args", "instagram:image_persist=1;tiktok:app_version=30.0.0;threads:app_version=30.0.0",
 	}
 
 	if impersonate := strings.TrimSpace(os.Getenv("MR_IMPERSONATE")); impersonate != "" {
@@ -84,9 +85,17 @@ func runScanAttempt(url string) (*ScanInfo, string, error) {
 		args = append(args, "--impersonate", "chrome")
 	}
 
-	cp := getCookiesPath()
-	if workingCookies := getWorkingCookiesPath(cp); workingCookies != "" {
-		args = append(args, "--cookies", workingCookies)
+	if cookies != "" {
+		tmpCookie, cleanup, err := CreateEphemeralCookieFile(cookies, url)
+		if err == nil && tmpCookie != "" {
+			defer cleanup()
+			args = append(args, "--cookies", tmpCookie)
+		}
+	} else {
+		cp := getCookiesPath()
+		if workingCookies := getWorkingCookiesPath(cp); workingCookies != "" {
+			args = append(args, "--cookies", workingCookies)
+		}
 	}
 
 	for arg, value := range getEnvVars() {

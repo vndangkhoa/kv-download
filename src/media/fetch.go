@@ -110,7 +110,11 @@ func FetchMediaInfo(w http.ResponseWriter, r *http.Request) {
 
 func ScanMediaApi(w http.ResponseWriter, r *http.Request) {
 	url, _ := getUrl(r)
-	info, ytdlpErrorMessage, err := ScanUrl(url)
+	cookies := strings.TrimSpace(r.URL.Query().Get("cookies"))
+	if cookies == "" {
+		cookies = strings.TrimSpace(r.Header.Get("X-Cookies"))
+	}
+	info, ytdlpErrorMessage, err := ScanUrl(url, cookies)
 	if err != nil {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadRequest)
@@ -183,12 +187,12 @@ func downloadMedia(url string, requestArgs map[string]string) (string, string, e
 	defaultArgs := map[string]string{
 		"--format":                "b/bv*+ba/best",
 		"--trim-filenames":        "120",
-		"--no-playlist":            "",
+		"--no-playlist":           "",
 		"--remux-video":           "mp4",
 		"--merge-output-format":   "mp4",
 		"--output":                name,
 		"--no-check-certificates": "",
-		"--extractor-args":        "instagram:image_persist=1;tiktok:app_version=30.0.0",
+		"--extractor-args":        "instagram:image_persist=1;tiktok:app_version=30.0.0;threads:app_version=30.0.0",
 		"--user-agent":            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
 	}
 

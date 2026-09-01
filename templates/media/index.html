@@ -64,8 +64,13 @@
                 </div>
             </div>
 
-            <!-- Right Theme Switcher -->
+            <!-- Right Theme Switcher & Cookie Manager -->
             <div class="nav-actions-group">
+                <button type="button" class="btn-cookie-manager-nav" id="btnOpenCookiesNav" title="Manage Private Device Cookies">
+                    <i class="bi bi-cookie"></i>
+                    <span class="d-none-mobile">Cookies</span>
+                    <span class="cookie-nav-badge" id="cookieNavBadge">Off</span>
+                </button>
                 <div class="theme-pill-switch" role="group" aria-label="Theme selection">
                     <button type="button" class="theme-pill-btn active" data-theme="simple" title="Motion Liquid Glass Mode">
                         <i class="bi bi-droplet-half"></i>
@@ -93,7 +98,7 @@
                         </div>
                         <div>
                             <h2 class="card-heading">Media Download Station</h2>
-                            <p class="card-subheading">Paste links from YouTube, TikTok, Instagram, Twitter/X, Reddit & more</p>
+                            <p class="card-subheading">Paste links from YouTube, TikTok, Instagram, Threads, Twitter/X, Reddit & more</p>
                         </div>
                     </div>
                     <div class="detected-platform-badge" id="detectedPlatformBadge" title="Click to inspect playlist/album if detected">
@@ -112,6 +117,10 @@
                                       placeholder="Paste single or multiple video/audio URLs here (one per line)..."
                                       rows="1" id="urlInput" autofocus></textarea>
                             <div class="input-floating-actions">
+                                <button type="button" class="btn-input-action" id="btnQuickCookie" title="Private Device Cookies">
+                                    <i class="bi bi-cookie"></i>
+                                    <span class="d-none-mobile">Cookies</span>
+                                </button>
                                 <button type="button" class="btn-input-action" id="btnPasteClipboard" title="Paste from clipboard">
                                     <i class="bi bi-clipboard-pulse"></i>
                                     <span class="d-none-mobile">Paste</span>
@@ -254,6 +263,9 @@
                     <div class="platform-chip chip-insta" title="Click to focus for Instagram URLs">
                         <i class="bi bi-instagram"></i> <span>Instagram</span>
                     </div>
+                    <div class="platform-chip chip-threads" title="Click to focus for Threads URLs">
+                        <i class="bi bi-threads"></i> <span>Threads</span>
+                    </div>
                     <div class="platform-chip chip-x" title="Click to focus for Twitter / X URLs">
                         <i class="bi bi-twitter-x"></i> <span>Twitter / X</span>
                     </div>
@@ -262,6 +274,9 @@
                     </div>
                     <div class="platform-chip chip-fb" title="Click to focus for Facebook URLs">
                         <i class="bi bi-facebook"></i> <span>Facebook</span>
+                    </div>
+                    <div class="platform-chip chip-soundcloud" title="Click to focus for SoundCloud URLs">
+                        <i class="bi bi-soundwave"></i> <span>SoundCloud</span>
                     </div>
                     <div class="platform-chip chip-vimeo" title="Click to focus for Vimeo URLs">
                         <i class="bi bi-vimeo"></i> <span>Vimeo</span>
@@ -415,6 +430,170 @@
                 <i class="bi bi-cloud-arrow-down-fill"></i>
                 <span id="btnDownloadAlbumText">Download Selected (0)</span>
             </button>
+        </div>
+    </div>
+</div>
+
+<!-- Universal Cookies Manager & Multi-Device Extraction Guide Modal -->
+<div class="modal-backdrop-blur d-none" id="cookiesModal">
+    <div class="cookies-modal-card glass-surface">
+        <div class="cookies-modal-header">
+            <div class="cookies-modal-title-stack">
+                <div class="cookie-badge-pill"><i class="bi bi-shield-lock-fill"></i> 100% Client-Side Privacy</div>
+                <h3 class="cookies-modal-heading">🍪 Private Cookie Manager</h3>
+                <span class="cookies-modal-sub">Enable age-restricted, login-required, and HD downloads from YouTube, Instagram, Threads, TikTok & more.</span>
+            </div>
+            <button type="button" class="btn-modal-close" id="btnCloseCookiesModal" aria-label="Close modal">&times;</button>
+        </div>
+
+        <div class="cookies-privacy-alert">
+            <i class="bi bi-shield-check text-cyan"></i>
+            <div>
+                <strong>Device-Only Storage:</strong> Your cookies are stored <em>exclusively on this device (browser localStorage)</em>. They are sent ephemerally per request and <strong>never stored permanently on the server</strong>.
+            </div>
+        </div>
+
+        <div class="cookies-modal-body">
+            <!-- Cookie Input Area -->
+            <div class="cookie-input-section">
+                <div class="cookie-input-header">
+                    <label for="cookieInputArea" class="cookie-input-label">
+                        <i class="bi bi-code-square"></i> Paste Cookies (Any Format):
+                    </label>
+                    <span class="cookie-format-badge" id="cookieDetectedFormat">Empty</span>
+                </div>
+                <textarea id="cookieInputArea" class="glass-textarea cookie-textarea" rows="4"
+                          placeholder="Paste cookies in ANY format:
+• Netscape format (# Netscape HTTP Cookie File... .youtube.com TRUE / ...)
+• JSON format ([{&quot;name&quot;:&quot;sessionid&quot;,&quot;value&quot;:&quot;...&quot;,&quot;domain&quot;:&quot;.instagram.com&quot;}])
+• Raw header string (sessionid=xxxx; ds_user_id=yyyy; csrftoken=zzzz)"></textarea>
+
+                <div class="cookie-actions-bar">
+                    <div class="cookie-actions-left">
+                        <input type="file" id="cookieFileInput" accept=".txt,.json" class="d-none">
+                        <button type="button" class="btn-cookie-tool" id="btnImportCookieFile">
+                            <i class="bi bi-folder2-open"></i> <span>Import File (.txt/.json)</span>
+                        </button>
+                        <button type="button" class="btn-cookie-tool" id="btnPasteCookieClipboard">
+                            <i class="bi bi-clipboard-pulse"></i> <span>Paste</span>
+                        </button>
+                        <button type="button" class="btn-cookie-tool text-rose" id="btnClearSavedCookies">
+                            <i class="bi bi-trash3"></i> <span>Clear</span>
+                        </button>
+                    </div>
+                    <button type="button" class="btn-save-cookies-cta" id="btnSaveCookies">
+                        <i class="bi bi-check2-circle"></i> Save to This Device
+                    </button>
+                </div>
+            </div>
+
+            <!-- Multi-Device Extraction Instructions Tabs -->
+            <div class="cookie-guide-section">
+                <div class="cookie-guide-header">
+                    <span class="cookie-guide-title"><i class="bi bi-question-circle-fill"></i> How to Get Cookies on Your Device:</span>
+                </div>
+                
+                <div class="cookie-guide-tabs" role="tablist">
+                    <button type="button" class="cookie-tab-btn active" data-guide-tab="desktop">
+                        <i class="bi bi-laptop"></i> <span>Desktop PC / Mac</span>
+                    </button>
+                    <button type="button" class="cookie-tab-btn" data-guide-tab="ios">
+                        <i class="bi bi-apple"></i> <span>iPhone & iPad (iOS)</span>
+                    </button>
+                    <button type="button" class="cookie-tab-btn" data-guide-tab="android">
+                        <i class="bi bi-android2"></i> <span>Android Phone</span>
+                    </button>
+                </div>
+
+                <div class="cookie-guide-content">
+                    <!-- Tab 1: Desktop -->
+                    <div class="cookie-tab-pane" id="guidePaneDesktop">
+                        <div class="guide-step-card">
+                            <span class="guide-step-num">1</span>
+                            <div class="guide-step-body">
+                                <strong>Install Browser Extension (1-Click Export):</strong>
+                                <p>Chrome / Edge / Brave: Install <a href="https://chromewebstore.google.com/detail/get-cookiestxt-locally/cclelndahbckbenkjhflpdbgdldlbecc" target="_blank" rel="noopener" class="guide-link">Get cookies.txt LOCALLY</a> or <a href="https://cookie-editor.com/" target="_blank" rel="noopener" class="guide-link">Cookie-Editor</a>.<br>Firefox: Install <a href="https://addons.mozilla.org/en-US/firefox/addon/cookie-editor/" target="_blank" rel="noopener" class="guide-link">Cookie-Editor for Firefox</a>.</p>
+                            </div>
+                        </div>
+                        <div class="guide-step-card">
+                            <span class="guide-step-num">2</span>
+                            <div class="guide-step-body">
+                                <strong>Open the Platform & Log In:</strong>
+                                <p>Go to <a href="https://youtube.com" target="_blank" rel="noopener" class="guide-link">YouTube</a>, <a href="https://threads.net" target="_blank" rel="noopener" class="guide-link">Threads</a>, <a href="https://instagram.com" target="_blank" rel="noopener" class="guide-link">Instagram</a>, or <a href="https://tiktok.com" target="_blank" rel="noopener" class="guide-link">TikTok</a> and ensure you are logged in.</p>
+                            </div>
+                        </div>
+                        <div class="guide-step-card">
+                            <span class="guide-step-num">3</span>
+                            <div class="guide-step-body">
+                                <strong>Export & Paste:</strong>
+                                <p>Click the extension icon in your browser toolbar &rarr; Click <strong>Export</strong> (or <strong>Copy to Clipboard</strong>) &rarr; Paste into the box above or click <strong>Import File</strong>!</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Tab 2: iPhone & iPad -->
+                    <div class="cookie-tab-pane d-none" id="guidePaneIos">
+                        <div class="guide-step-card">
+                            <span class="guide-step-num">★</span>
+                            <div class="guide-step-body">
+                                <strong>Method A: Safari One-Tap Bookmarklet (Recommended):</strong>
+                                <p>1. Bookmark this page in Safari and name it <strong>"Get Cookies"</strong>.<br>
+                                2. Edit the bookmark and change the address/URL to this script:</p>
+                                <div class="code-copy-wrapper">
+                                    <code id="iosBookmarkletCode">javascript:(function(){var c=document.cookie;if(!c){alert('No cookies found. Open YouTube/Threads/Instagram first.');}else{prompt('Copy your cookies below:',c);}})();</code>
+                                    <button type="button" class="btn-copy-code" id="btnCopyIosCode"><i class="bi bi-clipboard"></i> Copy</button>
+                                </div>
+                                <p>3. Go to YouTube, Threads, or Instagram in Safari &rarr; Open Bookmarks &rarr; Tap <strong>"Get Cookies"</strong> &rarr; Copy the cookies and paste them above!</p>
+                            </div>
+                        </div>
+                        <div class="guide-step-card">
+                            <span class="guide-step-num">B</span>
+                            <div class="guide-step-body">
+                                <strong>Method B: Orion Browser for iOS:</strong>
+                                <p>Install <a href="https://browser.kagi.com/ios.html" target="_blank" rel="noopener" class="guide-link">Orion Browser</a> on iPhone/iPad &rarr; Install <strong>Cookie-Editor</strong> extension &rarr; Export cookies directly from mobile web.</p>
+                            </div>
+                        </div>
+                        <div class="guide-step-card">
+                            <span class="guide-step-num">C</span>
+                            <div class="guide-step-body">
+                                <strong>Method C: AirDrop from Mac/PC:</strong>
+                                <p>Export cookies once on your desktop, AirDrop or copy the text to your iPhone Notes, and paste here. (Cookies last for months!)</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Tab 3: Android -->
+                    <div class="cookie-tab-pane d-none" id="guidePaneAndroid">
+                        <div class="guide-step-card">
+                            <span class="guide-step-num">★</span>
+                            <div class="guide-step-body">
+                                <strong>Method A: Kiwi Browser / Firefox Mobile (With Extensions):</strong>
+                                <p>1. Open <a href="https://play.google.com/store/apps/details?id=com.kiwibrowser.browser" target="_blank" rel="noopener" class="guide-link">Kiwi Browser</a> or Firefox on Android.<br>
+                                2. Install the <strong>Cookie-Editor</strong> extension from Chrome Web Store / Firefox Addons.<br>
+                                3. Log in to YouTube, Threads, TikTok, or Instagram &rarr; Tap Menu &rarr; Extensions &rarr; Cookie-Editor &rarr; <strong>Export</strong> &rarr; Paste here!</p>
+                            </div>
+                        </div>
+                        <div class="guide-step-card">
+                            <span class="guide-step-num">B</span>
+                            <div class="guide-step-body">
+                                <strong>Method B: Chrome Mobile Bookmarklet:</strong>
+                                <p>Save bookmark in Chrome with URL: <code>javascript:(function(){prompt('Cookies:',document.cookie)})();</code> &rarr; When browsing YouTube/Threads, type the bookmark name in the URL bar and tap it to copy cookies.</p>
+                            </div>
+                        </div>
+                        <div class="guide-step-card">
+                            <span class="guide-step-num">C</span>
+                            <div class="guide-step-body">
+                                <strong>Method C: Transfer & Import File:</strong>
+                                <p>Click the <strong>Import File (.txt/.json)</strong> button above and pick any cookie file saved on your phone.</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="cookies-modal-footer">
+            <button type="button" class="btn-album-cancel" id="btnCloseCookiesFooter">Close</button>
         </div>
     </div>
 </div>
@@ -662,6 +841,7 @@
         var u = url.toLowerCase();
         if (u.indexOf('youtube.com') !== -1 || u.indexOf('youtu.be') !== -1) return { name: 'YouTube', icon: 'bi-youtube', color: '#ff0000' };
         if (u.indexOf('tiktok.com') !== -1) return { name: 'TikTok', icon: 'bi-tiktok', color: '#00f2fe' };
+        if (u.indexOf('threads.net') !== -1 || u.indexOf('threads.com') !== -1) return { name: 'Threads', icon: 'bi-threads', color: '#ffffff' };
         if (u.indexOf('instagram.com') !== -1) return { name: 'Instagram', icon: 'bi-instagram', color: '#e1306c' };
         if (u.indexOf('twitter.com') !== -1 || u.indexOf('x.com') !== -1) return { name: 'Twitter / X', icon: 'bi-twitter-x', color: '#1da1f2' };
         if (u.indexOf('reddit.com') !== -1) return { name: 'Reddit', icon: 'bi-reddit', color: '#ff4500' };
@@ -801,6 +981,193 @@
         }, 320);
     }
 
+    // ── Universal Cookie Manager Logic ───────────────────────────────────────
+    var cookiesModal = document.getElementById('cookiesModal');
+    var btnOpenCookiesNav = document.getElementById('btnOpenCookiesNav');
+    var btnQuickCookie = document.getElementById('btnQuickCookie');
+    var btnCloseCookiesModal = document.getElementById('btnCloseCookiesModal');
+    var btnCloseCookiesFooter = document.getElementById('btnCloseCookiesFooter');
+    var cookieInputArea = document.getElementById('cookieInputArea');
+    var cookieDetectedFormat = document.getElementById('cookieDetectedFormat');
+    var btnImportCookieFile = document.getElementById('btnImportCookieFile');
+    var cookieFileInput = document.getElementById('cookieFileInput');
+    var btnPasteCookieClipboard = document.getElementById('btnPasteCookieClipboard');
+    var btnClearSavedCookies = document.getElementById('btnClearSavedCookies');
+    var btnSaveCookies = document.getElementById('btnSaveCookies');
+    var cookieNavBadge = document.getElementById('cookieNavBadge');
+    var btnCopyIosCode = document.getElementById('btnCopyIosCode');
+
+    function detectCookieFormat(raw) {
+        raw = (raw || '').trim();
+        if (!raw) return { name: 'Empty', class: 'format-empty' };
+        if (raw.indexOf('\t') !== -1 || raw.startsWith('# Netscape') || raw.startsWith('# HTTP Cookie')) {
+            return { name: 'Netscape .txt', class: 'format-netscape' };
+        }
+        if (raw.startsWith('[') && raw.endsWith(']')) {
+            return { name: 'JSON Array', class: 'format-json' };
+        }
+        if (raw.startsWith('{') && raw.endsWith('}')) {
+            return { name: 'JSON Object', class: 'format-json' };
+        }
+        if (raw.indexOf('=') !== -1 && (raw.indexOf(';') !== -1 || raw.indexOf('\n') !== -1)) {
+            return { name: 'Cookie Header', class: 'format-header' };
+        }
+        return { name: 'Raw String', class: 'format-raw' };
+    }
+
+    function updateCookieBadge() {
+        var saved = localStorage.getItem('kv_user_cookies') || '';
+        var isSet = saved.trim().length > 0;
+        if (cookieNavBadge) {
+            cookieNavBadge.textContent = isSet ? 'Active' : 'Off';
+            cookieNavBadge.className = 'cookie-nav-badge ' + (isSet ? 'badge-active' : 'badge-off');
+        }
+        if (cookieInputArea) {
+            var fmt = detectCookieFormat(cookieInputArea.value);
+            if (cookieDetectedFormat) {
+                cookieDetectedFormat.textContent = fmt.name;
+                cookieDetectedFormat.className = 'cookie-format-badge ' + fmt.class;
+            }
+        }
+    }
+
+    function openCookiesModal() {
+        var saved = localStorage.getItem('kv_user_cookies') || '';
+        if (cookieInputArea) {
+            cookieInputArea.value = saved;
+        }
+        updateCookieBadge();
+        if (cookiesModal) cookiesModal.classList.remove('d-none');
+    }
+
+    function closeCookiesModal() {
+        if (cookiesModal) cookiesModal.classList.add('d-none');
+    }
+
+    if (btnOpenCookiesNav) btnOpenCookiesNav.addEventListener('click', openCookiesModal);
+    if (btnQuickCookie) btnQuickCookie.addEventListener('click', openCookiesModal);
+    if (btnCloseCookiesModal) btnCloseCookiesModal.addEventListener('click', closeCookiesModal);
+    if (btnCloseCookiesFooter) btnCloseCookiesFooter.addEventListener('click', closeCookiesModal);
+
+    if (cookieInputArea) {
+        cookieInputArea.addEventListener('input', function() {
+            var fmt = detectCookieFormat(this.value);
+            if (cookieDetectedFormat) {
+                cookieDetectedFormat.textContent = fmt.name;
+                cookieDetectedFormat.className = 'cookie-format-badge ' + fmt.class;
+            }
+        });
+    }
+
+    if (btnSaveCookies) {
+        btnSaveCookies.addEventListener('click', function() {
+            var val = (cookieInputArea ? cookieInputArea.value : '').trim();
+            if (val) {
+                localStorage.setItem('kv_user_cookies', val);
+                updateCookieBadge();
+                showToast('Cookies saved securely to this device!', 'success');
+                closeCookiesModal();
+            } else {
+                localStorage.removeItem('kv_user_cookies');
+                updateCookieBadge();
+                showToast('Cookies cleared from this device', 'info');
+            }
+        });
+    }
+
+    if (btnClearSavedCookies) {
+        btnClearSavedCookies.addEventListener('click', function() {
+            localStorage.removeItem('kv_user_cookies');
+            if (cookieInputArea) cookieInputArea.value = '';
+            updateCookieBadge();
+            showToast('Cookies cleared from this device', 'info');
+        });
+    }
+
+    if (btnPasteCookieClipboard) {
+        btnPasteCookieClipboard.addEventListener('click', async function() {
+            try {
+                if (navigator.clipboard && navigator.clipboard.readText) {
+                    var text = await navigator.clipboard.readText();
+                    if (text && text.trim()) {
+                        if (cookieInputArea) {
+                            cookieInputArea.value = text.trim();
+                            cookieInputArea.dispatchEvent(new Event('input'));
+                        }
+                        showToast('Pasted cookies from clipboard', 'success');
+                    } else {
+                        showToast('Clipboard is empty', 'warning');
+                    }
+                } else {
+                    if (cookieInputArea) {
+                        cookieInputArea.focus();
+                        document.execCommand('paste');
+                    }
+                }
+            } catch(e) {
+                if (cookieInputArea) cookieInputArea.focus();
+                showToast('Please paste manually into the box', 'info');
+            }
+        });
+    }
+
+    if (btnImportCookieFile && cookieFileInput) {
+        btnImportCookieFile.addEventListener('click', function() {
+            cookieFileInput.click();
+        });
+
+        cookieFileInput.addEventListener('change', function(e) {
+            var file = e.target.files && e.target.files[0];
+            if (!file) return;
+            var reader = new FileReader();
+            reader.onload = function(evt) {
+                var content = evt.target.result;
+                if (content && cookieInputArea) {
+                    cookieInputArea.value = content.trim();
+                    cookieInputArea.dispatchEvent(new Event('input'));
+                    showToast('Imported cookie file: ' + escapeHtml(file.name), 'success');
+                }
+            };
+            reader.readAsText(file);
+        });
+    }
+
+    if (btnCopyIosCode) {
+        btnCopyIosCode.addEventListener('click', function() {
+            var codeEl = document.getElementById('iosBookmarkletCode');
+            if (codeEl) {
+                var txt = codeEl.textContent.trim();
+                if (navigator.clipboard && navigator.clipboard.writeText) {
+                    navigator.clipboard.writeText(txt).then(function() {
+                        showToast('Bookmarklet script copied to clipboard!', 'success');
+                    }).catch(function() {
+                        showToast('Copied bookmarklet text', 'info');
+                    });
+                } else {
+                    showToast('Bookmarklet ready to copy', 'info');
+                }
+            }
+        });
+    }
+
+    // Guide Tab Switching
+    document.querySelectorAll('.cookie-tab-btn').forEach(function(tabBtn) {
+        tabBtn.addEventListener('click', function() {
+            document.querySelectorAll('.cookie-tab-btn').forEach(function(b) { b.classList.remove('active'); });
+            this.classList.add('active');
+            var tabKey = this.getAttribute('data-guide-tab');
+            var pDesk = document.getElementById('guidePaneDesktop');
+            var pIos = document.getElementById('guidePaneIos');
+            var pAnd = document.getElementById('guidePaneAndroid');
+            if (pDesk) pDesk.classList.toggle('d-none', tabKey !== 'desktop');
+            if (pIos) pIos.classList.toggle('d-none', tabKey !== 'ios');
+            if (pAnd) pAnd.classList.toggle('d-none', tabKey !== 'android');
+        });
+    });
+
+    // Initialize cookies status indicator
+    updateCookieBadge();
+
     // ── Album / Playlist Inspector & Selector Modal ─────────────────────────
     function openAlbumModal(playlistUrl) {
         albumModal.classList.remove('d-none');
@@ -811,8 +1178,18 @@
         currentAlbumEntries = [];
         updateAlbumSelectionCount();
 
+        var userCookies = localStorage.getItem('kv_user_cookies') || '';
+        var scanUrl = '/api/scan?url=' + encodeURIComponent(playlistUrl);
+        if (userCookies) {
+            scanUrl += '&cookies=' + encodeURIComponent(userCookies);
+        }
+
         var xhr = new XMLHttpRequest();
-        xhr.open('GET', '/api/scan?url=' + encodeURIComponent(playlistUrl), true);
+        xhr.open('GET', scanUrl, true);
+        if (userCookies) {
+            xhr.setRequestHeader('X-Cookies', userCookies);
+        }
+
         xhr.onload = function() {
             if (xhr.status === 200) {
                 try {
@@ -937,6 +1314,8 @@
         submitBtnIcon.className = 'bi bi-arrow-repeat btn-icon-spin';
         submitBtnText.textContent = 'Enqueuing ' + urls.length + ' task(s)...';
 
+        var userCookies = localStorage.getItem('kv_user_cookies') || '';
+
         var xhr = new XMLHttpRequest();
         xhr.open('POST', '/api/queue/add', true);
         xhr.setRequestHeader('Content-Type', 'application/json');
@@ -972,7 +1351,8 @@
 
         xhr.send(JSON.stringify({
             urls: urls,
-            format: format
+            format: format,
+            cookies: userCookies
         }));
     }
 

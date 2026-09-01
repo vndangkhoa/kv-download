@@ -38,6 +38,7 @@ type DownloadTask struct {
 	Title        string     `json:"title"`
 	Thumbnail    string     `json:"thumbnail"`
 	Format       string     `json:"format"`
+	Cookies      string     `json:"cookies,omitempty"`
 	Status       TaskStatus `json:"status"`
 	Percent      float64    `json:"percent"`
 	Speed        string     `json:"speed"`
@@ -81,6 +82,10 @@ func NewQueueManager(maxWorkers int) *QueueManager {
 }
 
 func (q *QueueManager) Add(url string, format string) *DownloadTask {
+	return q.AddWithCookies(url, format, "")
+}
+
+func (q *QueueManager) AddWithCookies(url string, format string, cookies string) *DownloadTask {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
@@ -93,6 +98,7 @@ func (q *QueueManager) Add(url string, format string) *DownloadTask {
 		URL:       url,
 		Title:     shortUrl(url),
 		Format:    format,
+		Cookies:   cookies,
 		Status:    StatusQueued,
 		CreatedAt: time.Now(),
 	}
@@ -100,7 +106,7 @@ func (q *QueueManager) Add(url string, format string) *DownloadTask {
 	q.tasks[task.ID] = task
 	q.queue = append(q.queue, task.ID)
 
-	log.Info().Msgf("Enqueued task %s for URL %s (format: %s)", task.ID, url, format)
+	log.Info().Msgf("Enqueued task %s for URL %s (format: %s, hasCustomCookies: %t)", task.ID, url, format, cookies != "")
 
 	q.saveStateLocked()
 	q.broadcastTaskUpdate(task)
@@ -319,7 +325,7 @@ func (q *QueueManager) processTask(ctx context.Context, task *DownloadTask) {
 		"--merge-output-format", "mp4",
 		"--output", outputTemplate,
 		"--no-check-certificates",
-		"--extractor-args", "instagram:image_persist=1;tiktok:app_version=30.0.0",
+		"--extractor-args", "instagram:image_persist=1;tiktok:app_version=30.0.0;threads:app_version=30.0.0",
 		"--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
 	}
 
@@ -345,9 +351,17 @@ func (q *QueueManager) processTask(ctx context.Context, task *DownloadTask) {
 		args = append(args, "--impersonate", "chrome")
 	}
 
-	cookiesPath := getCookiesPath()
-	if workingCookies := getWorkingCookiesPath(cookiesPath); workingCookies != "" {
-		args = append(args, "--cookies", workingCookies)
+	if task.Cookies != "" {
+		tmpCookie, cleanup, err := CreateEphemeralCookieFile(task.Cookies, task.URL)
+		if err == nil && tmpCookie != "" {
+			defer cleanup()
+			args = append(args, "--cookies", tmpCookie)
+		}
+	} else {
+		cookiesPath := getCookiesPath()
+		if workingCookies := getWorkingCookiesPath(cookiesPath); workingCookies != "" {
+			args = append(args, "--cookies", workingCookies)
+		}
 	}
 
 	for arg, value := range getEnvVars() {
@@ -548,9 +562,10 @@ func shortUrl(u string) string {
 
 func QueueAddHandler(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		URLs   []string `json:"urls"`
-		URL    string   `json:"url"`
-		Format string   `json:"format"`
+		URLs    []string `json:"urls"`
+		URL     string   `json:"url"`
+		Format  string   `json:"format"`
+		Cookies string   `json:"cookies"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -572,7 +587,7 @@ func QueueAddHandler(w http.ResponseWriter, r *http.Request) {
 	for _, u := range urls {
 		u = strings.TrimSpace(u)
 		if u != "" {
-			task := GlobalQueue.Add(u, body.Format)
+			task := GlobalQueue.AddWithCookies(u, body.Format, body.Cookies)
 			addedTasks = append(addedTasks, task)
 		}
 	}

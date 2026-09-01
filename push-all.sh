@@ -108,7 +108,7 @@ git push github main 2>/dev/null || true
 echo
 echo "🔄 [5/5] Refreshing DSM Package Center Feed on NAS..."
 if [ -f "$SPK_DIR/tools/ssh-run.py" ]; then
-    python3 "$SPK_DIR/tools/ssh-run.py" "sudo rm -rf /var/run/synopkg/pkglist/* /var/cache/synopkg/badge_count_records/*; sudo /volume2/docker/spk/refresh-spk-site.sh; sudo /volume2/docker/spkrepo/scripts/clear-pkglist-cache.sh" || true
+    python3 "$SPK_DIR/tools/ssh-run.py" "sudo rm -rf /var/run/synopkg/pkglist/* /var/cache/synopkg/badge_count_records/*; sudo /volume2/docker/spk/refresh-spk-site.sh; sudo /volume2/docker/spkrepo/scripts/clear-pkglist-cache.sh; sudo /usr/syno/bin/synopkg chkupgradepkg >/dev/null 2>&1 || true" || true
 fi
 
 echo
