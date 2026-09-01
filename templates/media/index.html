@@ -269,20 +269,38 @@
                     <div class="platform-chip chip-x" title="Click to focus for Twitter / X URLs">
                         <i class="bi bi-twitter-x"></i> <span>Twitter / X</span>
                     </div>
+                    <div class="platform-chip chip-gdrive" title="Click to focus for Google Drive URLs">
+                        <i class="bi bi-google"></i> <span>GDrive</span>
+                    </div>
+                    <div class="platform-chip chip-pixiv" title="Click to focus for Pixiv artwork URLs">
+                        <i class="bi bi-palette-fill"></i> <span>Pixiv</span>
+                    </div>
+                    <div class="platform-chip chip-archive" title="Click to focus for Archive.org URLs">
+                        <i class="bi bi-bank2"></i> <span>Archive.org</span>
+                    </div>
+                    <div class="platform-chip chip-mediafire" title="Click to focus for MediaFire / Cloud URLs">
+                        <i class="bi bi-fire"></i> <span>MediaFire</span>
+                    </div>
+                    <div class="platform-chip chip-pixeldrain" title="Click to focus for Pixeldrain URLs">
+                        <i class="bi bi-droplet-fill"></i> <span>Pixeldrain</span>
+                    </div>
+                    <div class="platform-chip chip-imgur" title="Click to focus for Imgur Albums">
+                        <i class="bi bi-image-fill"></i> <span>Imgur</span>
+                    </div>
+                    <div class="platform-chip chip-torrent" title="Click to focus for BitTorrent & Magnet links">
+                        <i class="bi bi-magnet-fill"></i> <span>Torrent/P2P</span>
+                    </div>
+                    <div class="platform-chip chip-soundcloud" title="Click to focus for SoundCloud URLs">
+                        <i class="bi bi-soundwave"></i> <span>SoundCloud</span>
+                    </div>
                     <div class="platform-chip chip-reddit" title="Click to focus for Reddit URLs">
                         <i class="bi bi-reddit"></i> <span>Reddit</span>
                     </div>
                     <div class="platform-chip chip-fb" title="Click to focus for Facebook URLs">
                         <i class="bi bi-facebook"></i> <span>Facebook</span>
                     </div>
-                    <div class="platform-chip chip-soundcloud" title="Click to focus for SoundCloud URLs">
-                        <i class="bi bi-soundwave"></i> <span>SoundCloud</span>
-                    </div>
-                    <div class="platform-chip chip-vimeo" title="Click to focus for Vimeo URLs">
-                        <i class="bi bi-vimeo"></i> <span>Vimeo</span>
-                    </div>
-                    <div class="platform-chip chip-twitch" title="Click to focus for Twitch URLs">
-                        <i class="bi bi-twitch"></i> <span>Twitch</span>
+                    <div class="platform-chip chip-bili" title="Click to focus for Bilibili URLs">
+                        <i class="bi bi-tv"></i> <span>Bilibili</span>
                     </div>
                 </div>
             </div>
@@ -833,7 +851,20 @@
                u.indexOf('/playlist') !== -1 ||
                u.indexOf('/album/') !== -1 ||
                u.indexOf('/sets/') !== -1 ||
-               u.indexOf('/collection/') !== -1;
+               u.indexOf('/collection/') !== -1 ||
+               u.indexOf('pixiv.net') !== -1 ||
+               u.indexOf('pixiv.me') !== -1 ||
+               u.indexOf('imgur.com/a/') !== -1 ||
+               u.indexOf('imgur.com/gallery/') !== -1 ||
+               u.indexOf('pixeldrain.com/l/') !== -1 ||
+               u.indexOf('archive.org/details/') !== -1 ||
+               u.indexOf('kemono.') !== -1 ||
+               u.indexOf('coomer.') !== -1 ||
+               u.indexOf('pawchive.') !== -1 ||
+               u.indexOf('yande.re') !== -1 ||
+               u.indexOf('konachan.com') !== -1 ||
+               u.indexOf('safebooru.org') !== -1 ||
+               u.indexOf('gelbooru.com') !== -1;
     }
 
     function detectPlatform(url) {
@@ -844,6 +875,16 @@
         if (u.indexOf('threads.net') !== -1 || u.indexOf('threads.com') !== -1) return { name: 'Threads', icon: 'bi-threads', color: '#ffffff' };
         if (u.indexOf('instagram.com') !== -1) return { name: 'Instagram', icon: 'bi-instagram', color: '#e1306c' };
         if (u.indexOf('twitter.com') !== -1 || u.indexOf('x.com') !== -1) return { name: 'Twitter / X', icon: 'bi-twitter-x', color: '#1da1f2' };
+        if (u.indexOf('drive.google.com') !== -1) return { name: 'Google Drive', icon: 'bi-google', color: '#4285f4' };
+        if (u.indexOf('mediafire.com') !== -1) return { name: 'MediaFire', icon: 'bi-fire', color: '#0070f0' };
+        if (u.indexOf('pixeldrain.com') !== -1) return { name: 'Pixeldrain', icon: 'bi-droplet-fill', color: '#8b5cf6' };
+        if (u.indexOf('pixiv.net') !== -1 || u.indexOf('pixiv.me') !== -1) return { name: 'Pixiv Artwork', icon: 'bi-palette-fill', color: '#0096fa' };
+        if (u.indexOf('imgur.com') !== -1) return { name: 'Imgur Album', icon: 'bi-image-fill', color: '#1bb76e' };
+        if (u.indexOf('archive.org') !== -1) return { name: 'Archive.org', icon: 'bi-bank2', color: '#e2e8f0' };
+        if (u.indexOf('kemono.') !== -1 || u.indexOf('coomer.') !== -1 || u.indexOf('pawchive.') !== -1) return { name: 'Archive Post', icon: 'bi-folder-symlink-fill', color: '#f59e0b' };
+        if (u.indexOf('yande.re') !== -1 || u.indexOf('konachan.com') !== -1 || u.indexOf('safebooru.org') !== -1 || u.indexOf('gelbooru.com') !== -1) return { name: 'Booru Art', icon: 'bi-brush-fill', color: '#ec4899' };
+        if (u.indexOf('catbox.moe') !== -1 || u.indexOf('litterbox.catbox') !== -1) return { name: 'Catbox', icon: 'bi-box-seam-fill', color: '#10b981' };
+        if (u.indexOf('magnet:?') !== -1 || u.indexOf('.torrent') !== -1) return { name: 'BitTorrent Transfer', icon: 'bi-magnet-fill', color: '#ef4444' };
         if (u.indexOf('reddit.com') !== -1) return { name: 'Reddit', icon: 'bi-reddit', color: '#ff4500' };
         if (u.indexOf('facebook.com') !== -1 || u.indexOf('fb.watch') !== -1) return { name: 'Facebook', icon: 'bi-facebook', color: '#1877f2' };
         if (u.indexOf('vimeo.com') !== -1) return { name: 'Vimeo', icon: 'bi-vimeo', color: '#1ab7ea' };

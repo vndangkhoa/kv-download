@@ -2,12 +2,15 @@ package media
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"os"
 	"os/exec"
 	"strings"
 	"time"
+
+	"kv-download/src/anpan"
 
 	"github.com/rs/zerolog/log"
 )
@@ -27,8 +30,7 @@ type ScanInfo struct {
 	Thumbnail  string      `json:"thumbnail"`
 }
 
-// ScanUrl inspects a URL with yt-dlp metadata-only extraction (no download).
-// For playlists/profiles it returns the entry list without fetching each video.
+// ScanUrl inspects a URL with anpan extractors and yt-dlp metadata extraction.
 func ScanUrl(inputUrl string, cookies string) (*ScanInfo, string, error) {
 	url := strings.TrimSpace(inputUrl)
 	if url == "" {
@@ -36,6 +38,63 @@ func ScanUrl(inputUrl string, cookies string) (*ScanInfo, string, error) {
 	}
 
 	log.Info().Msgf("Scanning %s (hasCustomCookies: %t)", url, cookies != "")
+
+	// 1. Check with Anpan router for galleries, art posts, cloud files & digital libraries
+	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+	defer cancel()
+
+	if target, err := anpan.InspectTarget(ctx, url); err == nil && target != nil {
+		if target.Type == anpan.TargetArchive && target.ArchivePost != nil && len(target.ArchivePost.Files) > 0 {
+			var entries []ScanEntry
+			firstThumb := ""
+			for _, f := range target.ArchivePost.Files {
+				thumb := ""
+				lowerName := strings.ToLower(f.Name)
+				if strings.HasSuffix(lowerName, ".jpg") ||
+					strings.HasSuffix(lowerName, ".png") ||
+					strings.HasSuffix(lowerName, ".webp") ||
+					strings.HasSuffix(lowerName, ".jpeg") ||
+					strings.HasSuffix(lowerName, ".gif") {
+					thumb = f.URL
+				}
+				if firstThumb == "" && thumb != "" {
+					firstThumb = thumb
+				}
+				entries = append(entries, ScanEntry{
+					Id:        f.Name,
+					Title:     f.Name,
+					Url:       f.URL,
+					Thumbnail: thumb,
+				})
+			}
+			return &ScanInfo{
+				Title:      target.ArchivePost.Title,
+				Count:      len(entries),
+				IsPlaylist: len(entries) > 1,
+				Entries:    entries,
+				Thumbnail:  firstThumb,
+			}, "", nil
+		}
+		if target.Type == anpan.TargetDirect && target.URL != "" {
+			fn := target.Filename
+			if fn == "" {
+				fn = "Direct Download File"
+			}
+			return &ScanInfo{
+				Title:      fn,
+				Count:      1,
+				IsPlaylist: false,
+				Entries: []ScanEntry{
+					{
+						Id:        target.URL,
+						Title:     fn,
+						Url:       target.URL,
+						Thumbnail: "",
+					},
+				},
+			}, "", nil
+		}
+	}
 
 	const maxAttempts = 2
 	var lastStderr string

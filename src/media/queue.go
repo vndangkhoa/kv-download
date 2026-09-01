@@ -17,6 +17,8 @@ import (
 	"sync"
 	"time"
 
+	"kv-download/src/anpan"
+
 	"github.com/dustin/go-humanize"
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
@@ -314,7 +316,44 @@ func (q *QueueManager) processTask(ctx context.Context, task *DownloadTask) {
 	}()
 
 	dirID := GetMD5Hash(task.URL, map[string]string{"format": task.Format})
-	outputTemplate := getMediaDirectory(dirID) + "%(title,channel+id,uploader+id,id)s.%(ext)s"
+	targetDir := getMediaDirectory(dirID)
+	_ = os.MkdirAll(targetDir, 0o755)
+
+	// ── 1. Anpan Target Routing (Torrents & Direct Cloud Accelerated Downloads) ──
+	target, _ := anpan.InspectTarget(ctx, task.URL)
+	if target != nil {
+		if target.Type == anpan.TargetTorrent && anpan.HasAria2c() {
+			log.Info().Msgf("Routing torrent task %s via aria2c", task.ID)
+			err := anpan.DownloadTorrentAria(ctx, task.URL, targetDir)
+			if err != nil && ctx.Err() != context.Canceled {
+				q.failTask(task, err.Error())
+				return
+			}
+			medias, _ := getAllFilesForId(dirID)
+			if len(medias) > 0 {
+				q.completeTask(task, medias[0], dirID)
+				return
+			}
+		}
+
+		if target.Type == anpan.TargetDirect && target.URL != "" && anpan.HasAria2c() {
+			fn := target.Filename
+			if fn == "" {
+				fn = "download"
+			}
+			log.Info().Msgf("Routing direct file %s via aria2c", target.URL)
+			err := anpan.DownloadDirectFileAria(ctx, target.URL, targetDir, fn, 16)
+			if err == nil {
+				medias, _ := getAllFilesForId(dirID)
+				if len(medias) > 0 {
+					q.completeTask(task, medias[0], dirID)
+					return
+				}
+			}
+		}
+	}
+
+	outputTemplate := targetDir + "%(title,channel+id,uploader+id,id)s.%(ext)s"
 
 	args := []string{
 		"--newline",
@@ -327,6 +366,13 @@ func (q *QueueManager) processTask(ctx context.Context, task *DownloadTask) {
 		"--no-check-certificates",
 		"--extractor-args", "instagram:image_persist=1;tiktok:app_version=30.0.0;threads:app_version=30.0.0",
 		"--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+	}
+
+	// Add aria2c downloader acceleration if available and appropriate
+	if anpan.HasAria2c() && task.Format != "audio_mp3" && task.Format != "audio_m4a" {
+		if ariaArgs := anpan.BuildYtDlpAria2Args(16); ariaArgs != nil {
+			args = append(args, ariaArgs...)
+		}
 	}
 
 	// Apply Format Selection
@@ -412,25 +458,50 @@ func (q *QueueManager) processTask(ctx context.Context, task *DownloadTask) {
 	moveJsonFiles(dirID)
 	medias, _ := getAllFilesForId(dirID)
 	if len(medias) > 0 {
-		q.mu.Lock()
-		task.Status = StatusCompleted
-		task.Percent = 100.0
-		task.Speed = ""
-		task.ETA = ""
-		task.MediaID = medias[0].Id
-		task.MediaName = medias[0].Name
-		if task.Title == shortUrl(task.URL) {
-			task.Title = medias[0].Name
-		}
-		task.HumanSize = medias[0].HumanSize
-		task.TotalBytes = medias[0].SizeInBytes
-		now := time.Now()
-		task.CompletedAt = &now
-		q.saveStateLocked()
-		q.mu.Unlock()
-		q.broadcastTaskUpdate(task)
+		q.completeTask(task, medias[0], dirID)
 	} else {
 		q.failTask(task, "No media file generated")
+	}
+}
+
+func (q *QueueManager) completeTask(task *DownloadTask, media Media, dirID string) {
+	q.mu.Lock()
+	task.Status = StatusCompleted
+	task.Percent = 100.0
+	task.Speed = ""
+	task.ETA = ""
+	task.MediaID = media.Id
+	task.MediaName = media.Name
+	if task.Title == shortUrl(task.URL) {
+		task.Title = media.Name
+	}
+	task.HumanSize = media.HumanSize
+	task.TotalBytes = media.SizeInBytes
+	now := time.Now()
+	task.CompletedAt = &now
+	q.saveStateLocked()
+	q.mu.Unlock()
+	q.broadcastTaskUpdate(task)
+
+	// Fetch Synced Lyrics from LRCLIB for Audio Downloads
+	if task.Format == "audio_mp3" || task.Format == "audio_m4a" {
+		go func(m Media, rawTitle string) {
+			cleanTitle := strings.TrimSuffix(m.Name, filepath.Ext(m.Name))
+			parts := strings.Split(cleanTitle, " - ")
+			artist := ""
+			track := cleanTitle
+			if len(parts) >= 2 {
+				artist = strings.TrimSpace(parts[0])
+				track = strings.TrimSpace(parts[1])
+			}
+			lyricsCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if res, err := anpan.FetchLyrics(lyricsCtx, track, artist, 0); err == nil && res != nil {
+				filePath := filepath.Join(getMediaDirectory(dirID), m.Name)
+				_, _ = anpan.SaveLrcFile(filePath, res)
+				log.Info().Msgf("Saved synced lyrics for %s (track: %s)", m.Name, track)
+			}
+		}(media, task.Title)
 	}
 }
 

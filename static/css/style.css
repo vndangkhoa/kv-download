@@ -2694,3 +2694,83 @@ body.theme-matrix .btn-empty-sample:hover {
     box-shadow: 0 0 14px rgba(255, 85, 0, 0.3);
 }
 
+.chip-gdrive {
+    background: rgba(66, 133, 244, 0.12);
+    border-color: rgba(66, 133, 244, 0.3);
+}
+.chip-gdrive:hover {
+    background: rgba(66, 133, 244, 0.22);
+    border-color: rgba(66, 133, 244, 0.5);
+    box-shadow: 0 0 14px rgba(66, 133, 244, 0.3);
+}
+
+.chip-pixiv {
+    background: rgba(0, 150, 250, 0.12);
+    border-color: rgba(0, 150, 250, 0.3);
+}
+.chip-pixiv:hover {
+    background: rgba(0, 150, 250, 0.22);
+    border-color: rgba(0, 150, 250, 0.5);
+    box-shadow: 0 0 14px rgba(0, 150, 250, 0.3);
+}
+
+.chip-archive {
+    background: rgba(226, 232, 240, 0.1);
+    border-color: rgba(226, 232, 240, 0.25);
+}
+.chip-archive:hover {
+    background: rgba(226, 232, 240, 0.2);
+    border-color: rgba(226, 232, 240, 0.45);
+    box-shadow: 0 0 14px rgba(226, 232, 240, 0.25);
+}
+
+.chip-mediafire {
+    background: rgba(0, 112, 240, 0.12);
+    border-color: rgba(0, 112, 240, 0.3);
+}
+.chip-mediafire:hover {
+    background: rgba(0, 112, 240, 0.22);
+    border-color: rgba(0, 112, 240, 0.5);
+    box-shadow: 0 0 14px rgba(0, 112, 240, 0.3);
+}
+
+.chip-pixeldrain {
+    background: rgba(139, 92, 246, 0.12);
+    border-color: rgba(139, 92, 246, 0.3);
+}
+.chip-pixeldrain:hover {
+    background: rgba(139, 92, 246, 0.22);
+    border-color: rgba(139, 92, 246, 0.5);
+    box-shadow: 0 0 14px rgba(139, 92, 246, 0.3);
+}
+
+.chip-imgur {
+    background: rgba(27, 183, 110, 0.12);
+    border-color: rgba(27, 183, 110, 0.3);
+}
+.chip-imgur:hover {
+    background: rgba(27, 183, 110, 0.22);
+    border-color: rgba(27, 183, 110, 0.5);
+    box-shadow: 0 0 14px rgba(27, 183, 110, 0.3);
+}
+
+.chip-torrent {
+    background: rgba(239, 68, 68, 0.12);
+    border-color: rgba(239, 68, 68, 0.3);
+}
+.chip-torrent:hover {
+    background: rgba(239, 68, 68, 0.22);
+    border-color: rgba(239, 68, 68, 0.5);
+    box-shadow: 0 0 14px rgba(239, 68, 68, 0.3);
+}
+
+.chip-bili {
+    background: rgba(0, 161, 214, 0.12);
+    border-color: rgba(0, 161, 214, 0.3);
+}
+.chip-bili:hover {
+    background: rgba(0, 161, 214, 0.22);
+    border-color: rgba(0, 161, 214, 0.5);
+    box-shadow: 0 0 14px rgba(0, 161, 214, 0.3);
+}
+

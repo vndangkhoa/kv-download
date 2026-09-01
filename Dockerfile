@@ -30,7 +30,8 @@ ENV MR_DOWNLOAD_DIR="/download"
 RUN apk add --update --no-cache \
     # https://github.com/yt-dlp/yt-dlp/issues/14404 \
     deno \
-    curl
+    curl \
+    aria2
 
 # https://hub.docker.com/r/mwader/static-ffmpeg/tags
 # https://github.com/wader/static-ffmpeg
