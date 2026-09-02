@@ -2,6 +2,7 @@ package media
 
 import (
 	"bytes"
+	"context"
 	"crypto/md5"
 	"encoding/json"
 	"errors"
@@ -14,6 +15,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -115,7 +117,15 @@ func ScanMediaApi(w http.ResponseWriter, r *http.Request) {
 	if cookies == "" {
 		cookies = strings.TrimSpace(r.Header.Get("X-Cookies"))
 	}
-	info, ytdlpErrorMessage, err := ScanUrl(url, cookies)
+	start, _ := strconv.Atoi(r.URL.Query().Get("start"))
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	if start <= 0 {
+		start = 1
+	}
+	if limit <= 0 {
+		limit = 24
+	}
+	info, ytdlpErrorMessage, err := ScanUrlWithPagination(url, cookies, start, limit)
 	if err != nil {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadRequest)
@@ -130,6 +140,63 @@ func ScanMediaApi(w http.ResponseWriter, r *http.Request) {
 		"rawUrl": url,
 		"error":  ytdlpErrorMessage,
 	})
+}
+
+// StreamScanMediaApi streams scanned entries live over SSE
+func StreamScanMediaApi(w http.ResponseWriter, r *http.Request) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "Streaming unsupported", http.StatusInternalServerError)
+		return
+	}
+
+	url, _ := getUrl(r)
+	cookies := strings.TrimSpace(r.URL.Query().Get("cookies"))
+	if cookies == "" {
+		cookies = strings.TrimSpace(r.Header.Get("X-Cookies"))
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+
+	ctx := r.Context()
+
+	onMeta := func(title, uploader, channel, thumbnail string, total int) {
+		data, _ := json.Marshal(map[string]interface{}{
+			"type":      "meta",
+			"title":     title,
+			"uploader":  uploader,
+			"channel":   channel,
+			"thumbnail": thumbnail,
+			"total":     total,
+		})
+		_, _ = fmt.Fprintf(w, "data: %s\n\n", data)
+		flusher.Flush()
+	}
+
+	onEntry := func(entry ScanEntry, count int) {
+		data, _ := json.Marshal(map[string]interface{}{
+			"type":  "item",
+			"entry": entry,
+			"count": count,
+		})
+		_, _ = fmt.Fprintf(w, "data: %s\n\n", data)
+		flusher.Flush()
+	}
+
+	err := StreamScanUrl(ctx, url, cookies, onEntry, onMeta)
+
+	doneMsg := map[string]interface{}{
+		"type": "done",
+	}
+	if err != nil && !errors.Is(err, context.Canceled) {
+		doneMsg["error"] = err.Error()
+	}
+	data, _ := json.Marshal(doneMsg)
+	_, _ = fmt.Fprintf(w, "data: %s\n\n", data)
+	flusher.Flush()
 }
 
 func getUrl(r *http.Request) (string, map[string]string) {

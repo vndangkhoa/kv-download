@@ -12,7 +12,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Share+Tech+Mono&display=swap" rel="stylesheet">
-    <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
     <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
     <script id="tailwind-config">
@@ -47,7 +47,7 @@
             }
         };
     </script>
-    <link rel="stylesheet" href="/static/css/style.css?v=2.2">
+    <link rel="stylesheet" href="/static/css/style.css?v=2.4">
     <style>
         :root {
             --bg-base: #0a0b0d;
@@ -1005,15 +1005,22 @@
         <!-- VIEW 5: PLAYLISTS & ALBUMS                 -->
         <!-- ========================================== -->
         <section id="view-playlists" class="view-section">
-            <div class="glass-panel p-8 flex flex-col items-center justify-center text-center">
-                <div class="w-14 h-14 rounded-2xl bg-primary/10 border border-primary/20 flex items-center justify-center text-primary mb-3">
-                    <span class="material-symbols-outlined text-[28px]">playlist_play</span>
+            <div class="glass-panel p-5 flex flex-col gap-4">
+                <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 pb-2 border-b border-white/5">
+                    <div>
+                        <h3 class="text-[18px] font-bold text-white flex items-center gap-2">
+                            <span class="material-symbols-outlined text-primary text-[22px]">playlist_play</span> Channels, Playlists & Albums
+                        </h3>
+                        <p class="text-[12px] text-on-surface-variant">Grouped Collections • TikTok Creators • YouTube Albums • 1-Click Batch Playback</p>
+                    </div>
+                    <button type="button" class="btn-primary-glow px-4 py-2 rounded-xl text-[12px] font-bold flex items-center gap-1.5 shrink-0" onclick="document.querySelector('[data-view=download-center]').click()">
+                        <span class="material-symbols-outlined text-[16px]">add_link</span> Scan New Channel / Playlist
+                    </button>
                 </div>
-                <h3 class="text-[18px] font-bold text-white mb-1">Playlists & Albums Inspector</h3>
-                <p class="text-[13px] text-on-surface-variant max-w-lg mb-4">Paste any YouTube Playlist, SoundCloud Set, Imgur Album, Pixiv Gallery, or Archive.org collection into the Download Center. KV Download automatically detects albums and opens a track picker so you can select exactly which items to download.</p>
-                <button type="button" class="btn-primary-glow px-6 py-2.5 rounded-xl font-bold text-[13px] flex items-center gap-2" onclick="document.querySelector('[data-view=download-center]').click()">
-                    <span class="material-symbols-outlined text-[18px]">add_link</span> Go to Download Center
-                </button>
+
+                <div id="playlistsContainer" class="task-items-container view-standard">
+                    <!-- Rendered dynamically by renderPlaylists() -->
+                </div>
             </div>
         </section>
 
@@ -1323,46 +1330,82 @@ es.onmessage = (e) => console.log(JSON.parse(e.data));</pre>
 </div>
 
 <!-- ========================================== -->
-<!-- MODAL: ALBUM / PLAYLIST INSPECTOR          -->
+<!-- MODAL: CHANNEL / ALBUM / PLAYLIST INSPECTOR -->
 <!-- ========================================== -->
-<div class="modal-backdrop-blur d-none" id="albumModal" style="position:fixed;inset:0;width:100vw;height:100vh;z-index:85;background:rgba(0,0,0,.75);backdrop-filter:blur(12px);display:flex;align-items:center;justify-content:center;padding:12px;box-sizing:border-box;">
-    <div class="album-modal-card glass-surface w-full max-w-[860px] max-h-[88vh] overflow-hidden flex flex-col rounded-2xl border border-white/10 shadow-2xl box-border">
-        <div class="p-3.5 sm:p-5 flex justify-between items-start gap-3 border-b border-white/10">
-            <div class="min-w-0">
-                <span class="text-[10px] sm:text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-cyan-500/15 border border-cyan-500/30 text-cyan-300 inline-flex items-center gap-1.5"><i class="bi bi-collection-play-fill"></i> Album / Playlist</span>
-                <h3 id="albumModalTitle" class="text-[15px] sm:text-[16px] font-bold text-white mt-1 truncate">Inspecting album...</h3>
-                <span id="albumModalCount" class="text-[11px] sm:text-[12px] text-on-surface-variant">Scanning items with yt-dlp...</span>
+<div class="modal-backdrop-blur d-none" id="albumModal" style="position:fixed;inset:0;width:100vw;height:100vh;z-index:85;background:rgba(0,0,0,.78);backdrop-filter:blur(14px);display:flex;align-items:center;justify-content:center;padding:12px;box-sizing:border-box;">
+    <div class="album-modal-card glass-surface w-full max-w-[920px] max-h-[90vh] overflow-hidden flex flex-col rounded-2xl border border-white/10 shadow-2xl box-border bg-[#0d0f16]/95">
+        <!-- Header -->
+        <div class="p-3.5 sm:p-5 flex justify-between items-center gap-3 border-b border-white/10 bg-white/[0.02]">
+            <div class="flex items-center gap-3 min-w-0">
+                <div id="albumModalThumbWrap" class="w-11 h-11 rounded-xl bg-primary/10 border border-primary/20 overflow-hidden shrink-0 flex items-center justify-center text-primary shadow-sm">
+                    <img id="albumModalThumb" src="/static/logo.svg" alt="" class="w-full h-full object-cover d-none">
+                    <i id="albumModalIcon" class="bi bi-collection-play-fill text-[20px]"></i>
+                </div>
+                <div class="min-w-0">
+                    <div class="flex items-center gap-1.5">
+                        <span id="albumModalBadge" class="text-[10px] font-bold px-2 py-0.5 rounded-full bg-cyan-500/15 border border-cyan-500/30 text-cyan-300 inline-flex items-center gap-1"><i class="bi bi-collection-play-fill"></i> Channel / Playlist</span>
+                        <span id="albumModalPlatform" class="text-[10px] font-mono text-on-surface-variant/80"></span>
+                    </div>
+                    <h3 id="albumModalTitle" class="text-[15px] sm:text-[17px] font-bold text-white mt-0.5 truncate leading-tight">Scanning channel...</h3>
+                    <p id="albumModalCount" class="text-[11px] sm:text-[12px] text-on-surface-variant truncate">Extracting video list with yt-dlp...</p>
+                </div>
             </div>
             <button type="button" id="btnCloseAlbumModal" class="w-8 h-8 rounded-full bg-white/5 hover:bg-white/15 border border-white/10 text-white flex items-center justify-center text-[18px] transition-all shrink-0">&times;</button>
         </div>
-        <div class="p-3 sm:p-4 flex flex-col sm:flex-row justify-between items-stretch sm:items-center gap-2 border-b border-white/10 bg-black/20">
-            <div class="flex items-center gap-2 flex-wrap">
-                <button type="button" id="btnAlbumSelectAll" class="px-3 py-1.5 rounded-full bg-white/5 hover:bg-white/15 border border-white/10 text-white text-[11px] font-semibold flex items-center gap-1 transition-all"><i class="bi bi-check-all"></i> Select All</button>
-                <button type="button" id="btnAlbumDeselectAll" class="px-3 py-1.5 rounded-full bg-white/5 hover:bg-white/15 border border-white/10 text-white text-[11px] font-semibold flex items-center gap-1 transition-all"><i class="bi bi-dash-circle"></i> Deselect</button>
-                <span id="albumSelectedCount" class="text-[11px] text-on-surface-variant font-mono ml-1">0 selected</span>
+
+        <!-- Filter & Batch Action Toolbar -->
+        <div class="p-3 sm:p-3.5 flex flex-col sm:flex-row justify-between items-stretch sm:items-center gap-2.5 border-b border-white/10 bg-black/30">
+            <div class="flex items-center gap-2 flex-wrap min-w-0">
+                <button type="button" id="btnAlbumSelectAll" class="px-3 py-1.5 rounded-xl bg-primary/15 hover:bg-primary/25 border border-primary/30 text-primary text-[11px] font-bold flex items-center gap-1 transition-all"><i class="bi bi-check-all text-[13px]"></i> Select All</button>
+                <button type="button" id="btnAlbumDeselectAll" class="px-3 py-1.5 rounded-xl bg-white/5 hover:bg-white/15 border border-white/10 text-white text-[11px] font-semibold flex items-center gap-1 transition-all"><i class="bi bi-dash-circle"></i> Deselect</button>
+                <span id="albumSelectedCount" class="text-[11px] text-on-surface-variant font-mono px-2 py-1 rounded-lg bg-white/5 border border-white/5">0 selected</span>
             </div>
-            <div class="flex items-center gap-2 self-end sm:self-auto">
-                <label for="albumFormatSelect" class="text-[11px] text-on-surface-variant font-semibold">Quality:</label>
-                <select id="albumFormatSelect" class="bg-black/60 border border-white/15 rounded-lg px-2.5 py-1 text-white text-[12px] focus:outline-none">
-                    <option value="best" selected>Auto (Best)</option>
-                    <option value="1080p">1080p FHD</option>
-                    <option value="720p">720p HD</option>
-                    <option value="480p">480p SD</option>
-                    <option value="audio_mp3">Audio MP3</option>
-                    <option value="audio_m4a">Audio M4A</option>
-                </select>
+
+            <div class="flex items-center gap-2 justify-between sm:justify-end">
+                <div class="relative flex-1 sm:w-48 group">
+                    <span class="material-symbols-outlined absolute left-2.5 top-2 text-on-surface-variant text-[16px]">search</span>
+                    <input id="albumFilterInput" type="text" placeholder="Filter videos..." class="w-full bg-black/60 border border-white/15 rounded-lg py-1 pl-8 pr-2.5 text-[11px] text-white placeholder:text-on-surface-variant/50 focus:outline-none focus:border-primary/50">
+                </div>
+                <div class="flex items-center gap-1.5 shrink-0">
+                    <label for="albumFormatSelect" class="text-[11px] text-on-surface-variant font-semibold hidden xs:inline">Quality:</label>
+                    <select id="albumFormatSelect" class="bg-black/60 border border-white/15 rounded-lg px-2.5 py-1 text-white text-[11px] font-medium focus:outline-none">
+                        <option value="best" selected>Auto (Best)</option>
+                        <option value="1080p">1080p FHD</option>
+                        <option value="720p">720p HD</option>
+                        <option value="480p">480p SD</option>
+                        <option value="audio_mp3">Audio MP3</option>
+                        <option value="audio_m4a">Audio M4A</option>
+                    </select>
+                </div>
             </div>
         </div>
-        <div id="albumModalLoading" style="padding:40px 16px;display:flex;flex-direction:column;align-items:center;gap:14px;">
-            <div style="width:32px;height:32px;border:3px solid rgba(255,255,255,.15);border-top-color:#a078ff;border-radius:50%;animation:spin 0.8s linear infinite;"></div>
-            <p class="text-[13px] text-on-surface-variant">Extracting tracks & thumbnails...</p>
+
+        <!-- Loading State -->
+        <div id="albumModalLoading" style="padding:50px 16px;display:flex;flex-direction:column;align-items:center;gap:14px;">
+            <div style="width:36px;height:36px;border:3px solid rgba(255,255,255,.15);border-top-color:#a078ff;border-radius:50%;animation:spin 0.8s linear infinite;"></div>
+            <p class="text-[13px] text-on-surface-variant font-medium">Scanning channel videos, metadata & thumbnails...</p>
         </div>
-        <div id="albumItemsGrid" class="d-none p-3 sm:p-4 grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2.5 overflow-y-auto max-h-[55vh]"></div>
-        <div class="p-3 sm:p-4 flex justify-end gap-2 border-t border-white/10 bg-black/30">
-            <button type="button" id="btnCancelAlbumModal" class="px-4 py-2 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-white text-[12px] font-semibold transition-all">Cancel</button>
-            <button type="button" id="btnDownloadAlbumSelected" class="btn-primary-glow px-5 py-2 rounded-xl text-[12px] font-bold flex items-center gap-1.5 transition-all">
-                <i class="bi bi-cloud-arrow-down-fill"></i> <span id="btnDownloadAlbumText">Download Selected (0)</span>
+
+        <!-- Video Picker Grid -->
+        <div id="albumItemsGrid" class="d-none p-3 sm:p-4 grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3 overflow-y-auto max-h-[54vh]"></div>
+
+        <!-- Load More Batch Controls -->
+        <div id="albumLoadMoreWrap" class="d-none p-2.5 sm:p-3 flex justify-center items-center border-t border-white/5 bg-black/20">
+            <button type="button" id="btnAlbumLoadMore" class="px-5 py-2 rounded-xl bg-primary/10 hover:bg-primary/20 border border-primary/30 text-primary text-[12px] font-bold flex items-center gap-2 transition-all shadow-sm">
+                <span id="btnAlbumLoadMoreIcon" class="material-symbols-outlined text-[18px]">expand_more</span>
+                <span id="btnAlbumLoadMoreText">Load More Videos (+24)</span>
             </button>
+        </div>
+
+        <!-- Footer -->
+        <div class="p-3 sm:p-4 flex justify-between items-center gap-2 border-t border-white/10 bg-black/40">
+            <span id="albumModalFooterHint" class="text-[11px] text-on-surface-variant hidden sm:inline font-mono">Tip: Click individual cards to toggle selection</span>
+            <div class="flex items-center gap-2 ml-auto">
+                <button type="button" id="btnCancelAlbumModal" class="px-4 py-2 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-white text-[12px] font-semibold transition-all">Cancel</button>
+                <button type="button" id="btnDownloadAlbumSelected" class="btn-primary-glow px-5 py-2 rounded-xl text-[12px] font-bold flex items-center gap-1.5 transition-all">
+                    <i class="bi bi-cloud-arrow-down-fill"></i> <span id="btnDownloadAlbumText">Download Selected (0)</span>
+                </button>
+            </div>
         </div>
     </div>
 </div>
@@ -1641,10 +1684,44 @@ es.onmessage = (e) => console.log(JSON.parse(e.data));</pre>
         if (!raw) return [];
         return raw.split(/\n+/).map(function(u) { return u.trim(); }).filter(function(u) { return u.length > 0; });
     }
+    function formatBytes(bytes) {
+        if (!bytes || bytes <= 0) return '0 B';
+        var k = 1024;
+        var sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+        var i = Math.floor(Math.log(bytes) / Math.log(k));
+        if (i >= sizes.length) i = sizes.length - 1;
+        return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+    }
+
+    function formatDuration(sec) {
+        if (!sec || isNaN(sec) || sec <= 0) return '';
+        var s = Math.floor(sec);
+        var m = Math.floor(s / 60);
+        var r = s % 60;
+        if (m >= 60) {
+            var h = Math.floor(m / 60);
+            m = m % 60;
+            return h + ':' + (m < 10 ? '0' : '') + m + ':' + (r < 10 ? '0' : '') + r;
+        }
+        return m + ':' + (r < 10 ? '0' : '') + r;
+    }
 
     function isPlaylistUrl(url) {
         if (!url) return false;
-        var u = url.toLowerCase();
+        var u = url.toLowerCase().trim();
+        // TikTok channel / creator profile (e.g. tiktok.com/@username without /video/ or /photo/)
+        if (u.indexOf('tiktok.com/@') !== -1 && u.indexOf('/video/') === -1 && u.indexOf('/photo/') === -1) {
+            return true;
+        }
+        // YouTube channel / user / playlist
+        if (u.indexOf('youtube.com/@') !== -1 || u.indexOf('youtube.com/channel/') !== -1 || u.indexOf('youtube.com/c/') !== -1 || u.indexOf('youtube.com/user/') !== -1 || u.indexOf('youtu.be/@') !== -1) {
+            return true;
+        }
+        // SoundCloud sets / users
+        if (u.indexOf('soundcloud.com/') !== -1 && (u.indexOf('/sets/') !== -1 || u.indexOf('/albums/') !== -1)) {
+            return true;
+        }
+        // Standard playlist & album tokens
         return u.indexOf('list=') !== -1 || u.indexOf('/playlist') !== -1 || u.indexOf('/album/') !== -1 || u.indexOf('/sets/') !== -1 || u.indexOf('/collection/') !== -1 || u.indexOf('pixiv.net') !== -1 || u.indexOf('imgur.com/a/') !== -1 || u.indexOf('imgur.com/gallery/') !== -1 || u.indexOf('pixeldrain.com/l/') !== -1 || u.indexOf('archive.org/details/') !== -1;
     }
 
@@ -1908,8 +1985,8 @@ es.onmessage = (e) => console.log(JSON.parse(e.data));</pre>
     }
 
     // Submit / Enqueue handling
-    function enqueueUrls(urls, format) {
-        if (urls.length === 0) return;
+    function enqueueUrls(urls, format, items, playlistMeta) {
+        if (!urls || urls.length === 0) return;
         submitBtn.disabled = true;
         submitBtnIcon.textContent = 'sync';
         submitBtnIcon.style.animation = 'spin 1s linear infinite';
@@ -1917,6 +1994,16 @@ es.onmessage = (e) => console.log(JSON.parse(e.data));</pre>
 
         var cookies = localStorage.getItem('kv_user_cookies') || '';
         var rateLimit = localStorage.getItem('kv_speed_limit') || '';
+        var payload = {
+            urls: urls,
+            items: items || [],
+            format: format,
+            cookies: cookies,
+            rateLimit: rateLimit,
+            playlistTitle: (playlistMeta && playlistMeta.title) || '',
+            channel: (playlistMeta && (playlistMeta.channel || playlistMeta.uploader)) || ''
+        };
+
         var xhr = new XMLHttpRequest();
         xhr.open('POST', '/api/queue/add', true);
         xhr.setRequestHeader('Content-Type', 'application/json');
@@ -1947,13 +2034,11 @@ es.onmessage = (e) => console.log(JSON.parse(e.data));</pre>
             submitBtnText.textContent = currentTheme === 'matrix' ? '[ ENQUEUE ]' : 'Download';
             showToast('Network error while enqueuing', 'error');
         };
-        xhr.send(JSON.stringify({ urls: urls, format: format, cookies: cookies, rateLimit: rateLimit }));
+        xhr.send(JSON.stringify(payload));
     }
 
     submitBtn.addEventListener('click', function() {
         var urls = getUrls();
-        if (urls.length === 0) {
-        }
         if (urls.length === 0) {
             urlInput.focus();
             showToast('Please enter at least one URL', 'warning');
@@ -1973,60 +2058,282 @@ es.onmessage = (e) => console.log(JSON.parse(e.data));</pre>
         }
     });
 
-    // Album Modal Logic
+    // =========================================================================
+    // CHANNEL / PLAYLIST / ALBUM PICKER MODAL (LIVE STREAMING & STOP-AND-SHOW)
+    // =========================================================================
+    var currentAlbumUrl = '';
+    var currentAlbumScan = null;
+    var currentAlbumEntries = [];
+    var selectedAlbumIndices = new Set();
+    var streamedEntries = [];
+    var streamedMeta = null;
+    var scanEventSource = null;
+    var scanAbortController = null;
+
+    var albumFilterInput = document.getElementById('albumFilterInput');
+    var albumModalThumbWrap = document.getElementById('albumModalThumbWrap');
+    var albumModalThumb = document.getElementById('albumModalThumb');
+    var albumModalIcon = document.getElementById('albumModalIcon');
+    var albumModalBadge = document.getElementById('albumModalBadge');
+    var albumModalPlatform = document.getElementById('albumModalPlatform');
+    var albumLoadMoreWrap = document.getElementById('albumLoadMoreWrap');
+
     function openAlbumModal(url) {
+        var cleanUrl = (url || '').trim();
+        if (cleanUrl.indexOf('tiktok.com/@') !== -1 && cleanUrl.indexOf('?') !== -1) {
+            cleanUrl = cleanUrl.split('?')[0];
+        }
+
+        currentAlbumUrl = cleanUrl;
+        currentAlbumEntries = [];
+        selectedAlbumIndices.clear();
+        streamedEntries = [];
+        streamedMeta = null;
+
+        if (scanAbortController) {
+            scanAbortController.abort();
+            scanAbortController = null;
+        }
+        if (scanEventSource) {
+            scanEventSource.close();
+            scanEventSource = null;
+        }
+
         albumModal.classList.remove('d-none');
         albumModal.style.display = 'flex';
+        
+        var plat = detectPlatform(cleanUrl) || { name: 'Media Channel', icon: 'bi-collection-play-fill', color: '#a078ff' };
+        if (albumModalBadge) {
+            var badgeText = cleanUrl.indexOf('tiktok.com/@') !== -1 ? 'TikTok Creator Channel' : (cleanUrl.indexOf('youtube.com') !== -1 ? 'YouTube Playlist / Channel' : 'Album / Playlist');
+            albumModalBadge.innerHTML = '<i class="bi ' + plat.icon + '"></i> ' + badgeText;
+        }
+        if (albumModalPlatform) albumModalPlatform.textContent = '• ' + plat.name;
+        if (albumModalThumb) albumModalThumb.classList.add('d-none');
+        if (albumModalIcon) {
+            albumModalIcon.className = 'bi ' + plat.icon + ' text-[20px]';
+            albumModalIcon.classList.remove('d-none');
+        }
+
+        albumModalTitle.textContent = 'Scanning ' + (plat.name || 'channel') + '...';
+        albumModalCount.textContent = 'Discovering videos with yt-dlp...';
+        if (albumFilterInput) albumFilterInput.value = '';
+        if (albumLoadMoreWrap) {
+            albumLoadMoreWrap.classList.add('d-none');
+            albumLoadMoreWrap.style.display = 'none';
+        }
+        updateAlbumSelectionCount();
+
+        // Render Loading State with Live Video Counter & Stop Button
         albumModalLoading.classList.remove('d-none');
         albumModalLoading.style.display = 'flex';
         albumItemsGrid.classList.add('d-none');
         albumItemsGrid.style.display = 'none';
 
-        albumModalTitle.textContent = 'Inspecting album metadata...';
-        albumModalCount.textContent = 'Scanning items with yt-dlp...';
-        currentAlbumEntries = [];
-        updateAlbumSelectionCount();
+        albumModalLoading.innerHTML = '<div style="display:flex;flex-direction:column;align-items:center;gap:16px;padding:32px 16px;text-align:center;max-width:440px;margin:0 auto;">' +
+            '<div style="position:relative;display:flex;align-items:center;justify-content:center;">' +
+            '<div style="width:54px;height:54px;border:3px solid rgba(255,255,255,.12);border-top-color:#a078ff;border-radius:50%;animation:spin 0.8s linear infinite;"></div>' +
+            '<i class="bi ' + plat.icon + '" style="position:absolute;font-size:20px;color:#a078ff;"></i>' +
+            '</div>' +
+            '<div style="display:flex;flex-direction:column;align-items:center;gap:4px;">' +
+            '<div style="display:flex;align-items:center;gap:8px;">' +
+            '<span id="albumLiveFoundCount" style="font-size:40px;font-weight:900;color:#fff;font-family:monospace;line-height:1;">0</span>' +
+            '<span style="font-size:12px;font-weight:700;color:#a078ff;padding:4px 12px;border-radius:999px;background:rgba(160,120,255,.15);border:1px solid rgba(160,120,255,.3);text-transform:uppercase;letter-spacing:.05em;">Videos Found</span>' +
+            '</div>' +
+            '<p id="albumLiveStatusText" style="font-size:13px;color:#94a3b8;font-weight:500;margin-top:4px;">Connecting & discovering video list...</p>' +
+            '</div>' +
+            '<div style="display:flex;align-items:center;gap:10px;margin-top:8px;justify-content:center;flex-wrap:wrap;">' +
+            '<button type="button" id="btnStopAndShowVideos" class="btn-primary-glow" style="padding:10px 22px;border-radius:12px;font-size:12px;font-weight:700;display:flex;align-items:center;gap:6px;cursor:pointer;">' +
+            '<i class="bi bi-stop-circle-fill text-rose-300 text-[15px]"></i> <span id="btnStopAndShowText">Stop & Show Videos (0)</span>' +
+            '</button>' +
+            '<button type="button" id="btnCancelScanModal" style="padding:10px 18px;border-radius:12px;background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.1);color:#fff;font-size:12px;font-weight:600;cursor:pointer;">Cancel</button>' +
+            '</div>' +
+            '</div>';
+
+        var liveCountEl = document.getElementById('albumLiveFoundCount');
+        var liveStatusEl = document.getElementById('albumLiveStatusText');
+        var stopBtn = document.getElementById('btnStopAndShowVideos');
+        var stopBtnText = document.getElementById('btnStopAndShowText');
+        var cancelBtn = document.getElementById('btnCancelScanModal');
+
+        if (cancelBtn) cancelBtn.addEventListener('click', closeAlbumModal);
+
+        function stopAndShowVideos() {
+            if (scanAbortController) {
+                scanAbortController.abort();
+                scanAbortController = null;
+            }
+            if (scanEventSource) {
+                scanEventSource.close();
+                scanEventSource = null;
+            }
+            if (streamedEntries.length === 0) {
+                showToast('Scanning in progress... Please wait a moment for initial videos', 'info');
+                return;
+            }
+            showDiscoveredVideos();
+        }
+
+        if (stopBtn) stopBtn.addEventListener('click', stopAndShowVideos);
+
+        function showDiscoveredVideos() {
+            currentAlbumEntries = streamedEntries.slice();
+            selectedAlbumIndices.clear();
+            for (var i = 0; i < currentAlbumEntries.length; i++) {
+                selectedAlbumIndices.add(i);
+            }
+
+            if (streamedMeta) {
+                if (streamedMeta.title) albumModalTitle.textContent = streamedMeta.title;
+                if (streamedMeta.thumbnail && albumModalThumb) {
+                    albumModalThumb.src = streamedMeta.thumbnail;
+                    albumModalThumb.classList.remove('d-none');
+                    if (albumModalIcon) albumModalIcon.classList.add('d-none');
+                }
+            }
+            albumModalCount.textContent = currentAlbumEntries.length + ' videos ready to download';
+
+            renderAlbumEntries(currentAlbumEntries);
+            albumModalLoading.classList.add('d-none');
+            albumModalLoading.style.display = 'none';
+            albumItemsGrid.classList.remove('d-none');
+            albumItemsGrid.style.display = 'grid';
+            updateAlbumSelectionCount();
+        }
+
+        function handleStreamMessage(msg) {
+            if (msg.type === 'meta') {
+                streamedMeta = msg;
+                if (msg.title) albumModalTitle.textContent = msg.title;
+                if (liveStatusEl) liveStatusEl.textContent = 'Discovering videos from ' + (msg.title || plat.name) + '...';
+            } else if (msg.type === 'item' && msg.entry) {
+                streamedEntries.push(msg.entry);
+                var count = msg.count || streamedEntries.length;
+                if (liveCountEl) liveCountEl.textContent = count;
+                if (stopBtnText) stopBtnText.textContent = 'Stop & Show Videos (' + count + ')';
+                if (liveStatusEl) liveStatusEl.textContent = 'Found ' + count + ' videos with covers...';
+            } else if (msg.type === 'done') {
+                if (streamedEntries.length > 0) {
+                    showDiscoveredVideos();
+                } else {
+                    renderScanError(cleanUrl, plat, msg.error || 'No videos found');
+                }
+            }
+        }
 
         var cookies = localStorage.getItem('kv_user_cookies') || '';
-        var scanUrl = '/api/scan?url=' + encodeURIComponent(url);
-        if (cookies) scanUrl += '&cookies=' + encodeURIComponent(cookies);
+        var sseUrl = '/api/scan/stream?url=' + encodeURIComponent(cleanUrl);
+        if (cookies) sseUrl += '&cookies=' + encodeURIComponent(cookies);
 
-        var xhr = new XMLHttpRequest();
-        xhr.open('GET', scanUrl, true);
-        if (cookies) xhr.setRequestHeader('X-Cookies', cookies);
-        xhr.onload = function() {
-            if (xhr.status === 200) {
-                try {
-                    var res = JSON.parse(xhr.responseText);
-                    var scan = res.scan;
-                    if (scan && scan.entries && scan.entries.length > 0) {
-                        currentAlbumEntries = scan.entries;
-                        albumModalTitle.textContent = scan.title || 'Playlist / Album';
-                        albumModalCount.textContent = scan.entries.length + ' tracks / items found';
-                        renderAlbumEntries(scan.entries);
-                        albumModalLoading.classList.add('d-none');
-                        albumModalLoading.style.display = 'none';
-                        albumItemsGrid.classList.remove('d-none');
-                        albumItemsGrid.style.display = 'grid';
-                        updateAlbumSelectionCount();
-                        return;
+        if (window.AbortController && window.ReadableStream) {
+            scanAbortController = new AbortController();
+            fetch(sseUrl, { signal: scanAbortController.signal })
+                .then(function(response) {
+                    if (!response.body) throw new Error('ReadableStream not supported');
+                    var reader = response.body.getReader();
+                    var decoder = new TextDecoder();
+                    var buffer = '';
+
+                    function readChunk() {
+                        reader.read().then(function(result) {
+                            if (result.done) {
+                                if (streamedEntries.length > 0) {
+                                    showDiscoveredVideos();
+                                }
+                                return;
+                            }
+                            buffer += decoder.decode(result.value, { stream: true });
+                            var lines = buffer.split('\n');
+                            buffer = lines.pop();
+
+                            for (var i = 0; i < lines.length; i++) {
+                                var line = lines[i].trim();
+                                if (line.startsWith('data:')) {
+                                    var jsonStr = line.substring(5).trim();
+                                    if (jsonStr) {
+                                        try {
+                                            var msg = JSON.parse(jsonStr);
+                                            handleStreamMessage(msg);
+                                        } catch (err) { console.error(err); }
+                                    }
+                                }
+                            }
+                            readChunk();
+                        }).catch(function(err) {
+                            if (err.name === 'AbortError') return;
+                            if (streamedEntries.length > 0) {
+                                showDiscoveredVideos();
+                            } else {
+                                renderScanError(cleanUrl, plat, 'Scan interrupted');
+                            }
+                        });
                     }
+                    readChunk();
+                })
+                .catch(function(err) {
+                    if (err.name === 'AbortError') return;
+                    if (streamedEntries.length > 0) {
+                        showDiscoveredVideos();
+                    } else {
+                        renderScanError(cleanUrl, plat, err.message || 'Stream error');
+                    }
+                });
+        } else {
+            scanEventSource = new EventSource(sseUrl);
+            scanEventSource.onmessage = function(event) {
+                if (!event.data) return;
+                try {
+                    var msg = JSON.parse(event.data);
+                    handleStreamMessage(msg);
                 } catch (e) { console.error(e); }
-            }
+            };
+            scanEventSource.onerror = function() {
+                if (scanEventSource) {
+                    scanEventSource.close();
+                    scanEventSource = null;
+                }
+                if (streamedEntries.length > 0) {
+                    showDiscoveredVideos();
+                } else {
+                    renderScanError(cleanUrl, plat, 'Scan connection closed');
+                }
+            };
+        }
+    }
+
+    function renderScanError(cleanUrl, plat, errorMsg) {
+        albumModalLoading.innerHTML = '<div class="flex flex-col items-center gap-3 text-center py-6">' +
+            '<i class="bi bi-exclamation-triangle-fill text-amber-400 text-[32px]"></i>' +
+            '<p class="text-[13px] text-white font-medium">Could not extract video list from this channel.</p>' +
+            '<p class="text-[11px] text-on-surface-variant max-w-sm">' + escapeHtml(errorMsg || 'The creator channel might have privacy restrictions or yt-dlp is rate limited.') + '</p>' +
+            '<div class="flex items-center gap-2 mt-2">' +
+            '<button type="button" class="btn-retry-scan btn-primary-glow px-4 py-1.5 rounded-xl text-[11px] font-bold">Retry Scan</button>' +
+            '<button type="button" class="btn-force-dl px-4 py-1.5 rounded-xl bg-white/10 hover:bg-white/15 text-white text-[11px] font-semibold">Force Download URL</button>' +
+            '</div>' +
+            '</div>';
+        var retryBtn = albumModalLoading.querySelector('.btn-retry-scan');
+        if (retryBtn) retryBtn.addEventListener('click', function() { openAlbumModal(cleanUrl); });
+        var forceBtn = albumModalLoading.querySelector('.btn-force-dl');
+        if (forceBtn) forceBtn.addEventListener('click', function() {
             closeAlbumModal();
-            enqueueUrls([url], selectedFormat);
-        };
-        xhr.onerror = function() {
-            closeAlbumModal();
-            enqueueUrls([url], selectedFormat);
-        };
-        xhr.send();
+            enqueueUrls([cleanUrl], selectedFormat);
+        });
     }
 
     function closeAlbumModal() {
+        if (scanAbortController) {
+            scanAbortController.abort();
+            scanAbortController = null;
+        }
+        if (scanEventSource) {
+            scanEventSource.close();
+            scanEventSource = null;
+        }
         albumModal.classList.add('d-none');
         albumModal.style.display = 'none';
         currentAlbumEntries = [];
+        selectedAlbumIndices.clear();
+        streamedEntries = [];
+        streamedMeta = null;
     }
 
     if (btnCloseAlbumModal) btnCloseAlbumModal.addEventListener('click', closeAlbumModal);
@@ -2035,11 +2342,22 @@ es.onmessage = (e) => console.log(JSON.parse(e.data));</pre>
 
     function renderAlbumEntries(entries) {
         albumItemsGrid.innerHTML = '';
+        var query = albumFilterInput ? albumFilterInput.value.trim().toLowerCase() : '';
+
         entries.forEach(function(item, idx) {
+            var title = item.title || ('Video #' + (idx + 1));
+            if (query && title.toLowerCase().indexOf(query) === -1 && (item.id || '').toLowerCase().indexOf(query) === -1) {
+                return;
+            }
+
+            var isChecked = selectedAlbumIndices.has(idx);
             var card = document.createElement('div');
             card.className = 'album-item-card';
             card.setAttribute('data-idx', idx);
-            card.style.cssText = 'background:rgba(255,255,255,.05);border:1px solid rgba(160,120,255,.3);border-radius:12px;overflow:hidden;cursor:pointer;transition:.2s;display:flex;flex-direction:column;min-height:175px;';
+            card.style.cssText = isChecked 
+                ? 'background:rgba(160,120,255,.1);border:1px solid rgba(160,120,255,.45);border-radius:14px;overflow:hidden;cursor:pointer;transition:all .18s ease;display:flex;flex-direction:column;min-height:185px;'
+                : 'background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.07);border-radius:14px;overflow:hidden;cursor:pointer;transition:all .18s ease;display:flex;flex-direction:column;min-height:185px;';
+            
             var thumb = item.thumbnail || '';
             if (!thumb && item.thumbnails && item.thumbnails.length > 0) {
                 thumb = item.thumbnails[item.thumbnails.length - 1].url;
@@ -2055,73 +2373,119 @@ es.onmessage = (e) => console.log(JSON.parse(e.data));</pre>
                 }
             }
             if (!thumb) thumb = '/static/logo.svg';
-            card.innerHTML = '<div style="position:relative;width:100%;aspect-ratio:16/9;background:#0d0e12;overflow:hidden;flex-shrink:0;">' +
+
+            var durHtml = '';
+            if (item.duration && item.duration > 0) {
+                durHtml = '<span style="position:absolute;bottom:6px;right:6px;background:rgba(0,0,0,.8);backdrop-filter:blur(6px);padding:2px 6px;border-radius:6px;font-size:10px;font-weight:700;color:#38bdf8;font-family:monospace;">' + formatDuration(item.duration) + '</span>';
+            }
+
+            var isTikTok = (item.url && item.url.indexOf('tiktok.com') !== -1) || (currentAlbumScan && currentAlbumScan.title && currentAlbumScan.title.indexOf('TikTok') !== -1);
+            var aspectStyle = isTikTok ? 'aspect-ratio:16/10;' : 'aspect-ratio:16/9;';
+
+            card.innerHTML = '<div style="position:relative;width:100%;' + aspectStyle + 'background:#090b10;overflow:hidden;flex-shrink:0;">' +
                 '<img src="' + escapeHtml(thumb) + '" alt="" style="width:100%;height:100%;object-fit:cover;display:block;" loading="lazy" onerror="this.src=\'/static/logo.svg\'">' +
-                '<span style="position:absolute;bottom:6px;left:6px;background:rgba(0,0,0,.75);backdrop-filter:blur(6px);padding:2px 6px;border-radius:6px;font-size:10px;font-weight:700;color:#fff;font-family:monospace;">#' + (idx + 1) + '</span>' +
-                '<div style="position:absolute;top:6px;right:6px;width:22px;height:22px;border-radius:50%;background:#a078ff;display:flex;align-items:center;justify-content:center;box-shadow:0 2px 6px rgba(0,0,0,.5);">' +
-                '<input type="checkbox" checked data-idx="' + idx + '" style="accent-color:#a078ff;width:14px;height:14px;cursor:pointer;">' +
+                '<span style="position:absolute;bottom:6px;left:6px;background:rgba(0,0,0,.8);backdrop-filter:blur(6px);padding:2px 6px;border-radius:6px;font-size:10px;font-weight:700;color:#fff;font-family:monospace;">#' + (idx + 1) + '</span>' +
+                durHtml +
+                '<div style="position:absolute;top:7px;right:7px;width:24px;height:24px;border-radius:50%;background:#a078ff;display:flex;align-items:center;justify-content:center;box-shadow:0 2px 8px rgba(0,0,0,.6);">' +
+                '<input type="checkbox" ' + (isChecked ? 'checked' : '') + ' data-idx="' + idx + '" style="accent-color:#a078ff;width:15px;height:15px;cursor:pointer;">' +
                 '</div>' +
                 '</div>' +
-                '<div style="padding:10px;flex:1;display:flex;flex-direction:column;justify-content:center;">' +
-                '<h5 style="font-size:12px;font-weight:600;color:#e2e8f0;line-height:1.35;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;" title="' + escapeHtml(item.title) + '">' + escapeHtml(item.title) + '</h5>' +
+                '<div style="padding:10px 12px;flex:1;display:flex;flex-direction:column;justify-content:space-between;gap:4px;">' +
+                '<h5 style="font-size:12px;font-weight:600;color:#f1f5f9;line-height:1.35;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;" title="' + escapeHtml(title) + '">' + escapeHtml(title) + '</h5>' +
+                (item.uploader ? '<span style="font-size:10px;color:#94a3b8;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">@' + escapeHtml(item.uploader) + '</span>' : '') +
                 '</div>';
 
             card.addEventListener('click', function(e) {
                 if (e.target.tagName !== 'INPUT') {
                     var chk = card.querySelector('input[type=checkbox]');
-                    chk.checked = !chk.checked;
+                    if (chk) chk.checked = !chk.checked;
                 }
-                var checked = card.querySelector('input[type=checkbox]').checked;
-                card.style.borderColor = checked ? 'rgba(160,120,255,.35)' : 'rgba(255,255,255,.06)';
-                card.style.background = checked ? 'rgba(160,120,255,.08)' : 'rgba(255,255,255,.04)';
+                var chkEl = card.querySelector('input[type=checkbox]');
+                var checked = chkEl ? chkEl.checked : false;
+                if (checked) {
+                    selectedAlbumIndices.add(idx);
+                } else {
+                    selectedAlbumIndices.delete(idx);
+                }
+                card.style.borderColor = checked ? 'rgba(160,120,255,.45)' : 'rgba(255,255,255,.07)';
+                card.style.background = checked ? 'rgba(160,120,255,.1)' : 'rgba(255,255,255,.03)';
                 updateAlbumSelectionCount();
             });
             albumItemsGrid.appendChild(card);
         });
     }
 
+    if (albumFilterInput) {
+        albumFilterInput.addEventListener('input', function() {
+            if (currentAlbumEntries && currentAlbumEntries.length > 0) {
+                renderAlbumEntries(currentAlbumEntries);
+                updateAlbumSelectionCount();
+            }
+        });
+    }
+
     function updateAlbumSelectionCount() {
-        var count = albumItemsGrid.querySelectorAll('input[type=checkbox]:checked').length;
+        var count = selectedAlbumIndices.size;
         if (albumSelectedCount) albumSelectedCount.textContent = count + ' of ' + currentAlbumEntries.length + ' selected';
         if (btnDownloadAlbumText) btnDownloadAlbumText.textContent = 'Download Selected (' + count + ')';
         if (btnDownloadAlbumSelected) btnDownloadAlbumSelected.disabled = (count === 0);
     }
 
     if (btnAlbumSelectAll) btnAlbumSelectAll.addEventListener('click', function() {
+        for (var i = 0; i < currentAlbumEntries.length; i++) {
+            selectedAlbumIndices.add(i);
+        }
         albumItemsGrid.querySelectorAll('.album-item-card').forEach(function(c) {
-            c.style.borderColor = 'rgba(160,120,255,.35)';
-            c.style.background = 'rgba(160,120,255,.08)';
-            c.querySelector('input[type=checkbox]').checked = true;
+            c.style.borderColor = 'rgba(160,120,255,.45)';
+            c.style.background = 'rgba(160,120,255,.1)';
+            var chk = c.querySelector('input[type=checkbox]');
+            if (chk) chk.checked = true;
         });
         updateAlbumSelectionCount();
     });
 
     if (btnAlbumDeselectAll) btnAlbumDeselectAll.addEventListener('click', function() {
+        selectedAlbumIndices.clear();
         albumItemsGrid.querySelectorAll('.album-item-card').forEach(function(c) {
-            c.style.borderColor = 'rgba(255,255,255,.06)';
-            c.style.background = 'rgba(255,255,255,.04)';
-            c.querySelector('input[type=checkbox]').checked = false;
+            c.style.borderColor = 'rgba(255,255,255,.07)';
+            c.style.background = 'rgba(255,255,255,.03)';
+            var chk = c.querySelector('input[type=checkbox]');
+            if (chk) chk.checked = false;
         });
         updateAlbumSelectionCount();
     });
 
     if (btnDownloadAlbumSelected) btnDownloadAlbumSelected.addEventListener('click', function() {
         var urls = [];
-        albumItemsGrid.querySelectorAll('input[type=checkbox]:checked').forEach(function(chk) {
-            var idx = parseInt(chk.getAttribute('data-idx'), 10);
-            if (currentAlbumEntries[idx] && currentAlbumEntries[idx].url) {
-                urls.push(currentAlbumEntries[idx].url);
+        var items = [];
+        selectedAlbumIndices.forEach(function(idx) {
+            var entry = currentAlbumEntries[idx];
+            if (entry && (entry.url || entry.id)) {
+                var targetUrl = entry.url || entry.id;
+                urls.push(targetUrl);
+                var thumb = entry.thumbnail || (entry.thumbnails && entry.thumbnails.length ? entry.thumbnails[entry.thumbnails.length - 1].url : '');
+                items.push({
+                    url: targetUrl,
+                    title: entry.title,
+                    thumbnail: thumb,
+                    uploader: entry.uploader || (currentAlbumScan && currentAlbumScan.uploader) || '',
+                    channel: entry.channel || (currentAlbumScan && currentAlbumScan.channel) || ''
+                });
             }
         });
         if (urls.length === 0) {
-            showToast('Select at least 1 item', 'warning');
+            showToast('Select at least 1 video', 'warning');
             return;
         }
         var fmt = albumFormatSelect.value || selectedFormat;
+        var pMeta = {
+            title: (currentAlbumScan && currentAlbumScan.title) || '',
+            channel: (currentAlbumScan && (currentAlbumScan.channel || currentAlbumScan.uploader)) || ''
+        };
         closeAlbumModal();
         urlInput.value = '';
         updateInputDetection();
-        enqueueUrls(urls, fmt);
+        enqueueUrls(urls, fmt, items, pMeta);
     });
 
     // Cookie Modal Logic
@@ -2742,12 +3106,152 @@ es.onmessage = (e) => console.log(JSON.parse(e.data));</pre>
 
         if (historyList) renderTaskGrid(historyList, completedList, currentHistoryViewMode, true);
 
+        // Render Playlists & Channel Collections
+        renderPlaylists();
+
         // Render Queues
         if (queueList) {
             var activeQueueList = all.filter(function(t) { return t.status === 'downloading' || t.status === 'queued'; });
             renderTaskGrid(queueList, activeQueueList, 'standard', false);
         }
     }
+
+    function renderPlaylists() {
+        var container = document.getElementById('playlistsContainer');
+        if (!container) return;
+        var all = Object.values(tasksMap);
+        var completedList = all.filter(function(t) { return t.status === 'completed'; });
+
+        // Group completed items by collection/channel/playlist
+        var groups = {};
+        completedList.forEach(function(t) {
+            var groupKey = '';
+            var groupTitle = '';
+            var channelName = t.channel || t.uploader || '';
+
+            if (t.playlistTitle) {
+                groupKey = 'pl:' + t.playlistTitle;
+                groupTitle = t.playlistTitle;
+            } else if (t.channel) {
+                groupKey = 'ch:' + t.channel;
+                groupTitle = t.channel + ' (Channel)';
+            } else if (t.uploader) {
+                groupKey = 'up:' + t.uploader;
+                groupTitle = '@' + t.uploader + ' (Creator)';
+            } else if (t.url) {
+                var ttM = t.url.match(/tiktok\.com\/@([a-zA-Z0-9_.]+)/);
+                if (ttM && ttM[1]) {
+                    groupKey = 'tt:@' + ttM[1];
+                    groupTitle = '@' + ttM[1] + ' (TikTok)';
+                    channelName = '@' + ttM[1];
+                }
+            }
+
+            if (!groupKey) {
+                groupKey = 'single:media';
+                groupTitle = 'Individual Downloads';
+            }
+
+            if (!groups[groupKey]) {
+                groups[groupKey] = {
+                    key: groupKey,
+                    title: groupTitle,
+                    channel: channelName,
+                    items: [],
+                    totalBytes: 0,
+                    platform: detectPlatform(t.url) || { name: 'Media', icon: 'bi-collection-play-fill', color: '#a078ff' },
+                    thumbnails: []
+                };
+            }
+            groups[groupKey].items.push(t);
+            groups[groupKey].totalBytes += (t.totalBytes || 0);
+            if (t.thumbnail && groups[groupKey].thumbnails.length < 4) {
+                groups[groupKey].thumbnails.push(t.thumbnail);
+            }
+        });
+
+        var groupList = Object.values(groups);
+        if (groupList.length === 0) {
+            container.innerHTML = '<div class="glass-panel p-8 flex flex-col items-center justify-center text-center col-span-full">' +
+                '<div class="w-14 h-14 rounded-2xl bg-primary/10 border border-primary/20 flex items-center justify-center text-primary mb-3">' +
+                '<span class="material-symbols-outlined text-[28px]">playlist_play</span>' +
+                '</div>' +
+                '<h4 class="text-[15px] font-bold text-white">No Channel or Playlist Collections Yet</h4>' +
+                '<p class="text-[12px] text-on-surface-variant mt-1 max-w-md">When you download videos from a TikTok channel (e.g. <code>https://www.tiktok.com/@username</code>), YouTube playlist, or album, they will be organized into collections here with 1-click Play All and batch management.</p>' +
+                '<button type="button" class="btn-primary-glow px-4 py-2 rounded-xl text-[12px] font-bold mt-4 flex items-center gap-1.5" onclick="document.querySelector(\'[data-view=download-center]\').click()"><i class="bi bi-plus-circle-fill"></i> Download Channel or Playlist</button>' +
+                '</div>';
+            return;
+        }
+
+        container.innerHTML = '';
+        groupList.forEach(function(g) {
+            var card = document.createElement('div');
+            card.className = 'glass-panel p-4 rounded-2xl border border-white/10 flex flex-col justify-between gap-3 relative overflow-hidden';
+            
+            // Multi-thumbnail preview header
+            var thumbsHtml = '';
+            if (g.thumbnails.length > 0) {
+                thumbsHtml = '<div class="grid ' + (g.thumbnails.length > 1 ? 'grid-cols-2' : 'grid-cols-1') + ' gap-1 rounded-xl overflow-hidden aspect-video bg-black/40 border border-white/5 relative">';
+                g.thumbnails.slice(0, 4).forEach(function(th) {
+                    thumbsHtml += '<img src="' + escapeHtml(th) + '" class="w-full h-full object-cover" onerror="this.src=\'/static/logo.svg\'">';
+                });
+                thumbsHtml += '<div class="absolute bottom-2 right-2 px-2 py-0.5 rounded-md bg-black/75 backdrop-blur-md text-[10px] font-mono text-cyan-300 font-bold">' + g.items.length + ' Videos</div>';
+                thumbsHtml += '</div>';
+            } else {
+                thumbsHtml = '<div class="w-full aspect-video rounded-xl bg-black/40 border border-white/5 flex items-center justify-center text-on-surface-variant/40"><i class="bi ' + g.platform.icon + ' text-[32px]"></i></div>';
+            }
+
+            var humanSize = formatBytes(g.totalBytes);
+
+            card.innerHTML = thumbsHtml +
+                '<div class="flex flex-col gap-1 min-w-0">' +
+                '<div class="flex items-center gap-1.5">' +
+                '<span class="text-[10px] px-2 py-0.5 rounded-full bg-white/5 text-white font-bold flex items-center gap-1"><i class="bi ' + g.platform.icon + '"></i> ' + g.platform.name + '</span>' +
+                '<span class="text-[10px] text-on-surface-variant font-mono">' + humanSize + '</span>' +
+                '</div>' +
+                '<h4 class="text-[14px] font-bold text-white truncate" title="' + escapeHtml(g.title) + '">' + escapeHtml(g.title) + '</h4>' +
+                (g.channel ? '<p class="text-[11px] text-on-surface-variant truncate">Channel: ' + escapeHtml(g.channel) + '</p>' : '') +
+                '</div>' +
+                '<div class="pt-2 border-t border-white/5 flex items-center justify-between gap-2">' +
+                '<button type="button" class="btn-play-collection btn-primary-glow px-3.5 py-1.5 rounded-xl text-[11px] font-bold flex items-center gap-1.5" data-key="' + escapeHtml(g.key) + '"><i class="bi bi-play-fill text-[14px]"></i> Play All (' + g.items.length + ')</button>' +
+                '<button type="button" class="btn-inspect-collection px-3 py-1.5 rounded-xl bg-white/5 hover:bg-white/10 text-white text-[11px] font-semibold flex items-center gap-1" data-key="' + escapeHtml(g.key) + '"><i class="bi bi-collection"></i> View (' + g.items.length + ')</button>' +
+                '</div>';
+
+            container.appendChild(card);
+        });
+    }
+
+    document.addEventListener('click', function(e) {
+        var playBtn = e.target.closest('.btn-play-collection');
+        if (playBtn) {
+            var key = playBtn.getAttribute('data-key');
+            var all = Object.values(tasksMap).filter(function(t) { return t.status === 'completed' && t.mediaId; });
+            var matched = all.filter(function(t) {
+                return (t.playlistTitle && 'pl:' + t.playlistTitle === key) ||
+                       (t.channel && 'ch:' + t.channel === key) ||
+                       (t.uploader && 'up:' + t.uploader === key) ||
+                       (key.startsWith('tt:') && t.url && t.url.indexOf(key.replace('tt:', '')) !== -1) ||
+                       (key === 'single:media');
+            });
+            if (matched.length > 0) {
+                playMediaItem(matched[0]);
+                showToast('Playing collection (' + matched.length + ' videos)', 'info');
+            }
+            return;
+        }
+
+        var inspectBtn = e.target.closest('.btn-inspect-collection');
+        if (inspectBtn) {
+            var key = inspectBtn.getAttribute('data-key');
+            var cleanKey = key.replace(/^(pl:|ch:|up:|tt:|single:)/, '').replace(/ \(.*\)$/, '');
+            if (historySearch) {
+                historySearch.value = cleanKey === 'media' ? '' : cleanKey;
+                switchView('history');
+                renderTasks();
+            }
+            return;
+        }
+    });
 
     function renderTaskGrid(container, items, viewMode, isHistory) {
         if (!container) return;

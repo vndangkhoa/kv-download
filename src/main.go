@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"path"
 	"path/filepath"
 	"strings"
 	"syscall"
@@ -30,6 +29,7 @@ func main() {
 	router.Get("/api/download", media.FetchMediaApi)
 	router.Get("/api/info", media.FetchMediaInfo)
 	router.Get("/api/scan", media.ScanMediaApi)
+	router.Get("/api/scan/stream", media.StreamScanMediaApi)
 	router.Get("/api/youtube/search", media.YouTubeSearchHandler)
 	router.Get("/api/ytdlp/version", media.YtDlpVersionHandler)
 	router.Post("/api/ytdlp/update", media.YtDlpUpdateHandler)
@@ -189,9 +189,11 @@ func fileServer(r chi.Router, public string, static string) {
 	}
 
 	staticHandler := func(w http.ResponseWriter, r *http.Request) {
-		file := strings.Replace(r.RequestURI, public, "/", 1)
-		if _, err := os.Stat(root + file); os.IsNotExist(err) {
-			http.ServeFile(w, r, path.Join(root, "index.html"))
+		cleanPublic := strings.TrimSuffix(public, "/")
+		filePath := strings.TrimPrefix(r.URL.Path, cleanPublic)
+		fullPath := filepath.Join(root, filePath)
+		if _, err := os.Stat(fullPath); os.IsNotExist(err) {
+			http.NotFound(w, r)
 			return
 		}
 		fs.ServeHTTP(w, r)

@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.0.12] - 2026-09-02
+
+### 🎬 TikTok & YouTube Channel / Playlist Scanner
+- **Live Creator Channel Discovery**: Fast flat-playlist inspection for TikTok creators, YouTube channels, and playlists returning titles, high-resolution covers, durations, view counts, and uploader info.
+- **Progressive SSE Live Streaming (`/api/scan/stream`)**: Real-time item streaming with `--lazy-playlist` and unbuffered I/O.
+- **Live Video Counter**: Animated increasing video counter showing discovered items in real time.
+- **Instant "Stop & Show Videos"**: One-click action to halt channel scanning immediately and open all discovered videos in the selection grid for batch downloading.
+- **Batch Pagination (`/api/scan?start=...&limit=...`)**: Quick-fetch recent videos in batches with a **Load More Videos (+24)** button.
+- **Fault-Tolerant Scraping**: Query parameter sanitization and `--ignore-errors` fault tolerance for creator profiles with >1,000 videos.
+
+### 📚 Channels & Playlists Gallery View
+- **Collection Grouping**: Added a dedicated **Channels, Playlists & Albums** library view grouping completed downloads by channel, creator, and album.
+- **4-Thumbnail Collage Cards**: High-res visual collages with creator handles, total track counts, and one-click **Play All** audio/video playback.
+
+### 🎨 Static Asset & CSS MIME Type Fixes
+- **URL Path Sanitization**: Fixed `staticHandler` in `src/main.go` to properly serve versioned stylesheet assets (`style.css?v=2.4`) with `Content-Type: text/css`.
+- **Google Font Optimization**: Corrected variable font parameter syntax for Material Symbols Outlined.
+
+---
+
 ## [1.0.11] - 2026-09-02
 
 ### 🌐 In-App Media Sniffer & Web Browser Sandbox

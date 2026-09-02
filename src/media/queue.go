@@ -52,9 +52,12 @@ type DownloadTask struct {
 	HumanSize    string     `json:"humanSize"`
 	ErrorMessage string     `json:"errorMessage"`
 	MediaID      string     `json:"mediaId"`
-	MediaName    string     `json:"mediaName"`
-	CreatedAt    time.Time  `json:"createdAt"`
-	CompletedAt  *time.Time `json:"completedAt,omitempty"`
+	MediaName     string     `json:"mediaName"`
+	PlaylistTitle string     `json:"playlistTitle,omitempty"`
+	Channel       string     `json:"channel,omitempty"`
+	Uploader      string     `json:"uploader,omitempty"`
+	CreatedAt     time.Time  `json:"createdAt"`
+	CompletedAt   *time.Time `json:"completedAt,omitempty"`
 
 	cancelFunc context.CancelFunc `json:"-"`
 }
@@ -94,6 +97,10 @@ func (q *QueueManager) AddWithCookies(url string, format string, cookies string)
 }
 
 func (q *QueueManager) AddFull(url string, format string, cookies string, rateLimit string) *DownloadTask {
+	return q.AddFullWithMeta(url, format, cookies, rateLimit, "", "", "", "", "")
+}
+
+func (q *QueueManager) AddFullWithMeta(url string, format string, cookies string, rateLimit string, title string, thumbnail string, playlistTitle string, channel string, uploader string) *DownloadTask {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
@@ -101,28 +108,38 @@ func (q *QueueManager) AddFull(url string, format string, cookies string, rateLi
 		format = "best"
 	}
 
-	var initialThumb string
-	ytRegex := regexp.MustCompile(`(?:youtu\.be/|youtube\.com/(?:watch\?v=|shorts/|embed/))([a-zA-Z0-9_-]{11})`)
-	if m := ytRegex.FindStringSubmatch(url); len(m) > 1 {
-		initialThumb = "https://i.ytimg.com/vi/" + m[1] + "/hqdefault.jpg"
+	initialThumb := thumbnail
+	if initialThumb == "" {
+		ytRegex := regexp.MustCompile(`(?:youtu\.be/|youtube\.com/(?:watch\?v=|shorts/|embed/))([a-zA-Z0-9_-]{11})`)
+		if m := ytRegex.FindStringSubmatch(url); len(m) > 1 {
+			initialThumb = "https://i.ytimg.com/vi/" + m[1] + "/hqdefault.jpg"
+		}
+	}
+
+	taskTitle := title
+	if taskTitle == "" {
+		taskTitle = shortUrl(url)
 	}
 
 	task := &DownloadTask{
-		ID:        uuid.New().String(),
-		URL:       url,
-		Title:     shortUrl(url),
-		Thumbnail: initialThumb,
-		Format:    format,
-		Cookies:   cookies,
-		RateLimit: rateLimit,
-		Status:    StatusQueued,
-		CreatedAt: time.Now(),
+		ID:            uuid.New().String(),
+		URL:           url,
+		Title:         taskTitle,
+		Thumbnail:     initialThumb,
+		Format:        format,
+		Cookies:       cookies,
+		RateLimit:     rateLimit,
+		PlaylistTitle: playlistTitle,
+		Channel:       channel,
+		Uploader:      uploader,
+		Status:        StatusQueued,
+		CreatedAt:     time.Now(),
 	}
 
 	q.tasks[task.ID] = task
 	q.queue = append(q.queue, task.ID)
 
-	log.Info().Msgf("Enqueued task %s for URL %s (format: %s, rateLimit: %s, hasCustomCookies: %t)", task.ID, url, format, rateLimit, cookies != "")
+	log.Info().Msgf("Enqueued task %s for URL %s (title: %s, playlist: %s, channel: %s, format: %s, rateLimit: %s, hasCustomCookies: %t)", task.ID, url, taskTitle, playlistTitle, channel, format, rateLimit, cookies != "")
 
 	q.saveStateLocked()
 	q.broadcastTaskUpdate(task)
@@ -751,12 +768,23 @@ func shortUrl(u string) string {
 // Queue API HTTP Handlers
 
 func QueueAddHandler(w http.ResponseWriter, r *http.Request) {
+	type QueueItemInput struct {
+		URL       string `json:"url"`
+		Title     string `json:"title"`
+		Thumbnail string `json:"thumbnail"`
+		Uploader  string `json:"uploader"`
+		Channel   string `json:"channel"`
+	}
+
 	var body struct {
-		URLs      []string `json:"urls"`
-		URL       string   `json:"url"`
-		Format    string   `json:"format"`
-		Cookies   string   `json:"cookies"`
-		RateLimit string   `json:"rateLimit"`
+		URLs          []string         `json:"urls"`
+		URL           string           `json:"url"`
+		Items         []QueueItemInput `json:"items"`
+		Format        string           `json:"format"`
+		Cookies       string           `json:"cookies"`
+		RateLimit     string           `json:"rateLimit"`
+		PlaylistTitle string           `json:"playlistTitle"`
+		Channel       string           `json:"channel"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -764,23 +792,37 @@ func QueueAddHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	urls := body.URLs
-	if len(urls) == 0 && body.URL != "" {
-		urls = []string{body.URL}
-	}
-
-	if len(urls) == 0 {
-		http.Error(w, "No URLs provided", http.StatusBadRequest)
-		return
-	}
-
-	addedTasks := make([]*DownloadTask, 0, len(urls))
-	for _, u := range urls {
-		u = strings.TrimSpace(u)
-		if u != "" {
-			task := GlobalQueue.AddFull(u, body.Format, body.Cookies, body.RateLimit)
-			addedTasks = append(addedTasks, task)
+	addedTasks := make([]*DownloadTask, 0)
+	if len(body.Items) > 0 {
+		for _, it := range body.Items {
+			u := strings.TrimSpace(it.URL)
+			if u != "" {
+				ch := it.Channel
+				if ch == "" {
+					ch = body.Channel
+				}
+				up := it.Uploader
+				task := GlobalQueue.AddFullWithMeta(u, body.Format, body.Cookies, body.RateLimit, it.Title, it.Thumbnail, body.PlaylistTitle, ch, up)
+				addedTasks = append(addedTasks, task)
+			}
 		}
+	} else {
+		urls := body.URLs
+		if len(urls) == 0 && body.URL != "" {
+			urls = []string{body.URL}
+		}
+		for _, u := range urls {
+			u = strings.TrimSpace(u)
+			if u != "" {
+				task := GlobalQueue.AddFullWithMeta(u, body.Format, body.Cookies, body.RateLimit, "", "", body.PlaylistTitle, body.Channel, "")
+				addedTasks = append(addedTasks, task)
+			}
+		}
+	}
+
+	if len(addedTasks) == 0 {
+		http.Error(w, "No valid URLs provided", http.StatusBadRequest)
+		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
