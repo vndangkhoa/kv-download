@@ -52,7 +52,7 @@ RUN curl -L https://github.com/yt-dlp/yt-dlp/releases/download/2025.09.26/yt-dlp
 # yt-dlp only supports curl_cffi 0.5.10 and 0.10.x-0.15.x
 RUN pip install --no-cache-dir "curl_cffi>=0.15,<0.16"
 
-RUN yt-dlp --update --update-to nightly
+RUN yt-dlp --update --update-to nightly || true
 
 # Sanity check
 RUN yt-dlp --version && \
