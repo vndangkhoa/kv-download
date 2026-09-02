@@ -20,23 +20,38 @@ import (
 func main() {
 	// setup routes
 	router := chi.NewRouter()
-	router.Route("/", func(r chi.Router) {
-		router.Get("/", media.Index)
-		router.Get("/fetch", media.FetchMedia)
-		router.Get("/api/download", media.FetchMediaApi)
-		router.Get("/api/info", media.FetchMediaInfo)
-		router.Get("/api/scan", media.ScanMediaApi)
-		router.Get("/api/events", media.EventsHandler)
-		router.Get("/api/queue", media.QueueListHandler)
-		router.Post("/api/queue/add", media.QueueAddHandler)
-		router.Post("/api/queue/cancel", media.QueueCancelHandler)
-		router.Post("/api/queue/retry", media.QueueRetryHandler)
-		router.Post("/api/queue/clear-completed", media.QueueClearCompletedHandler)
-		router.Post("/api/queue/retry-failed", media.QueueRetryFailedHandler)
-		router.Delete("/api/queue/item", media.QueueDeleteHandler)
-		router.Get("/download/zip", media.DownloadAllZip)
-		router.Get("/download", media.ServeMedia)
+	router.Get("/", media.Index)
+	router.Head("/", media.Index)
+	router.Get("/health", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("OK\n"))
 	})
+	router.Get("/fetch", media.FetchMedia)
+	router.Get("/api/download", media.FetchMediaApi)
+	router.Get("/api/info", media.FetchMediaInfo)
+	router.Get("/api/scan", media.ScanMediaApi)
+	router.Get("/api/youtube/search", media.YouTubeSearchHandler)
+	router.Get("/api/ytdlp/version", media.YtDlpVersionHandler)
+	router.Post("/api/ytdlp/update", media.YtDlpUpdateHandler)
+	router.Get("/api/events", media.EventsHandler)
+	router.Get("/api/queue", media.QueueListHandler)
+	router.Post("/api/queue/add", media.QueueAddHandler)
+	router.Post("/api/queue/cancel", media.QueueCancelHandler)
+	router.Post("/api/queue/retry", media.QueueRetryHandler)
+	router.Post("/api/queue/clear-completed", media.QueueClearCompletedHandler)
+	router.Post("/api/queue/retry-failed", media.QueueRetryFailedHandler)
+	router.Delete("/api/queue/item", media.QueueDeleteHandler)
+	router.Get("/download/zip", media.DownloadAllZip)
+	router.Get("/download", media.ServeMedia)
+	router.Head("/download", media.ServeMedia)
+	router.Get("/thumbnail", media.ServeThumbnailHandler)
+	router.Head("/thumbnail", media.ServeThumbnailHandler)
+	router.Get("/api/thumbnail", media.ServeThumbnailHandler)
+	router.Head("/api/thumbnail", media.ServeThumbnailHandler)
+	router.Get("/api/browser/proxy", media.BrowserProxyHandler)
+	router.Get("/api/browser/sniff", media.BrowserSniffHandler)
+	router.HandleFunc("/jsonrpc", media.Aria2JsonRpcHandler)
+	router.HandleFunc("/rpc", media.Aria2JsonRpcHandler)
 	fileServer(router, "/static", "static/")
 
 	// Serve favicon.ico at root (browsers request this by default)
@@ -58,8 +73,21 @@ func main() {
 	go startYtDlpUpdater()
 	go startCookieRefresher()
 
+	port := strings.TrimSpace(os.Getenv("PORT"))
+	if port == "" {
+		port = strings.TrimSpace(os.Getenv("MR_PORT"))
+	}
+	if port == "" {
+		port = "9292"
+	}
+	if !strings.HasPrefix(port, ":") {
+		port = ":" + port
+	}
+
+	log.Info().Msgf("KV Download web server listening on http://localhost%s", port)
+
 	// The HTTP Server
-	server := &http.Server{Addr: ":9292", Handler: router}
+	server := &http.Server{Addr: port, Handler: router}
 
 	// Server run context
 	serverCtx, serverStopCtx := context.WithCancel(context.Background())
@@ -160,12 +188,15 @@ func fileServer(r chi.Router, public string, static string) {
 		public += "/"
 	}
 
-	r.Get(public+"*", func(w http.ResponseWriter, r *http.Request) {
+	staticHandler := func(w http.ResponseWriter, r *http.Request) {
 		file := strings.Replace(r.RequestURI, public, "/", 1)
 		if _, err := os.Stat(root + file); os.IsNotExist(err) {
 			http.ServeFile(w, r, path.Join(root, "index.html"))
 			return
 		}
 		fs.ServeHTTP(w, r)
-	})
+	}
+
+	r.Get(public+"*", staticHandler)
+	r.Head(public+"*", staticHandler)
 }

@@ -5,8 +5,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
+	"net/http"
 	"os"
 	"os/exec"
+	"regexp"
 	"strings"
 	"time"
 
@@ -15,11 +18,18 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+type ScanThumbnail struct {
+	URL    string `json:"url"`
+	Height int    `json:"height"`
+	Width  int    `json:"width"`
+}
+
 type ScanEntry struct {
-	Id        string `json:"id"`
-	Title     string `json:"title"`
-	Url       string `json:"url"`
-	Thumbnail string `json:"thumbnail"`
+	Id         string          `json:"id"`
+	Title      string          `json:"title"`
+	Url        string          `json:"url"`
+	Thumbnail  string          `json:"thumbnail"`
+	Thumbnails []ScanThumbnail `json:"thumbnails"`
 }
 
 type ScanInfo struct {
@@ -96,23 +106,54 @@ func ScanUrl(inputUrl string, cookies string) (*ScanInfo, string, error) {
 		}
 	}
 
-	const maxAttempts = 2
-	var lastStderr string
+	// Try flat-playlist first (fast for large playlists)
+	info, stderr, err := runScanAttempt(url, cookies, true)
+	if err == nil {
+		return info, "", nil
+	}
 
-	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		info, stderr, err := runScanAttempt(url, cookies)
-		if err == nil {
-			return info, "", nil
-		}
-		lastStderr = stderr
-		if attempt < maxAttempts {
-			log.Warn().Msgf("scan attempt %d/%d failed for %s: %s — retrying", attempt, maxAttempts, url, stderr)
-			time.Sleep(1 * time.Second)
+	// If flat-playlist fails (e.g. single video or dynamic site like TikTok), try full extraction
+	log.Info().Msgf("flat scan failed (%s) — trying full metadata extraction for %s", stderr, url)
+	info, stderr2, err2 := runScanAttempt(url, cookies, false)
+	if err2 == nil {
+		return info, "", nil
+	}
+
+	// Try deep webpage inspection for embedded m3u8 and video players
+	req, errHttp := http.NewRequest("GET", url, nil)
+	if errHttp == nil {
+		req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+		if resp, errDo := httpClient.Do(req); errDo == nil && resp.StatusCode == 200 {
+			bodyBytes, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			links := ExtractPageLinks(string(bodyBytes), url)
+			if len(links) > 0 {
+				var entries []ScanEntry
+				for _, l := range links {
+					title := "Stream: " + l
+					if len(title) > 60 {
+						title = title[:57] + "..."
+					}
+					entries = append(entries, ScanEntry{
+						Id:        l,
+						Title:     title,
+						Url:       l,
+						Thumbnail: "",
+					})
+				}
+				return &ScanInfo{
+					Title:      "Extracted Streams & Media",
+					Count:      len(entries),
+					IsPlaylist: len(entries) > 1,
+					Entries:    entries,
+					Thumbnail:  "",
+				}, "", nil
+			}
 		}
 	}
 
-	// Fallback for single video links if flat-playlist metadata scan fails
-	log.Warn().Msgf("Scan metadata fallback for %s (error: %s)", url, lastStderr)
+	// Fallback for single video links if metadata scan fails completely
+	log.Warn().Msgf("Scan metadata fallback for %s (error: %s)", url, stderr2)
 	return &ScanInfo{
 		Title:      url,
 		Count:      1,
@@ -128,20 +169,21 @@ func ScanUrl(inputUrl string, cookies string) (*ScanInfo, string, error) {
 	}, "", nil
 }
 
-func runScanAttempt(url string, cookies string) (*ScanInfo, string, error) {
+func runScanAttempt(url string, cookies string, flatPlaylist bool) (*ScanInfo, string, error) {
 	args := []string{
 		"--dump-single-json",
-		"--flat-playlist",
 		"--skip-download",
 		"--no-warnings",
 		"--no-check-certificates",
-		"--extractor-args", "instagram:image_persist=1;tiktok:app_version=30.0.0;threads:app_version=30.0.0",
+		"--extractor-args", "instagram:image_persist=1;threads:app_version=30.0.0",
+	}
+
+	if flatPlaylist {
+		args = append(args, "--flat-playlist", "--yes-playlist")
 	}
 
 	if impersonate := strings.TrimSpace(os.Getenv("MR_IMPERSONATE")); impersonate != "" {
 		args = append(args, "--impersonate", impersonate)
-	} else {
-		args = append(args, "--impersonate", "chrome")
 	}
 
 	if cookies != "" {
@@ -199,14 +241,15 @@ func runScanAttempt(url string, cookies string) (*ScanInfo, string, error) {
 	}
 
 	var raw struct {
-		Id         string      `json:"id"`
-		Type       string      `json:"_type"`
-		Title      string      `json:"title"`
-		Count      int         `json:"playlist_count"`
-		Entries    []ScanEntry `json:"entries"`
-		Thumb      string      `json:"thumbnail"`
-		Url        string      `json:"url"`
-		WebpageUrl string      `json:"webpage_url"`
+		Id         string          `json:"id"`
+		Type       string          `json:"_type"`
+		Title      string          `json:"title"`
+		Count      int             `json:"playlist_count"`
+		Entries    []ScanEntry     `json:"entries"`
+		Thumb      string          `json:"thumbnail"`
+		Thumbnails []ScanThumbnail `json:"thumbnails"`
+		Url        string          `json:"url"`
+		WebpageUrl string          `json:"webpage_url"`
 	}
 	if err := json.Unmarshal(stdout.Bytes(), &raw); err != nil {
 		msg := "unable to parse scan result"
@@ -216,13 +259,44 @@ func runScanAttempt(url string, cookies string) (*ScanInfo, string, error) {
 
 	info := &ScanInfo{
 		Title:      raw.Title,
-		IsPlaylist: raw.Type == "playlist",
+		IsPlaylist: raw.Type == "playlist" || len(raw.Entries) > 1,
 		Thumbnail:  raw.Thumb,
+	}
+	if info.Thumbnail == "" && len(raw.Thumbnails) > 0 {
+		info.Thumbnail = raw.Thumbnails[len(raw.Thumbnails)-1].URL
 	}
 	if raw.Entries != nil {
 		info.Entries = raw.Entries
 		info.Count = len(raw.Entries)
 	}
+
+	ytRegex := regexp.MustCompile(`(?:youtu\.be/|youtube\.com/(?:watch\?v=|shorts/|embed/))([a-zA-Z0-9_-]{11})`)
+	for i := range info.Entries {
+		e := &info.Entries[i]
+		if e.Url == "" && e.Id != "" {
+			if len(e.Id) == 11 {
+				e.Url = "https://www.youtube.com/watch?v=" + e.Id
+			} else {
+				e.Url = e.Id
+			}
+		}
+		if e.Thumbnail == "" && len(e.Thumbnails) > 0 {
+			e.Thumbnail = e.Thumbnails[len(e.Thumbnails)-1].URL
+		}
+		if e.Thumbnail == "" {
+			if len(e.Id) == 11 {
+				e.Thumbnail = "https://i.ytimg.com/vi/" + e.Id + "/hqdefault.jpg"
+			} else if e.Url != "" {
+				if m := ytRegex.FindStringSubmatch(e.Url); len(m) > 1 {
+					e.Thumbnail = "https://i.ytimg.com/vi/" + m[1] + "/hqdefault.jpg"
+				}
+			}
+		}
+	}
+	if info.Thumbnail == "" && len(info.Entries) > 0 && info.Entries[0].Thumbnail != "" {
+		info.Thumbnail = info.Entries[0].Thumbnail
+	}
+
 	if raw.Count > info.Count {
 		info.Count = raw.Count
 	}
@@ -241,13 +315,22 @@ func runScanAttempt(url string, cookies string) (*ScanInfo, string, error) {
 		if videoUrl == "" {
 			videoUrl = url
 		}
+		thumb := raw.Thumb
+		if thumb == "" {
+			if m := ytRegex.FindStringSubmatch(videoUrl); len(m) > 1 {
+				thumb = "https://i.ytimg.com/vi/" + m[1] + "/hqdefault.jpg"
+			}
+		}
 		info.Entries = []ScanEntry{
 			{
 				Id:        raw.Id,
 				Title:     info.Title,
 				Url:       videoUrl,
-				Thumbnail: raw.Thumb,
+				Thumbnail: thumb,
 			},
+		}
+		if info.Thumbnail == "" {
+			info.Thumbnail = thumb
 		}
 	} else {
 		for i := range info.Entries {

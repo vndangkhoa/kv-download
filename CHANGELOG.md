@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.0.11] - 2026-09-02
+
+### 🌐 In-App Media Sniffer & Web Browser Sandbox
+- **Universal Media Sniffing**: Embedded CORS-bypassed proxy browser (`/api/browser/proxy`) with deep sniffing for M3U8 HLS playlists, direct MP4/WebM videos, and audio streams (`/api/browser/sniff`).
+- **One-Tap Download Bubble**: Corner action bubble inside the in-app browser for instant queueing of sniffed media.
+- **Branded Start Experience**: Interactive dashboard overlay presenting core engine capabilities when the browser is opened.
+
+### 📱 Mobile-First Ergonomics & Viewport Overhaul
+- **Strict Viewport Lock**: Applied `overflow-x: hidden` and `max-width: 100vw` constraints globally to prevent horizontal layout drift on narrow screens (e.g., Galaxy S25, iPhone).
+- **Responsive Address Bar**: Smart toolbar layout that automatically wraps the URL address bar into a full-width row on mobile viewports, preventing overlap with navigation buttons.
+- **Grid & Card Containment**: Refactored all task containers with `minmax(0, 1fr)` and `min-w-0` so titles and code blocks truncate cleanly without stretching cards.
+- **Whitespace & Dock Polish**: Compacted bottom padding to seamlessly fit above the fixed floating mobile dock.
+
+### ⚡ Aria2 JSON-RPC Protocol & REST APIs
+- **Aria2 JSON-RPC 2.0 Server**: Full compatibility on `/jsonrpc` and `/rpc` for Aria2 browser extensions, YAAW, Camellia, and automation scripts.
+- **Interactive REST Documentation**: Built-in API guide with cURL examples for queue ingestion, metadata inspection, and SSE live telemetry.
+
+### 🎬 Media Playback & Dynamic Thumbnails
+- **On-Demand Thumbnail Generation**: FFmpeg integration generating dynamic video frames on `/thumbnail` for local saved media.
+- **Floating Mini-Player**: Responsive audio/video player dock with scrubber, skip controls, and MediaSession integration.
+- **Multi-Platform Cookie Manager**: Redesigned mobile-responsive modal with guides for desktop extensions, Safari bookmarklets, and Android Kiwi.
+
+---
+
 ## [1.0.7] - 2026-08-29
 
 ### 🎨 UI & Layout Overhaul (MotionSites.ai Design Language)

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -41,6 +42,7 @@ type DownloadTask struct {
 	Thumbnail    string     `json:"thumbnail"`
 	Format       string     `json:"format"`
 	Cookies      string     `json:"cookies,omitempty"`
+	RateLimit    string     `json:"rateLimit,omitempty"`
 	Status       TaskStatus `json:"status"`
 	Percent      float64    `json:"percent"`
 	Speed        string     `json:"speed"`
@@ -88,6 +90,10 @@ func (q *QueueManager) Add(url string, format string) *DownloadTask {
 }
 
 func (q *QueueManager) AddWithCookies(url string, format string, cookies string) *DownloadTask {
+	return q.AddFull(url, format, cookies, "")
+}
+
+func (q *QueueManager) AddFull(url string, format string, cookies string, rateLimit string) *DownloadTask {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
@@ -95,12 +101,20 @@ func (q *QueueManager) AddWithCookies(url string, format string, cookies string)
 		format = "best"
 	}
 
+	var initialThumb string
+	ytRegex := regexp.MustCompile(`(?:youtu\.be/|youtube\.com/(?:watch\?v=|shorts/|embed/))([a-zA-Z0-9_-]{11})`)
+	if m := ytRegex.FindStringSubmatch(url); len(m) > 1 {
+		initialThumb = "https://i.ytimg.com/vi/" + m[1] + "/hqdefault.jpg"
+	}
+
 	task := &DownloadTask{
 		ID:        uuid.New().String(),
 		URL:       url,
 		Title:     shortUrl(url),
+		Thumbnail: initialThumb,
 		Format:    format,
 		Cookies:   cookies,
+		RateLimit: rateLimit,
 		Status:    StatusQueued,
 		CreatedAt: time.Now(),
 	}
@@ -108,7 +122,7 @@ func (q *QueueManager) AddWithCookies(url string, format string, cookies string)
 	q.tasks[task.ID] = task
 	q.queue = append(q.queue, task.ID)
 
-	log.Info().Msgf("Enqueued task %s for URL %s (format: %s, hasCustomCookies: %t)", task.ID, url, format, cookies != "")
+	log.Info().Msgf("Enqueued task %s for URL %s (format: %s, rateLimit: %s, hasCustomCookies: %t)", task.ID, url, format, rateLimit, cookies != "")
 
 	q.saveStateLocked()
 	q.broadcastTaskUpdate(task)
@@ -355,128 +369,189 @@ func (q *QueueManager) processTask(ctx context.Context, task *DownloadTask) {
 
 	outputTemplate := targetDir + "%(title,channel+id,uploader+id,id)s.%(ext)s"
 
-	args := []string{
-		"--newline",
-		"--progress-template", "%(progress._percent_str)s|%(progress._speed_str)s|%(progress._eta_str)s|%(progress.downloaded_bytes)s|%(progress.total_bytes)s",
-		"--no-playlist",
-		"--trim-filenames", "120",
-		"--remux-video", "mp4",
-		"--merge-output-format", "mp4",
-		"--output", outputTemplate,
-		"--no-check-certificates",
-		"--extractor-args", "instagram:image_persist=1;tiktok:app_version=30.0.0;threads:app_version=30.0.0",
-		"--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
-	}
+	var lastErr string
+	maxAttempts := 3
 
-	// Add aria2c downloader acceleration if available and appropriate
-	if anpan.HasAria2c() && task.Format != "audio_mp3" && task.Format != "audio_m4a" {
-		if ariaArgs := anpan.BuildYtDlpAria2Args(16); ariaArgs != nil {
-			args = append(args, ariaArgs...)
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		if ctx.Err() == context.Canceled {
+			q.mu.Lock()
+			task.Status = StatusCancelled
+			now := time.Now()
+			task.CompletedAt = &now
+			q.saveStateLocked()
+			q.mu.Unlock()
+			q.broadcastTaskUpdate(task)
+			return
 		}
-	}
 
-	// Apply Format Selection
-	switch task.Format {
-	case "1080p":
-		args = append(args, "--format", "bestvideo[height<=1080]+bestaudio/best[height<=1080]/best")
-	case "720p":
-		args = append(args, "--format", "bestvideo[height<=720]+bestaudio/best[height<=720]/best")
-	case "480p":
-		args = append(args, "--format", "bestvideo[height<=480]+bestaudio/best[height<=480]/best")
-	case "audio_mp3":
-		args = append(args, "--extract-audio", "--audio-format", "mp3")
-	case "audio_m4a":
-		args = append(args, "--extract-audio", "--audio-format", "m4a")
-	default:
-		args = append(args, "--format", "b/bv*+ba/best")
-	}
-
-	if impersonate := strings.TrimSpace(os.Getenv("MR_IMPERSONATE")); impersonate != "" {
-		args = append(args, "--impersonate", impersonate)
-	} else {
-		args = append(args, "--impersonate", "chrome")
-	}
-
-	if task.Cookies != "" {
-		tmpCookie, cleanup, err := CreateEphemeralCookieFile(task.Cookies, task.URL)
-		if err == nil && tmpCookie != "" {
-			defer cleanup()
-			args = append(args, "--cookies", tmpCookie)
+		args := []string{
+			"--newline",
+			"--progress-template", "%(progress._percent_str)s|%(progress._speed_str)s|%(progress._eta_str)s|%(progress.downloaded_bytes)s|%(progress.total_bytes)s",
+			"--no-playlist",
+			"--trim-filenames", "120",
+			"--write-thumbnail",
+			"--convert-thumbnails", "jpg",
+			"--remux-video", "mp4",
+			"--merge-output-format", "mp4",
+			"--output", outputTemplate,
+			"--no-check-certificates",
+			"--extractor-args", "instagram:image_persist=1;threads:app_version=30.0.0",
 		}
-	} else {
-		cookiesPath := getCookiesPath()
-		if workingCookies := getWorkingCookiesPath(cookiesPath); workingCookies != "" {
-			args = append(args, "--cookies", workingCookies)
+
+		// Attempt 1: try aria2c if available. Attempt 2+: use native yt-dlp downloader to avoid CDN 403s
+		if attempt == 1 && anpan.HasAria2c() && task.Format != "audio_mp3" && task.Format != "audio_m4a" && !strings.Contains(task.URL, "tiktok.com") {
+			if ariaArgs := anpan.BuildYtDlpAria2Args(16); ariaArgs != nil {
+				args = append(args, ariaArgs...)
+			}
 		}
-	}
 
-	for arg, value := range getEnvVars() {
-		args = append(args, arg, value)
-	}
+		// Apply Format Selection
+		switch task.Format {
+		case "1080p":
+			args = append(args, "--format", "bestvideo[height<=1080]+bestaudio/best[height<=1080]/best")
+		case "720p":
+			args = append(args, "--format", "bestvideo[height<=720]+bestaudio/best[height<=720]/best")
+		case "480p":
+			args = append(args, "--format", "bestvideo[height<=480]+bestaudio/best[height<=480]/best")
+		case "audio_mp3":
+			args = append(args, "--extract-audio", "--audio-format", "mp3")
+		case "audio_m4a":
+			args = append(args, "--extract-audio", "--audio-format", "m4a")
+		default:
+			args = append(args, "--format", "b/bv*+ba/best")
+		}
 
-	args = append(args, task.URL)
+		if impersonate := strings.TrimSpace(os.Getenv("MR_IMPERSONATE")); impersonate != "" {
+			args = append(args, "--impersonate", impersonate)
+		}
 
-	cmd := exec.CommandContext(ctx, "yt-dlp", args...)
-	stdout, _ := cmd.StdoutPipe()
-	stderr, _ := cmd.StderrPipe()
+		rateLimit := strings.TrimSpace(task.RateLimit)
+		if rateLimit == "" {
+			rateLimit = strings.TrimSpace(os.Getenv("MR_RATE_LIMIT"))
+		}
+		if rateLimit != "" && rateLimit != "unlimited" && rateLimit != "0" {
+			args = append(args, "--limit-rate", rateLimit)
+		}
 
-	if err := cmd.Start(); err != nil {
-		q.failTask(task, err.Error())
-		return
-	}
+		if task.Cookies != "" {
+			tmpCookie, cleanup, err := CreateEphemeralCookieFile(task.Cookies, task.URL)
+			if err == nil && tmpCookie != "" {
+				defer cleanup()
+				args = append(args, "--cookies", tmpCookie)
+			}
+		} else {
+			cookiesPath := getCookiesPath()
+			if workingCookies := getWorkingCookiesPath(cookiesPath); workingCookies != "" {
+				args = append(args, "--cookies", workingCookies)
+			}
+		}
 
-	var stderrBuf bytes.Buffer
-	go io.Copy(&stderrBuf, stderr)
+		for arg, value := range getEnvVars() {
+			args = append(args, arg, value)
+		}
 
-	scanner := bufio.NewScanner(stdout)
-	for scanner.Scan() {
-		line := scanner.Text()
-		q.parseProgressLine(task, line)
-	}
+		args = append(args, task.URL)
 
-	err := cmd.Wait()
-	if ctx.Err() == context.Canceled {
-		q.mu.Lock()
-		task.Status = StatusCancelled
-		now := time.Now()
-		task.CompletedAt = &now
-		q.saveStateLocked()
-		q.mu.Unlock()
-		q.broadcastTaskUpdate(task)
-		return
-	}
+		cmd := exec.CommandContext(ctx, "yt-dlp", args...)
+		stdout, _ := cmd.StdoutPipe()
+		stderr, _ := cmd.StderrPipe()
 
-	if err != nil {
+		if err := cmd.Start(); err != nil {
+			lastErr = err.Error()
+			time.Sleep(300 * time.Millisecond)
+			continue
+		}
+
+		var stderrBuf bytes.Buffer
+		go io.Copy(&stderrBuf, stderr)
+
+		scanner := bufio.NewScanner(stdout)
+		for scanner.Scan() {
+			line := scanner.Text()
+			q.parseProgressLine(task, line)
+		}
+
+		err := cmd.Wait()
+		if ctx.Err() == context.Canceled {
+			q.mu.Lock()
+			task.Status = StatusCancelled
+			now := time.Now()
+			task.CompletedAt = &now
+			q.saveStateLocked()
+			q.mu.Unlock()
+			q.broadcastTaskUpdate(task)
+			return
+		}
+
+		if err == nil {
+			moveJsonFiles(dirID)
+			medias, _ := getAllFilesForId(dirID)
+			if len(medias) > 0 {
+				q.completeTask(task, medias[0], dirID)
+				return
+			}
+		}
+
 		errMsg := strings.TrimSpace(stderrBuf.String())
-		if errMsg == "" {
+		if errMsg == "" && err != nil {
 			errMsg = err.Error()
 		}
-		q.failTask(task, errMsg)
-		return
+		lastErr = errMsg
+		log.Warn().Msgf("Download attempt %d/%d failed for task %s (%s): %s", attempt, maxAttempts, task.ID, task.URL, errMsg)
+		time.Sleep(500 * time.Millisecond)
 	}
 
-	moveJsonFiles(dirID)
-	medias, _ := getAllFilesForId(dirID)
-	if len(medias) > 0 {
-		q.completeTask(task, medias[0], dirID)
-	} else {
-		q.failTask(task, "No media file generated")
+	if lastErr == "" {
+		lastErr = "No media file generated"
 	}
+	q.failTask(task, lastErr)
 }
 
-func (q *QueueManager) completeTask(task *DownloadTask, media Media, dirID string) {
+func (q *QueueManager) completeTask(task *DownloadTask, item Media, dirID string) {
 	q.mu.Lock()
 	task.Status = StatusCompleted
 	task.Percent = 100.0
 	task.Speed = ""
 	task.ETA = ""
-	task.MediaID = media.Id
-	task.MediaName = media.Name
+	task.MediaID = item.Id
+	task.MediaName = item.Name
 	if task.Title == shortUrl(task.URL) {
-		task.Title = media.Name
+		task.Title = item.Name
 	}
-	task.HumanSize = media.HumanSize
-	task.TotalBytes = media.SizeInBytes
+	task.HumanSize = item.HumanSize
+	task.TotalBytes = item.SizeInBytes
+
+	// Find downloaded thumbnail or extract frame using ffmpeg
+	targetDir := getMediaDirectory(dirID)
+	foundThumb := false
+	if entries, err := os.ReadDir(targetDir); err == nil {
+		for _, e := range entries {
+			l := strings.ToLower(e.Name())
+			if !e.IsDir() && (strings.HasSuffix(l, ".jpg") || strings.HasSuffix(l, ".jpeg") || strings.HasSuffix(l, ".png") || strings.HasSuffix(l, ".webp")) {
+				task.Thumbnail = "/thumbnail?id=" + url.QueryEscape(dirID+"/"+e.Name())
+				foundThumb = true
+				break
+			}
+		}
+	}
+	if !foundThumb {
+		thumbPath := filepath.Join(targetDir, "thumb.jpg")
+		videoPath := filepath.Join(targetDir, item.Name)
+		videoExt := strings.ToLower(filepath.Ext(item.Name))
+		if videoExt == ".mp4" || videoExt == ".mkv" || videoExt == ".webm" || videoExt == ".m4v" || videoExt == ".mov" || videoExt == ".avi" {
+			if err := ExtractThumbnailFromVideo(videoPath, thumbPath); err == nil {
+				task.Thumbnail = "/thumbnail?id=" + url.QueryEscape(dirID+"/thumb.jpg")
+			}
+		} else if videoExt == ".mp3" || videoExt == ".m4a" || videoExt == ".flac" {
+			if err := ExtractThumbnailFromAudio(videoPath, thumbPath); err == nil {
+				task.Thumbnail = "/thumbnail?id=" + url.QueryEscape(dirID+"/thumb.jpg")
+			}
+		}
+		if task.Thumbnail == "" {
+			task.Thumbnail = "/thumbnail?id=" + url.QueryEscape(dirID)
+		}
+	}
+
 	now := time.Now()
 	task.CompletedAt = &now
 	q.saveStateLocked()
@@ -501,7 +576,7 @@ func (q *QueueManager) completeTask(task *DownloadTask, media Media, dirID strin
 				_, _ = anpan.SaveLrcFile(filePath, res)
 				log.Info().Msgf("Saved synced lyrics for %s (track: %s)", m.Name, track)
 			}
-		}(media, task.Title)
+		}(item, task.Title)
 	}
 }
 
@@ -571,16 +646,17 @@ func (q *QueueManager) broadcastTaskUpdate(task *DownloadTask) {
 
 func (q *QueueManager) removeFromQueueLocked(id string) {
 	newQueue := make([]string, 0, len(q.queue))
-	for _, qid := range q.queue {
-		if qid != id {
-			newQueue = append(newQueue, qid)
+	for _, item := range q.queue {
+		if item != id {
+			newQueue = append(newQueue, item)
 		}
 	}
 	q.queue = newQueue
 }
 
 func (q *QueueManager) stateFilePath() string {
-	return filepath.Join(getDownloadDir(), "queue_state.json")
+	dir := getDownloadDir()
+	return filepath.Join(dir, "queue_state.json")
 }
 
 func (q *QueueManager) saveStateLocked() {
@@ -612,11 +688,54 @@ func (q *QueueManager) LoadState() {
 		return
 	}
 
+	ytRegex := regexp.MustCompile(`(?:youtu\.be/|youtube\.com/(?:watch\?v=|shorts/|embed/))([a-zA-Z0-9_-]{11})`)
+
 	for _, t := range tasksList {
 		if t.Status == StatusDownloading || t.Status == StatusQueued {
 			t.Status = StatusFailed
 			t.ErrorMessage = "Interrupted by server restart"
 		}
+
+		// Ensure thumbnail is available for existing tasks
+		if t.Thumbnail == "" && t.URL != "" {
+			if m := ytRegex.FindStringSubmatch(t.URL); len(m) > 1 {
+				t.Thumbnail = "https://i.ytimg.com/vi/" + m[1] + "/hqdefault.jpg"
+			}
+		}
+
+		if t.Status == StatusCompleted && t.MediaID != "" {
+			dirID, _, _ := strings.Cut(t.MediaID, "/")
+			targetDir := getMediaDirectory(dirID)
+			foundThumb := false
+			if entries, err := os.ReadDir(targetDir); err == nil {
+				for _, e := range entries {
+					l := strings.ToLower(e.Name())
+					if !e.IsDir() && (strings.HasSuffix(l, ".jpg") || strings.HasSuffix(l, ".jpeg") || strings.HasSuffix(l, ".png") || strings.HasSuffix(l, ".webp")) {
+						t.Thumbnail = "/thumbnail?id=" + url.QueryEscape(dirID+"/"+e.Name())
+						foundThumb = true
+						break
+					}
+				}
+			}
+			if !foundThumb && t.MediaName != "" {
+				videoPath := filepath.Join(targetDir, t.MediaName)
+				thumbPath := filepath.Join(targetDir, "thumb.jpg")
+				videoExt := strings.ToLower(filepath.Ext(t.MediaName))
+				if videoExt == ".mp4" || videoExt == ".mkv" || videoExt == ".webm" || videoExt == ".m4v" || videoExt == ".mov" || videoExt == ".avi" {
+					if err := ExtractThumbnailFromVideo(videoPath, thumbPath); err == nil {
+						t.Thumbnail = "/thumbnail?id=" + url.QueryEscape(dirID+"/thumb.jpg")
+					}
+				} else if videoExt == ".mp3" || videoExt == ".m4a" || videoExt == ".flac" {
+					if err := ExtractThumbnailFromAudio(videoPath, thumbPath); err == nil {
+						t.Thumbnail = "/thumbnail?id=" + url.QueryEscape(dirID+"/thumb.jpg")
+					}
+				}
+			}
+			if t.Thumbnail == "" {
+				t.Thumbnail = "/thumbnail?id=" + url.QueryEscape(dirID)
+			}
+		}
+
 		q.tasks[t.ID] = t
 	}
 	log.Info().Msgf("Loaded %d download tasks from persistent queue state", len(q.tasks))
@@ -633,10 +752,11 @@ func shortUrl(u string) string {
 
 func QueueAddHandler(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		URLs    []string `json:"urls"`
-		URL     string   `json:"url"`
-		Format  string   `json:"format"`
-		Cookies string   `json:"cookies"`
+		URLs      []string `json:"urls"`
+		URL       string   `json:"url"`
+		Format    string   `json:"format"`
+		Cookies   string   `json:"cookies"`
+		RateLimit string   `json:"rateLimit"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -658,7 +778,7 @@ func QueueAddHandler(w http.ResponseWriter, r *http.Request) {
 	for _, u := range urls {
 		u = strings.TrimSpace(u)
 		if u != "" {
-			task := GlobalQueue.AddWithCookies(u, body.Format, body.Cookies)
+			task := GlobalQueue.AddFull(u, body.Format, body.Cookies, body.RateLimit)
 			addedTasks = append(addedTasks, task)
 		}
 	}

@@ -6,9 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/dustin/go-humanize"
-	"github.com/rs/zerolog/log"
-	"golang.org/x/sync/errgroup"
 	"html/template"
 	"io"
 	"kv-download/src/utils"
@@ -19,6 +16,10 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/dustin/go-humanize"
+	"github.com/rs/zerolog/log"
+	"golang.org/x/sync/errgroup"
 )
 
 type Media struct {
@@ -192,14 +193,11 @@ func downloadMedia(url string, requestArgs map[string]string) (string, string, e
 		"--merge-output-format":   "mp4",
 		"--output":                name,
 		"--no-check-certificates": "",
-		"--extractor-args":        "instagram:image_persist=1;tiktok:app_version=30.0.0;threads:app_version=30.0.0",
-		"--user-agent":            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+		"--extractor-args":        "instagram:image_persist=1;threads:app_version=30.0.0",
 	}
 
 	if impersonate := strings.TrimSpace(os.Getenv("MR_IMPERSONATE")); impersonate != "" {
 		defaultArgs["--impersonate"] = impersonate
-	} else {
-		defaultArgs["--impersonate"] = "chrome"
 	}
 
 	if workingCookies := getWorkingCookiesPath(cookiesPath); workingCookies != "" {

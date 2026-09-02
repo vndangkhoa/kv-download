@@ -1,0 +1,8 @@
+Add to android/app/src/main/AndroidManifest.xml inside <activity android:name=".MainActivity">:
+
+<intent-filter>
+  <action android:name="android.intent.action.VIEW"/>
+  <category android:name="android.intent.category.DEFAULT"/>
+  <category android:name="android.intent.category.BROWSABLE"/>
+  <data android:scheme="kvdownload" android:host="callback"/>
+</intent-filter>

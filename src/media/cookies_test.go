@@ -38,6 +38,19 @@ func TestNormalizeCookiesToNetscape(t *testing.T) {
 	if !strings.Contains(res4, "sessionid") || !strings.Contains(res4, "token_abc") || !strings.Contains(res4, ".tiktok.com") {
 		t.Errorf("Expected parsed key-value json cookies with .tiktok.com domain, got: %s", res4)
 	}
+
+	// 5. TikTok JSON Array with hostOnly and float timestamp
+	tiktokJson := `[
+		{"name": "sessionid", "value": "35dea36e03d8e9cc3396eefd75b41a68", "domain": ".tiktok.com", "hostOnly": false, "path": "/", "secure": true, "expirationDate": 1803736555.64},
+		{"name": "waforigin_id", "value": "44", "domain": "www.tiktok.com", "hostOnly": true, "path": "/", "secure": false, "expirationDate": 1787982018.23}
+	]`
+	res5 := NormalizeCookiesToNetscape(tiktokJson, "https://www.tiktok.com/@creator/video/123")
+	if !strings.Contains(res5, ".tiktok.com\tTRUE\t/\tTRUE\t1803736555\tsessionid\t35dea36e03d8e9cc3396eefd75b41a68") {
+		t.Errorf("Expected sessionid line with TRUE for subdomain, got: %s", res5)
+	}
+	if !strings.Contains(res5, "www.tiktok.com\tFALSE\t/\tFALSE\t1787982018\twaforigin_id\t44") {
+		t.Errorf("Expected waforigin_id line with FALSE for hostOnly, got: %s", res5)
+	}
 }
 
 func TestCreateEphemeralCookieFile(t *testing.T) {
