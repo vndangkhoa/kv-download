@@ -1,6 +1,7 @@
 package media
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -8,6 +9,8 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -429,4 +432,429 @@ func BrowserProxyHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(resp.StatusCode)
 	_, _ = w.Write([]byte(html))
+}
+
+func isDirectMediaUrl(raw string) bool {
+	lower := strings.ToLower(strings.Split(raw, "?")[0])
+	for _, ext := range []string{".mp4", ".webm", ".mkv", ".mov", ".avi", ".flv", ".m3u8", ".mpd", ".mp3", ".m4a", ".aac", ".wav", ".flac", ".ogg", ".oga", ".jpg", ".jpeg", ".png", ".webp", ".gif", ".avif"} {
+		if strings.HasSuffix(lower, ext) {
+			return true
+		}
+	}
+	// Also treat known CDN / direct video URLs without extension as direct
+	// YouTube googlevideo, TikTok CDN (tiktokcdn, v19-webapp, tos-alisg), and generic mime params
+	l := strings.ToLower(raw)
+	if strings.Contains(l, "googlevideo.com/videoplayback") {
+		return true
+	}
+	if strings.Contains(l, "tiktokcdn") || strings.Contains(l, "v16-webapp") || strings.Contains(l, "v19-webapp") || strings.Contains(l, "/video/tos/") {
+		return true
+	}
+	if strings.Contains(l, "mime_type=video") || strings.Contains(l, "mime=video") {
+		return true
+	}
+	return false
+}
+
+// BrowserResolveHandler resolves a page URL (e.g. TikTok/YouTube) to a direct CDN media URL via yt-dlp
+func BrowserResolveHandler(w http.ResponseWriter, r *http.Request) {
+	targetUrl := strings.TrimSpace(r.URL.Query().Get("url"))
+	if targetUrl == "" {
+		http.Error(w, `{"error":"Missing url parameter"}`, http.StatusBadRequest)
+		return
+	}
+	if !strings.HasPrefix(targetUrl, "http://") && !strings.HasPrefix(targetUrl, "https://") {
+		targetUrl = "https://" + targetUrl
+	}
+	cookies := strings.TrimSpace(r.URL.Query().Get("cookies"))
+	if cookies == "" {
+		cookies = strings.TrimSpace(r.Header.Get("X-Cookies"))
+	}
+
+	// If already direct media file, return as-is
+	if isDirectMediaUrl(targetUrl) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"url":  targetUrl,
+			"type": "direct",
+		})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+
+	args := []string{
+		"-g",
+		"--no-playlist",
+		"--no-warnings",
+		"--no-check-certificates",
+		"--extractor-args", "instagram:image_persist=1;threads:app_version=30.0.0",
+	}
+
+	if impersonate := strings.TrimSpace(os.Getenv("MR_IMPERSONATE")); impersonate != "" {
+		args = append(args, "--impersonate", impersonate)
+	}
+
+	if cookies != "" {
+		tmpCookie, cleanup, err := CreateEphemeralCookieFile(cookies, targetUrl)
+		if err == nil && tmpCookie != "" {
+			defer cleanup()
+			args = append(args, "--cookies", tmpCookie)
+		}
+	} else {
+		cp := getCookiesPath()
+		if workingCookies := getWorkingCookiesPath(cp); workingCookies != "" {
+			args = append(args, "--cookies", workingCookies)
+		}
+	}
+
+	for arg, value := range getEnvVars() {
+		args = append(args, arg)
+		if value != "" {
+			args = append(args, value)
+		}
+	}
+
+	args = append(args, targetUrl)
+
+	cmd := exec.CommandContext(ctx, "yt-dlp", args...)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		errMsg := strings.TrimSpace(stderr.String())
+		if errMsg == "" {
+			errMsg = err.Error()
+		}
+		log.Warn().Msgf("BrowserResolve failed for %s: %s", targetUrl, errMsg)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": errMsg})
+		return
+	}
+
+	lines := strings.Split(strings.TrimSpace(stdout.String()), "\n")
+	var directUrl string
+	// Prefer last non-empty line that looks like http URL; if multiple lines (video+audio), we need to fallback to stream
+	if len(lines) == 1 {
+		directUrl = strings.TrimSpace(lines[0])
+	} else if len(lines) > 1 {
+		// Multiple URLs (e.g. DASH separate video/audio) — cannot play directly; signal to use stream endpoint
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "DASH streams require server-side muxing; use /api/browser/stream", "hint": "use_stream"})
+		return
+	}
+
+	if directUrl == "" || (!strings.HasPrefix(directUrl, "http://") && !strings.HasPrefix(directUrl, "https://")) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "failed to resolve direct media URL"})
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	_ = json.NewEncoder(w).Encode(map[string]string{
+		"url":  directUrl,
+		"type": "resolved",
+	})
+}
+
+// BrowserStreamHandler streams media for in-app preview.
+// For direct media URLs it proxies the remote file with Range/CORS support.
+// For page URLs it runs yt-dlp to pipe merged mp4 directly to the client.
+func BrowserStreamHandler(w http.ResponseWriter, r *http.Request) {
+	targetUrl := strings.TrimSpace(r.URL.Query().Get("url"))
+	if targetUrl == "" {
+		http.Error(w, "Missing url parameter", http.StatusBadRequest)
+		return
+	}
+	if !strings.HasPrefix(targetUrl, "http://") && !strings.HasPrefix(targetUrl, "https://") {
+		targetUrl = "https://" + targetUrl
+	}
+	cookies := strings.TrimSpace(r.URL.Query().Get("cookies"))
+	if cookies == "" {
+		cookies = strings.TrimSpace(r.Header.Get("X-Cookies"))
+	}
+
+	// Handle CORS preflight
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Headers", "Range, Content-Type, X-Cookies")
+	w.Header().Set("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS")
+	w.Header().Set("Access-Control-Expose-Headers", "Content-Length, Content-Range, Accept-Ranges, Content-Type")
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	if r.Method == http.MethodHead && !isDirectMediaUrl(targetUrl) {
+		w.Header().Set("Content-Type", "video/mp4")
+		w.Header().Set("Accept-Ranges", "bytes")
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	// Direct media URL => proxy with Range forwarding (use client without timeout to allow large streams)
+	if isDirectMediaUrl(targetUrl) {
+		ctx, cancel := context.WithTimeout(r.Context(), 120*time.Second)
+		defer cancel()
+		method := r.Method
+		if method != http.MethodHead {
+			method = http.MethodGet
+		}
+		req, err := http.NewRequestWithContext(ctx, method, targetUrl, nil)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
+		req.Header.Set("Accept", "*/*")
+		req.Header.Set("Referer", targetUrl)
+		if rh := r.Header.Get("Range"); rh != "" {
+			req.Header.Set("Range", rh)
+		}
+		// Use transport with no timeout for large files
+		proxyClient := &http.Client{
+			Timeout: 0,
+			CheckRedirect: func(req *http.Request, via []*http.Request) error {
+				if len(via) >= 10 {
+					return http.ErrUseLastResponse
+				}
+				return nil
+			},
+		}
+		resp, err := proxyClient.Do(req)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+		defer resp.Body.Close()
+		for k, vv := range resp.Header {
+			lk := strings.ToLower(k)
+			if lk == "content-length" || lk == "content-type" || lk == "accept-ranges" || lk == "content-range" || lk == "cache-control" || lk == "expires" {
+				for _, v := range vv {
+					w.Header().Add(k, v)
+				}
+			}
+		}
+		if w.Header().Get("Content-Type") == "" {
+			w.Header().Set("Content-Type", getMimeType(targetUrl))
+		}
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		// HLS m3u8 rewriting: proxy segment URLs to bypass CORS and handle relative paths
+		ct := w.Header().Get("Content-Type")
+		lowerTarget := strings.ToLower(targetUrl)
+		isM3u8 := strings.Contains(strings.ToLower(ct), "mpegurl") || strings.Contains(ct, "application/x-mpegURL") || strings.HasSuffix(lowerTarget, ".m3u8")
+		if isM3u8 && resp.StatusCode == http.StatusOK && r.Method != http.MethodHead {
+			bodyBytes, err := io.ReadAll(io.LimitReader(resp.Body, 5*1024*1024))
+			if err == nil {
+				rewritten := rewriteM3U8Content(string(bodyBytes), targetUrl)
+				w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
+				w.Header().Set("Content-Length", fmt.Sprintf("%d", len(rewritten)))
+				w.Header().Del("Content-Range")
+				w.Header().Del("Accept-Ranges")
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(rewritten))
+				return
+			}
+		}
+		w.WriteHeader(resp.StatusCode)
+		if r.Method != http.MethodHead {
+			_, _ = io.Copy(w, resp.Body)
+		}
+		return
+	}
+
+	// Page URL (TikTok, YouTube, etc.) => stream via yt-dlp pipe with retry for transient TikTok failures
+	ctx, cancel := context.WithTimeout(r.Context(), 120*time.Second)
+	defer cancel()
+
+	baseArgs := []string{
+		"-o", "-",
+		"--no-playlist",
+		"--no-warnings",
+		"--no-check-certificates",
+		"--extractor-args", "instagram:image_persist=1;threads:app_version=30.0.0",
+		"--remux-video", "mp4",
+		"--merge-output-format", "mp4",
+	}
+	if !strings.Contains(targetUrl, "tiktok.com") {
+		baseArgs = append(baseArgs, "--format", "b/bv*+ba/best")
+	}
+	if impersonate := strings.TrimSpace(os.Getenv("MR_IMPERSONATE")); impersonate != "" {
+		baseArgs = append(baseArgs, "--impersonate", impersonate)
+	}
+	var tmpCookie string
+	var cleanup func()
+	if cookies != "" {
+		var err error
+		tmpCookie, cleanup, err = CreateEphemeralCookieFile(cookies, targetUrl)
+		if err == nil && tmpCookie != "" {
+			defer cleanup()
+			baseArgs = append(baseArgs, "--cookies", tmpCookie)
+		}
+	} else {
+		cp := getCookiesPath()
+		if workingCookies := getWorkingCookiesPath(cp); workingCookies != "" {
+			baseArgs = append(baseArgs, "--cookies", workingCookies)
+		}
+	}
+	for arg, value := range getEnvVars() {
+		baseArgs = append(baseArgs, arg)
+		if value != "" {
+			baseArgs = append(baseArgs, value)
+		}
+	}
+
+	var lastErrMsg string
+	for attempt := 1; attempt <= 2; attempt++ {
+		args := append([]string(nil), baseArgs...)
+		args = append(args, targetUrl)
+
+		cmd := exec.CommandContext(ctx, "yt-dlp", args...)
+		stdoutPipe, err := cmd.StdoutPipe()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		stderrPipe, err := cmd.StderrPipe()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if err := cmd.Start(); err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+
+		var stderrBuf bytes.Buffer
+		var stderrDone = make(chan struct{})
+		go func() {
+			_, _ = io.Copy(&stderrBuf, stderrPipe)
+			close(stderrDone)
+		}()
+
+		flusher, _ := w.(http.Flusher)
+		var totalWritten int64
+		var headerSent bool
+		sendHeader := func() {
+			if !headerSent {
+				w.Header().Set("Content-Type", "video/mp4")
+				w.Header().Set("Accept-Ranges", "bytes")
+				w.Header().Set("Cache-Control", "no-cache")
+				w.Header().Set("Access-Control-Allow-Origin", "*")
+				headerSent = true
+			}
+		}
+		buf := make([]byte, 32*1024)
+		for {
+			n, readErr := stdoutPipe.Read(buf)
+			if n > 0 {
+				sendHeader()
+				if _, werr := w.Write(buf[:n]); werr != nil {
+					_ = cmd.Process.Kill()
+					break
+				}
+				totalWritten += int64(n)
+				if flusher != nil {
+					flusher.Flush()
+				}
+			}
+			if readErr != nil {
+				if readErr != io.EOF {
+					log.Warn().Msgf("BrowserStream read error for %s: %v", targetUrl, readErr)
+				}
+				break
+			}
+			select {
+			case <-ctx.Done():
+				_ = cmd.Process.Kill()
+				return
+			default:
+			}
+		}
+		_ = cmd.Wait()
+		<-stderrDone
+		if ctx.Err() == context.Canceled {
+			return
+		}
+		if totalWritten > 0 {
+			if stderrBuf.Len() > 0 {
+				log.Debug().Msgf("BrowserStream yt-dlp stderr for %s: %s", targetUrl, stderrBuf.String())
+			}
+			return
+		}
+		lastErrMsg = strings.TrimSpace(stderrBuf.String())
+		if lastErrMsg == "" {
+			lastErrMsg = "Failed to fetch video stream (yt-dlp returned no data)"
+		}
+		log.Warn().Msgf("BrowserStream attempt %d/2 failed for %s: %s", attempt, targetUrl, lastErrMsg)
+		if attempt < 2 {
+			select {
+			case <-time.After(1500 * time.Millisecond):
+			case <-ctx.Done():
+				return
+			}
+			// retry - need to not have sent headers yet
+			if headerSent {
+				// Already sent headers but no data? shouldn't happen; just return
+				return
+			}
+			continue
+		}
+		// final failure
+		if len(lastErrMsg) > 800 {
+			lastErrMsg = lastErrMsg[:800]
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.WriteHeader(http.StatusBadGateway)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": lastErrMsg})
+		return
+	}
+	if lastErrMsg != "" {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.WriteHeader(http.StatusBadGateway)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": lastErrMsg})
+	}
+}
+
+func rewriteM3U8Content(content string, baseUrl string) string {
+	baseParsed, err := url.Parse(baseUrl)
+	if err != nil {
+		return content
+	}
+	baseDir := baseParsed.Scheme + "://" + baseParsed.Host
+	if idx := strings.LastIndex(baseParsed.Path, "/"); idx != -1 {
+		baseDir += baseParsed.Path[:idx+1]
+	} else {
+		baseDir += "/"
+	}
+	lines := strings.Split(content, "\n")
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		absUrl := trimmed
+		if !strings.HasPrefix(trimmed, "http://") && !strings.HasPrefix(trimmed, "https://") {
+			if strings.HasPrefix(trimmed, "/") {
+				absUrl = baseParsed.Scheme + "://" + baseParsed.Host + trimmed
+			} else {
+				absUrl = baseDir + trimmed
+			}
+		}
+		// Proxy via our endpoint to handle CORS & range
+		proxied := "/api/browser/proxy-media?url=" + url.QueryEscape(absUrl)
+		lines[i] = proxied
+	}
+	return strings.Join(lines, "\n")
+}
+
+// BrowserProxyMediaHandler is an alias for BrowserStreamHandler for direct media proxying (used by frontend for CORS bypass)
+func BrowserProxyMediaHandler(w http.ResponseWriter, r *http.Request) {
+	BrowserStreamHandler(w, r)
 }
