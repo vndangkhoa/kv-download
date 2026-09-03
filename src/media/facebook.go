@@ -137,19 +137,26 @@ func normalizeFacebookVideosURL(inputURL string) (string, error) {
 	}
 
 	if strings.HasPrefix(path, "pages/") {
-		return "https://m.facebook.com/" + path + "/videos/", nil
+		return "https://m.facebook.com/" + path + "/reels/", nil
 	}
 	if strings.HasPrefix(path, "groups/") {
-		return "https://m.facebook.com/" + path + "/videos/", nil
+		return "https://m.facebook.com/" + path + "/reels/", nil
 	}
 	if strings.HasPrefix(path, "people/") {
 		return "https://www.facebook.com/" + path + "/", nil
 	}
+
+	// Detect if the user requested reels specifically and preserve that intent.
+	isReels := strings.HasSuffix(strings.ToLower(path), "/reels_tab") ||
+		strings.HasSuffix(strings.ToLower(path), "/reels")
 	for _, s := range []string{"/reels_tab", "/reels", "/videos_by", "/videos_tagged", "/videos", "/posts", "/photos_by", "/photos", "/about"} {
 		if strings.HasSuffix(strings.ToLower(path), s) {
 			path = path[:len(path)-len(s)]
 			break
 		}
+	}
+	if isReels {
+		return "https://m.facebook.com/" + path + "/reels/", nil
 	}
 	return "https://m.facebook.com/" + path + "/videos/", nil
 }
@@ -490,18 +497,24 @@ func isFbPaginationLink(profileHandle, lowHref string) bool {
 		return false
 	}
 
-	// Profile-relative links like "/Linhchanh.2k/videos/?section=..."
-	if lowerHandle != "" && strings.Contains(lowHref, "/"+lowerHandle+"/videos") {
+	// Profile-relative links like "/Linhchanh.2k/videos/?section=..." or
+	// "/Bar85gvgvgv/reels/?cursor=..."
+	if lowerHandle != "" && (strings.Contains(lowHref, "/"+lowerHandle+"/videos") ||
+		strings.Contains(lowHref, "/"+lowerHandle+"/reels")) {
 		return true
 	}
-	if strings.Contains(lowHref, "/videos/") && (strings.Contains(lowHref, "cursor") ||
-		strings.Contains(lowHref, "section") ||
-		strings.Contains(lowHref, "after") ||
-		strings.Contains(lowHref, "ref=") ||
-		strings.Contains(lowHref, "page=") ||
-		strings.Contains(lowHref, "timeline") ||
-		strings.Contains(lowHref, "sk=") ||
-		strings.Contains(lowHref, "multi_permalinks")) {
+	if (strings.Contains(lowHref, "/videos/") || strings.Contains(lowHref, "/reels/")) &&
+		(strings.Contains(lowHref, "cursor") ||
+			strings.Contains(lowHref, "after") ||
+			strings.Contains(lowHref, "bookmark") ||
+			strings.Contains(lowHref, "ref=") ||
+			strings.Contains(lowHref, "page=") ||
+			strings.Contains(lowHref, "timeline") ||
+			strings.Contains(lowHref, "sk=") ||
+			strings.Contains(lowHref, "multi_permalinks") ||
+			strings.Contains(lowHref, "section") ||
+			strings.Contains(lowHref, "sort_order") ||
+			strings.Contains(lowHref, "order_by")) {
 		return true
 	}
 	// Generic "See more" / older-posts anchors that point at the videos feed.
@@ -560,15 +573,18 @@ func parseFbVideoLinks(profileHandle string, html string) (entries []ScanEntry, 
 	}
 
 	// Also scan for modern React / JSON embedded video IDs (e.g. reels / video_id)
-	jsonVidRe := regexp.MustCompile(`(?i)(/reel/|/reels/|/videos/|/posts/|"video_id":\s*"|"video":\s*\{\s*"id":\s*")(\d{6,})`)
+	// Matches: /reel/123, /reels/123, /videos/123, /posts/123, "video_id":"123",
+	// "video":{"id":"123", "entry_id":"123"
+	jsonVidRe := regexp.MustCompile(`(?i)(/reel/|/reels/|/videos/|/posts/|"video_id":\s*"|"video":\s*\{\s*"id":\s*"|"entry_id":\s*")(\d{6,})`)
 	for _, sub := range jsonVidRe.FindAllStringSubmatch(unescaped, -1) {
 		kind := ""
+		key := strings.ToLower(strings.TrimSpace(sub[1]))
 		switch {
-		case strings.HasPrefix(strings.ToLower(sub[1]), "/reel/"), strings.HasPrefix(strings.ToLower(sub[1]), "/reels/"):
+		case strings.HasPrefix(key, "/reel/") || strings.HasPrefix(key, "/reels/"):
 			kind = "reel"
-		case strings.HasPrefix(strings.ToLower(sub[1]), "/posts/"):
+		case strings.HasPrefix(key, "/posts/"):
 			kind = "post"
-		case strings.HasPrefix(strings.ToLower(sub[1]), "/videos/"):
+		case strings.HasPrefix(key, "/videos/"), strings.HasPrefix(key, "\"video_id"), strings.HasPrefix(key, "\"video\""), strings.HasPrefix(key, "\"entry_id\""):
 			kind = "video"
 		}
 		vid := sub[2]
@@ -1207,10 +1223,12 @@ func fbProfileTabs(profile, mobileURL string) []string {
 			"https://www.facebook.com/profile.php?id="+id+"&sk=photos_by",
 			"https://www.facebook.com/profile.php?id="+id,
 			"https://m.facebook.com/profile.php?id="+id,
+			"https://m.facebook.com/profile.php?id="+id+"&sk=reels_tab",
 			"https://www.facebook.com/"+id+"/reels_tab/",
 			"https://www.facebook.com/"+id+"/videos/",
 			"https://www.facebook.com/"+id+"/videos_by/",
 			"https://m.facebook.com/"+id+"/videos/",
+			"https://m.facebook.com/"+id+"/reels/",
 		)
 	} else {
 		profileEnc := url.PathEscape(profile)
@@ -1228,8 +1246,10 @@ func fbProfileTabs(profile, mobileURL string) []string {
 			"https://www.facebook.com/"+profile+"/posts/",
 			"https://m.facebook.com/"+profile+"/videos_by/",
 			"https://m.facebook.com/"+profile+"/reels/",
+			"https://m.facebook.com/"+profile+"/videos/",
 			"https://m.facebook.com/"+profile+"?v=timeline",
 			"https://www.facebook.com/"+profileEnc+"/videos/",
+			"https://www.facebook.com/"+profileEnc+"/reels/",
 			desktopVideos,
 		)
 	}
