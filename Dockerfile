@@ -13,7 +13,7 @@ COPY go.mod go.mod
 COPY go.sum go.sum
 
 RUN go mod download
-RUN GOOS=$TARGETOS GOARCH=$TARGETARCH go build -x -o kv-download ./src
+RUN GOOS=$TARGETOS GOARCH=$TARGETARCH go build -o kv-download ./src
 
 # yt-dlp needs python
 FROM --platform=$TARGETPLATFORM python:3.13.7-alpine3.22
