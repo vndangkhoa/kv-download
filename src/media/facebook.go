@@ -984,10 +984,30 @@ try:
 
     lsd_m = re.search(r'\"LSD\",\[\],\{\"token\":\"([^\"]+)\"', text)
     lsd = lsd_m.group(1) if lsd_m else ""
-    cursor_m = re.search(r'\"end_cursor\":\"([^\"]+)\"[^}}]*\"has_next_page\":true\}\},\"id\":\"([^\"]+)\"', text)
-    if lsd and cursor_m:
+    # More robust cursor extraction — match end_cursor and has_next_page independently
+    cursor_m = re.search(r'\"end_cursor\":\"([^\"]+)\"', text)
+    has_next = re.search(r'\"has_next_page\":true', text)
+    if lsd and cursor_m and has_next:
         cursor = cursor_m.group(1)
-        coll_id = cursor_m.group(2)
+        # Find collection ID using multiple fallback patterns
+        coll_id = ""
+        cursor_pos = cursor_m.start()
+        # Pattern 1: relay_context near cursor (within 20KB window)
+        for cid_m in re.finditer(r'\"id\":\"(\d+)\",\s*\"relay_context":\{', text):
+            if abs(cid_m.start() - cursor_pos) < 20000:
+                coll_id = cid_m.group(1)
+                break
+        # Pattern 2: relay_context anywhere in page
+        if not coll_id:
+            cid_m = re.search(r'\"id\":\"(\d+)\",\s*\"relay_context":\{', text)
+            if cid_m:
+                coll_id = cid_m.group(1)
+        # Pattern 3: any numeric ID near cursor (for pages without relay_context)
+        if not coll_id:
+            for id_m in re.finditer(r'\"id\":\"(\d+)\",', text):
+                if abs(id_m.start() - cursor_pos) < 20000:
+                    coll_id = id_m.group(1)
+                    break
         pv_names = [
           "__relay_internal__pv__FBReels_deprecate_short_form_video_context_gkrelayprovider",
           "__relay_internal__pv__FBReelsMediaFooter_comet_enable_reels_ads_gkrelayprovider",
@@ -1011,7 +1031,8 @@ try:
           "__relay_internal__pv__CometAudioLanguageUtils_comet_translations_revamp_preferred_languages_gkrelayprovider"
         ]
         while cursor and len(vids_seen) < max_items:
-            vars_dict = {"count": 10, "cursor": cursor, "id": coll_id, "renderLocation": None, "scale": None, "useDefaultActor": False}
+            # Use coll_id if available, otherwise fetch without it (some pages work)
+            vars_dict = {"count": 100, "cursor": cursor, "id": coll_id if coll_id else "0", "renderLocation": None, "scale": None, "useDefaultActor": False}
             for pv in pv_names: vars_dict[pv] = False
             payload = {
                 "av": "0", "__user": "0", "__a": "1", "lsd": lsd,
@@ -1036,9 +1057,13 @@ try:
                 except Exception:
                     emit({"id": f"https://www.facebook.com/reel/{v}", "title": f"Facebook reel #{v}", "url": f"https://www.facebook.com/reel/{v}", "thumbnail": "", "category": "Reels"})
                 if len(vids_seen) >= max_items: break
-            pi = re.search(r'\"page_info\":\{[^}]*\"end_cursor\":\"([^\"]+)\"[^}]*\"has_next_page\":(true|false)', resp.text)
-            if pi and pi.group(2) == "true" and new_in_page > 0 and len(vids_seen) < max_items:
-                cursor = pi.group(1)
+            pi_m = re.search(r'\"page_info\":\{[^}]*\"end_cursor\":\"([^\"]+)\"', resp_text)
+            has_next_resp = re.search(r'\"has_next_page\":(true|false)', resp_text)
+            if has_next_resp and has_next_resp.group(1) == "true" and len(vids_seen) < max_items:
+                if pi_m:
+                    cursor = pi_m.group(1)
+                else:
+                    break
             else:
                 break
 except Exception:
