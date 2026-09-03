@@ -92,8 +92,8 @@ check_command "go" "Install Go 1.21+ from https://go.dev/dl/"
 check_command "yt-dlp" "Install yt-dlp via: pip install -U yt-dlp"
 check_command "ffmpeg" "Install ffmpeg via your package manager (e.g. sudo apt install ffmpeg)"
 
-# Create required directory hierarchy
-mkdir -p "$DOWNLOAD_DIR"
+# Create required directory hierarchy (organized: videos/music/photos)
+mkdir -p "$DOWNLOAD_DIR/videos" "$DOWNLOAD_DIR/music" "$DOWNLOAD_DIR/photos" "$DOWNLOAD_DIR/other"
 mkdir -p "$DOWNLOAD_DIR/json"
 
 # Export runtime environment

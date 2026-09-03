@@ -91,7 +91,16 @@ func ServeThumbnailHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	targetDir := getMediaDirectory(dirID)
+	// support both legacy hash and category/hash ids for thumbnail dir
+	if len(parts) == 3 {
+		// category/hash/file pattern — dirID already category, but we treat second part as hash
+		// Actually for thumbnail id we expect hash or hash/file, not category/hash. Fallback to second part if looks like hash.
+		// Keep logic simple: if 3 parts, take middle as hash
+		if parts[1] != "" && !strings.Contains(parts[1], ".") {
+			dirID = parts[1]
+		}
+	}
+	targetDir := resolveMediaDirectory(dirID)
 	if fi, err := os.Stat(targetDir); err != nil || !fi.IsDir() {
 		http.Redirect(w, r, "/static/logo.svg", http.StatusTemporaryRedirect)
 		return
@@ -99,7 +108,9 @@ func ServeThumbnailHandler(w http.ResponseWriter, r *http.Request) {
 
 	// 1. If a specific image filename was requested in id and exists
 	if len(parts) > 1 && parts[1] != "" {
-		reqFile := filepath.Join(targetDir, filepath.Base(parts[1]))
+		// filename is last part (support category/hash/file)
+		filenamePart := filepath.Base(parts[len(parts)-1])
+		reqFile := filepath.Join(targetDir, filenamePart)
 		ext := strings.ToLower(filepath.Ext(reqFile))
 		if ext == ".jpg" || ext == ".jpeg" || ext == ".png" || ext == ".webp" {
 			if fi, err := os.Stat(reqFile); err == nil && fi.Size() > 0 {

@@ -236,7 +236,17 @@ func (q *QueueManager) Delete(id string, deleteFile bool) bool {
 		if err == nil {
 			_ = os.Remove(filePath)
 			dirID, _, _ := strings.Cut(task.MediaID, "/")
-			_ = os.RemoveAll(getMediaDirectory(dirID))
+			// support both legacy hash and category/hash media IDs
+			if strings.Contains(dirID, "/") {
+				// edge: shouldn't happen after Cut but keep safe
+				dirID = strings.Split(task.MediaID, "/")[0]
+			}
+			// Check if mediaID was category/hash/file style
+			parts := strings.Split(task.MediaID, "/")
+			if len(parts) == 3 {
+				dirID = parts[1]
+			}
+			_ = os.RemoveAll(resolveMediaDirectory(dirID))
 		}
 	}
 
@@ -347,6 +357,7 @@ func (q *QueueManager) processTask(ctx context.Context, task *DownloadTask) {
 	}()
 
 	dirID := GetMD5Hash(task.URL, map[string]string{"format": task.Format})
+	ensureCategoryDirs()
 	targetDir := getMediaDirectory(dirID)
 	_ = os.MkdirAll(targetDir, 0o755)
 
@@ -360,6 +371,7 @@ func (q *QueueManager) processTask(ctx context.Context, task *DownloadTask) {
 				q.failTask(task, err.Error())
 				return
 			}
+			_ = organizeDownloadedFiles(dirID)
 			medias, _ := getAllFilesForId(dirID)
 			if len(medias) > 0 {
 				q.completeTask(task, medias[0], dirID)
@@ -375,6 +387,7 @@ func (q *QueueManager) processTask(ctx context.Context, task *DownloadTask) {
 			log.Info().Msgf("Routing direct file %s via aria2c", target.URL)
 			err := anpan.DownloadDirectFileAria(ctx, target.URL, targetDir, fn, 16)
 			if err == nil {
+				_ = organizeDownloadedFiles(dirID)
 				medias, _ := getAllFilesForId(dirID)
 				if len(medias) > 0 {
 					q.completeTask(task, medias[0], dirID)
@@ -502,6 +515,7 @@ func (q *QueueManager) processTask(ctx context.Context, task *DownloadTask) {
 
 		if err == nil {
 			moveJsonFiles(dirID)
+			_ = organizeDownloadedFiles(dirID)
 			medias, _ := getAllFilesForId(dirID)
 			if len(medias) > 0 {
 				q.completeTask(task, medias[0], dirID)
@@ -539,7 +553,7 @@ func (q *QueueManager) completeTask(task *DownloadTask, item Media, dirID string
 	task.TotalBytes = item.SizeInBytes
 
 	// Find downloaded thumbnail or extract frame using ffmpeg
-	targetDir := getMediaDirectory(dirID)
+	targetDir := resolveMediaDirectory(dirID)
 	foundThumb := false
 	if entries, err := os.ReadDir(targetDir); err == nil {
 		for _, e := range entries {
@@ -589,7 +603,7 @@ func (q *QueueManager) completeTask(task *DownloadTask, item Media, dirID string
 			lyricsCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 			if res, err := anpan.FetchLyrics(lyricsCtx, track, artist, 0); err == nil && res != nil {
-				filePath := filepath.Join(getMediaDirectory(dirID), m.Name)
+				filePath := filepath.Join(resolveMediaDirectory(dirID), m.Name)
 				_, _ = anpan.SaveLrcFile(filePath, res)
 				log.Info().Msgf("Saved synced lyrics for %s (track: %s)", m.Name, track)
 			}
@@ -721,8 +735,12 @@ func (q *QueueManager) LoadState() {
 		}
 
 		if t.Status == StatusCompleted && t.MediaID != "" {
-			dirID, _, _ := strings.Cut(t.MediaID, "/")
-			targetDir := getMediaDirectory(dirID)
+			parts := strings.Split(t.MediaID, "/")
+			dirID := parts[0]
+			if len(parts) == 3 {
+				dirID = parts[1]
+			}
+			targetDir := resolveMediaDirectory(dirID)
 			foundThumb := false
 			if entries, err := os.ReadDir(targetDir); err == nil {
 				for _, e := range entries {

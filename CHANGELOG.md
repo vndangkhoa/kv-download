@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.0.14] - 2026-09-03
+
+### 📁 Organized Media Library (Photos / Music / Videos)
+
+- **Typed Subfolders**: All downloads now auto-organized into `videos/`, `music/`, `photos/`, `other/` under the main download folder (e.g. `/volume1/KVDownload/videos/<hash>/video.mp4`). Extension mapping covers MP4/MKV/WEBM/MOV/AVI → videos, MP3/M4A/FLAC/WAV/OGG → music, JPG/PNG/WEBP/GIF/HEIC → photos.
+- **Smart Migration**: Fresh installs create `videos/music/photos/other/json` on first start; legacy flat `<hash>/` folders are migrated automatically (primary media detection via largest playable file) and future lookups (`/download`, `/thumbnail`, ZIP) search both organized and legacy paths for backward compatibility.
+- **Robust Serving**: Updated `getAllFilesForId`, `getFileFromId`, `resolveMediaDirectory`, `isValidId` (now accepts `category/hash/file`), and `organizeDownloadedFiles` with cross-device rename fallback.
+
+### 🧙 Synology DSM Setup Wizard
+
+- **Main Folder Selection**: SPK now ships `WIZARD_UIFILES/install_uifile` (required, defaults to `/volume1/KVDownload`) and `upgrade_uifile` (optional, blank = keep current). Wizard description clarifies the three auto-created subfolders.
+- **Host Bind Mount**: `package/lib/pkg-lib.sh` now persists choice to `/var/packages/kvdownload/etc/download_path`, creates the host path with organized subfolders, fixes ownership (`chown kvdownload`), and migrates existing legacy data from `/var/packages/kvdownload/var/data` to the new organized hierarchy on first use of a new main folder.
+- **Documentation**: `README.md` and `spk/apps/kvdownload/README.md` updated; `run.sh` now creates typed subfolders locally.
+
+---
+
 ## [1.0.13] - 2026-09-03
 
 ### 🎥 In-App Browser Video Playback Fix

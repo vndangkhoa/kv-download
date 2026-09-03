@@ -290,7 +290,7 @@ services:
 
 | Variable | Description | Default |
 |---|---|---|
-| `MR_DOWNLOAD_DIR` | Directory where videos are saved | `/download` (Docker) / `downloads/` (local) |
+| `MR_DOWNLOAD_DIR` | Main folder where downloads are saved (auto-organized into `videos/` `music/` `photos/`) | `/download` (Docker) / `downloads/` (local) |
 | `MR_PROXY` | Proxy URL passed to yt-dlp via `--proxy` | _(empty)_ |
 | `MR_COOKIES_BROWSER` | Auto-extract cookies from browser (`chrome`, `firefox`, `edge`, ...) | _(disabled)_ |
 | `MR_COOKIES_URL` | Page to visit during cookie extraction | `https://www.tiktok.com/` |

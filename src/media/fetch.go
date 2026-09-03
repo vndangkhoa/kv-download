@@ -45,6 +45,13 @@ func parseIndexTemplate() *template.Template {
 
 var downloadDir = getDownloadDir()
 
+func init() {
+	ensureCategoryDirs()
+	go func() {
+		migrateAllLegacy()
+	}()
+}
+
 func Index(w http.ResponseWriter, _ *http.Request) {
 	data := map[string]string{
 		"ytDlpVersion": CachedYtDlpVersion,
@@ -307,6 +314,7 @@ func downloadMedia(url string, requestArgs map[string]string) (string, string, e
 		lastErr, lastStderr = runYtDlp(args)
 		if lastErr == "" {
 			moveJsonFiles(id)
+			_ = organizeDownloadedFiles(id)
 			return id, "", nil
 		}
 		if attempt < maxAttempts {
@@ -363,7 +371,7 @@ func runYtDlp(args []string) (string, string) {
 }
 
 func moveJsonFiles(id string) {
-	root := getMediaDirectory(id)
+	root := resolveMediaDirectory(id)
 	jsonDir := downloadDir + "json/"
 
 	if err := os.MkdirAll(jsonDir, 0755); err != nil {
@@ -396,23 +404,53 @@ func getMediaDirectory(id string) string {
 }
 
 func getAllFilesForId(id string) ([]Media, error) {
-	root := getMediaDirectory(id)
-	file, err := os.Open(root)
-	if err != nil {
-		if os.IsNotExist(err) {
+	// Support both organized (videos/music/photos/other) and legacy flat layout.
+	candidates := candidateMediaDirs(id)
+	var root string
+	var files []string
+	for _, cand := range candidates {
+		f, err := os.Open(cand)
+		if err != nil {
+			continue
+		}
+		names, _ := f.Readdirnames(0)
+		f.Close()
+		if len(names) > 0 {
+			root = cand
+			files = names
+			break
+		}
+		// empty dir still counts as found (avoid falling through to next candidate)
+		if _, err := os.Stat(cand); err == nil {
+			root = cand
+			files = names
+			break
+		}
+	}
+	if root == "" {
+		// fallback to resolved (may be non-existent)
+		r := resolveMediaDirectory(id)
+		if _, err := os.Stat(r); os.IsNotExist(err) {
 			return nil, nil
 		}
-		return nil, err
+		root = r
+		f, err := os.Open(root)
+		if err != nil {
+			if os.IsNotExist(err) {
+				return nil, nil
+			}
+			return nil, err
+		}
+		files, _ = f.Readdirnames(0)
+		f.Close()
 	}
-	files, _ := file.Readdirnames(0)
-	file.Close()
 
 	var medias []Media
 
 	for _, f := range files {
 		ext := strings.ToLower(filepath.Ext(f))
 		if ext != ".json" && ext != ".part" && ext != ".ytdl" && ext != ".temp" {
-			fi, err2 := os.Stat(root + f)
+			fi, err2 := os.Stat(filepath.Join(root, f))
 			var size int64 = 0
 			if err2 == nil {
 				size = fi.Size()
@@ -433,12 +471,14 @@ func getAllFilesForId(id string) ([]Media, error) {
 	isPlayable := func(name string) int {
 		ext := strings.ToLower(filepath.Ext(name))
 		switch ext {
-		case ".mp4", ".webm", ".mkv", ".mov", ".avi":
+		case ".mp4", ".m4v", ".mkv", ".webm", ".mov", ".avi", ".flv", ".wmv", ".mpg", ".mpeg", ".ts":
 			return 1
-		case ".mp3", ".m4a", ".aac", ".flac", ".ogg", ".wav":
+		case ".mp3", ".m4a", ".aac", ".flac", ".wav", ".ogg", ".oga", ".opus", ".wma", ".aiff":
 			return 2
-		default:
+		case ".jpg", ".jpeg", ".png", ".webp", ".gif", ".avif", ".heic", ".heif", ".bmp", ".tiff":
 			return 3
+		default:
+			return 4
 		}
 	}
 
@@ -457,11 +497,33 @@ func getFileFromId(id string) (string, error) {
 	if !isValidId(id) {
 		return "", errors.New("invalid id")
 	}
-	dirID, filename, _ := strings.Cut(id, "/")
-	root := getMediaDirectory(dirID)
-	if strings.HasSuffix(filename, ".json") || strings.HasSuffix(filename, ".part") || strings.HasSuffix(filename, ".ytdl") {
+	if strings.HasSuffix(id, ".json") || strings.Contains(id, ".json/") || strings.HasSuffix(id, ".part") || strings.HasSuffix(id, ".ytdl") {
 		return "", errors.New("invalid file type")
 	}
+	// Try typed + legacy candidates (handles both legacy hash/file and future category/hash/file)
+	for _, p := range candidateFilePaths(id) {
+		if strings.HasSuffix(strings.ToLower(p), ".json") || strings.HasSuffix(strings.ToLower(p), ".part") || strings.HasSuffix(strings.ToLower(p), ".ytdl") {
+			continue
+		}
+		fi, err := os.Stat(p)
+		if err == nil && !fi.IsDir() {
+			return p, nil
+		}
+	}
+	// Fallback: legacy direct
+	dirID, filename, _ := strings.Cut(id, "/")
+	if strings.Contains(filename, "/") {
+		// category/hash/file style already handled above, but keep fallback
+		parts := strings.SplitN(id, "/", 3)
+		if len(parts) == 3 {
+			full := filepath.Join(getDownloadDir(), parts[0], parts[1], parts[2])
+			if fi, err := os.Stat(full); err == nil && !fi.IsDir() {
+				return full, nil
+			}
+		}
+		return "", errors.New("file not found")
+	}
+	root := resolveMediaDirectory(dirID)
 	full := filepath.Join(root, filename)
 	fi, err := os.Stat(full)
 	if err != nil || fi.IsDir() {
@@ -484,19 +546,38 @@ func GetMD5Hash(url string, args map[string]string) string {
 }
 
 func isValidId(id string) bool {
-	// Format is "<dirHash>/<filename>" - validate both parts to avoid path traversal
 	parts := strings.Split(id, "/")
-	if len(parts) != 2 {
-		return false
+	if len(parts) == 2 {
+		dirHash, filename := parts[0], parts[1]
+		if dirHash == "" || filename == "" {
+			return false
+		}
+		if filepath.Base(filename) != filename || strings.Contains(filename, "..") || strings.Contains(filename, "\\") {
+			return false
+		}
+		return true
 	}
-	dirHash, filename := parts[0], parts[1]
-	if dirHash == "" || filename == "" {
-		return false
+	if len(parts) == 3 {
+		cat, dirHash, filename := parts[0], parts[1], parts[2]
+		validCat := false
+		for _, c := range knownCategories {
+			if c == cat {
+				validCat = true
+				break
+			}
+		}
+		if !validCat {
+			return false
+		}
+		if dirHash == "" || filename == "" {
+			return false
+		}
+		if filepath.Base(filename) != filename || strings.Contains(filename, "..") || strings.Contains(filename, "\\") {
+			return false
+		}
+		return true
 	}
-	if filepath.Base(filename) != filename || strings.Contains(filename, "..") || strings.Contains(filename, "\\") {
-		return false
-	}
-	return true
+	return false
 }
 
 func getDownloadDir() string {
