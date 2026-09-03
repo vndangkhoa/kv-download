@@ -46,9 +46,9 @@ fi
 git tag -f -a "v$IMAGE_TAG" -m "KV Download v$IMAGE_TAG"
 
 echo "  -> Pushing master to Forgejo..."
-git push origin master --force 2>/dev/null || git push origin master
+git push origin master --force 2>/dev/null || git push origin master || true
 echo "  -> Pushing master to GitHub..."
-git push github master --force 2>/dev/null || git push github master
+git push github master --force 2>/dev/null || git push github master || true
 echo "  -> Pushing v$IMAGE_TAG tag to Forgejo & GitHub..."
 git push origin "v$IMAGE_TAG" --force 2>/dev/null || true
 git push github "v$IMAGE_TAG" --force 2>/dev/null || true
