@@ -787,11 +787,12 @@ func ScrapeFacebookVideos(inputURL, cookies string, start, limit int) (*ScanInfo
 		maxFetch = start + limit - 1
 	}
 
-	// Collect from both GraphQL and HTML scrapers, then merge with deduplication
-	// so we never miss videos (GraphQL may find only the current page).
+	// Collect from both GraphQL and HTML scrapers with dedup so we never miss
+	// videos (GraphQL may find only the current page). We always scrape up to
+	// fbScrapeMaxEntries so the offset-window can paginate through all results.
 	graphQLSeen := make(map[string]bool)
 	graphQLEntries := make([]ScanEntry, 0, fbScrapeMaxEntries)
-	_ = fbStreamGraphQLAll(context.Background(), inputURL, cookieHeader, maxFetch, func(e ScanEntry) {
+	_ = fbStreamGraphQLAll(context.Background(), inputURL, cookieHeader, fbScrapeMaxEntries, func(e ScanEntry) {
 		if graphQLSeen[e.Url] || graphQLSeen[e.Id] {
 			return
 		}
@@ -803,7 +804,7 @@ func ScrapeFacebookVideos(inputURL, cookies string, start, limit int) (*ScanInfo
 	// Always run HTML scraper as a secondary source to catch videos the GraphQL
 	// API may not return (e.g., when Facebook's GraphQL only returns the current
 	// visible page rather than the full paginated collection).
-	htmlEntries, _, _, sErr := scrapeFbAll(context.Background(), mobileURL, cookieHeader, profile, maxFetch)
+	htmlEntries, _, _, sErr := scrapeFbAll(context.Background(), mobileURL, cookieHeader, profile, fbScrapeMaxEntries)
 	if sErr != nil && len(graphQLEntries) == 0 && len(htmlEntries) == 0 {
 		return nil, sErr.Error(), sErr
 	}
@@ -822,19 +823,18 @@ func ScrapeFacebookVideos(inputURL, cookies string, start, limit int) (*ScanInfo
 		}
 	}
 
-	var entries []ScanEntry
-	entries = graphQLEntries
+	entries := graphQLEntries
 
-	// Apply offset window.
+	// Apply offset window (start is 1-based, limit is the page size).
 	total := len(entries)
 	if start > total {
 		entries = nil
 	} else {
-		if end := start + limit; end <= total {
-			entries = entries[start-1 : end]
-		} else {
-			entries = entries[start-1:]
+		end := start - 1 + limit
+		if end > total {
+			end = total
 		}
+		entries = entries[start-1 : end]
 	}
 
 	if len(entries) == 0 {
