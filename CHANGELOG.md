@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.0.15] - 2026-09-03
+
+### 🛠️ Organized Library — Duplicate & Share Fixes
+
+- **Duplicate Hash Cleanup**: `organizeDownloadedFiles` now removes stale legacy `downloadDir/<hash>/` duplicates when the typed `videos/<hash>/` (or `music`/`photos`) already exists (e.g. re-downloading same URL), preventing top-level clutter.
+- **DSM Share Fallback**: `package/lib/pkg-lib.sh` now keeps original `/volume2/KVDownload` path when `synoshare --get` fails but directory already exists (previously fell back to `DATA_DIR` and hid the organized library in File Station). Also auto-detects existing organized share when `download_path` file is missing.
+- **Wizard Default**: `install_uifile` default changed to `/volume2/KVDownload` (volume2 is the data volume on this NAS; volume1 fallback handled automatically).
+
+---
+
 ## [1.0.14] - 2026-09-03
 
 ### 📁 Organized Media Library (Photos / Music / Videos)

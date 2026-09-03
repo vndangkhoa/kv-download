@@ -161,10 +161,15 @@ func organizeDownloadedFiles(id string) error {
 	ensureCategoryDirs()
 	dir := getDownloadDir()
 	legacyPath := filepath.Join(dir, id)
-	// if already in a typed location, skip
+	// if already in a typed location, clean up duplicate legacy if present
 	for _, cat := range knownCategories {
 		typedPath := filepath.Join(dir, cat, id)
 		if fi, err := os.Stat(typedPath); err == nil && fi.IsDir() {
+			if _, err := os.Stat(legacyPath); err == nil {
+				// legacy duplicate exists (e.g. re-download of same URL) — remove it to avoid clutter
+				_ = os.RemoveAll(legacyPath)
+				log.Info().Msgf("Organized download %s already at %s/, removed duplicate legacy %s", id, cat, legacyPath)
+			}
 			return nil
 		}
 	}
