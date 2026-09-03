@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.0.13] - 2026-09-03
+
+### 🎥 In-App Browser Video Playback Fix
+
+- **Server-Side yt-dlp Streaming**: Added `BrowserResolveHandler` (`yt-dlp -g`) and `BrowserStreamHandler` (`yt-dlp -o - --remux mp4`) so page URLs (TikTok `@.../video/<id>`, YouTube, Instagram) that `<video>` cannot play are streamed server-side instead of returning grey `0:00` frames. Fixes `MediaError 4 / NotSupportedError`.
+- **CORS & HLS Proxy with Range Support (`/api/browser/proxy-media`)**: Direct CDN files (`googlevideo.com`, `tiktokcdn`, `mime_type=video`) proxied with forwarded `Range` headers, CORS `*`, and `m3u8` playlist rewriting (relative → absolute + `/api/browser/proxy-media` segments) with `hls.js` frontend integration, `cleanupHls()` lifecycle, and smart `resolve→proxy` vs `direct stream` routing (TikTok/YouTube skip CDN `403` resolve).
+- **Fault-Tolerant TikTok Pipeline**: 2-attempt retry with `1500 ms` backoff for transient "Unable to extract universal data" anti-bot failures; `isDirectMediaUrl` hardening for `googlevideo.com`, `tiktokcdn`/`v16`/`v19-webapp`/`/video/tos/` and `mime_type=video`; `HEAD+GET` + `OPTIONS` preflight handling.
+- **yt-dlp Nightly `2026.08.30.232658`**: Stable `2026.08.19` TikTok extractor broken — Dockerfile auto-updates to nightly on build; CDN `403/502` fallback to server mux stream with proper `download` hrefs.
+
+### 🧹 Repository Hygiene
+
+- **Removed Accidental `degoog-data/` Tracking**: Plugin test data introduced in `v1.0.11` removed from git tracking and added to `.gitignore`.
+
+---
+
 ## [1.0.12] - 2026-09-02
 
 ### 🎬 TikTok & YouTube Channel / Playlist Scanner
