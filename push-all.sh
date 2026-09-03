@@ -74,8 +74,8 @@ docker push "git.khoavo.myds.me/vndangkhoa/kv-download:latest"
 docker push "git.khoavo.myds.me/vndangkhoa/kv-download:$IMAGE_TAG"
 
 echo "  -> Pushing to GitHub Container Registry..."
-docker push "ghcr.io/vndangkhoa/kv-download:latest"
-docker push "ghcr.io/vndangkhoa/kv-download:$IMAGE_TAG"
+docker push "ghcr.io/vndangkhoa/kv-download:latest" 2>/dev/null || true
+docker push "ghcr.io/vndangkhoa/kv-download:$IMAGE_TAG" 2>/dev/null || true
 
 # ── 3. Synology SPK Package Bump, Build & Publish ───────────────────────────
 echo
