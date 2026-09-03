@@ -26,8 +26,8 @@ else
     echo "⚠️ Warning: $SECRETS not found"
 fi
 
-IMAGE_TAG="${1:-1.0.20}"
-COMMIT_MSG="${2:-fix: fix Facebook reels pagination — normalize /reels/ URLs, expand patterns"
+IMAGE_TAG="${1:-1.0.21}"
+COMMIT_MSG="${2:-fix: fix Facebook reels pagination — extract end_cursor and has_next_page independently, expand coll_id extraction window"
 
 echo "===================================================================="
 echo "🚀 Starting Full Release Pipeline for KV Download (v$IMAGE_TAG)"
