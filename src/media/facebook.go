@@ -787,25 +787,43 @@ func ScrapeFacebookVideos(inputURL, cookies string, start, limit int) (*ScanInfo
 		maxFetch = start + limit - 1
 	}
 
-	var entries []ScanEntry
-	seen := make(map[string]bool)
+	// Collect from both GraphQL and HTML scrapers, then merge with deduplication
+	// so we never miss videos (GraphQL may find only the current page).
+	graphQLSeen := make(map[string]bool)
+	graphQLEntries := make([]ScanEntry, 0, fbScrapeMaxEntries)
 	_ = fbStreamGraphQLAll(context.Background(), inputURL, cookieHeader, maxFetch, func(e ScanEntry) {
-		if seen[e.Url] || seen[e.Id] {
+		if graphQLSeen[e.Url] || graphQLSeen[e.Id] {
 			return
 		}
-		seen[e.Url] = true
-		seen[e.Id] = true
-		entries = append(entries, e)
+		graphQLSeen[e.Url] = true
+		graphQLSeen[e.Id] = true
+		graphQLEntries = append(graphQLEntries, e)
 	})
 
-	if len(entries) == 0 {
-		var errMsg string
-		var sErr error
-		entries, _, errMsg, sErr = scrapeFbAll(context.Background(), mobileURL, cookieHeader, profile, start+limit-1)
-		if sErr != nil {
-			return nil, errMsg, sErr
+	// Always run HTML scraper as a secondary source to catch videos the GraphQL
+	// API may not return (e.g., when Facebook's GraphQL only returns the current
+	// visible page rather than the full paginated collection).
+	htmlEntries, _, _, sErr := scrapeFbAll(context.Background(), mobileURL, cookieHeader, profile, maxFetch)
+	if sErr != nil && len(graphQLEntries) == 0 && len(htmlEntries) == 0 {
+		return nil, sErr.Error(), sErr
+	}
+
+	// Merge: keep GraphQL entries first, then add HTML entries (skip duplicates).
+	seen := make(map[string]bool)
+	for _, e := range graphQLEntries {
+		seen[e.Url] = true
+		seen[e.Id] = true
+	}
+	for _, e := range htmlEntries {
+		if !seen[e.Url] && !seen[e.Id] {
+			seen[e.Url] = true
+			seen[e.Id] = true
+			graphQLEntries = append(graphQLEntries, e)
 		}
 	}
+
+	var entries []ScanEntry
+	entries = graphQLEntries
 
 	// Apply offset window.
 	total := len(entries)
@@ -1097,7 +1115,8 @@ func StreamFacebookVideos(ctx context.Context, inputURL, cookies string, onEntry
 	seen := make(map[string]bool)
 	count := 0
 
-	// 1. First run GraphQL & multi-category paginated scanner (reels_tab, videos, timeline posts)
+	// 1. Run GraphQL & multi-category paginated scanner (reels_tab, videos, timeline posts)
+	// 2. Then run HTML mobile queue to catch any additional videos (same dedup logic).
 	_ = fbStreamGraphQLAll(ctx, inputURL, cookieHeader, limit, func(e ScanEntry) {
 		if seen[e.Url] || seen[e.Id] {
 			return
@@ -1108,11 +1127,7 @@ func StreamFacebookVideos(ctx context.Context, inputURL, cookies string, onEntry
 		onEntry(e, count)
 	})
 
-	if count > 0 {
-		return nil
-	}
-
-	// 2. Fallback to HTML mobile queue if GraphQL yielded nothing
+	// HTML mobile queue: finds additional videos that GraphQL may not return
 	queue := fbProfileTabs(profile, mobileURL)
 	emittedAtLeastOne := false
 	for len(queue) > 0 && count < limit && ctx.Err() == nil {

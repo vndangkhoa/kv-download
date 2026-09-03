@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.0.18] - 2026-09-03
+
+### 🐛 Fix Facebook Videos Scrape — Return All Videos, Not Just Current Page
+
+- **Dual-Source Video Discovery**: `ScrapeFacebookVideos` now collects from both the GraphQL API (browser-impersonated Python curl_cffi) AND the HTML mobile scraper, then merges results with deduplication instead of skipping HTML when GraphQL returns entries.
+- **Stream Endpoint Fix**: `StreamFacebookVideos` (SSE `/api/scan/stream`) no longer early-returns after GraphQL discovery. It now continues through the full HTML pagination queue, so every video is emitted live.
+- **Before**: GraphQL returned only the current visible page (e.g. 13 items), hiding the rest of the profile's videos.
+- **After**: All videos are discovered via HTML "Xem thêm" / "See more" pagination, deduplicated against GraphQL, and returned in full.
+
+---
+
 ## [1.0.17] - 2026-09-03
 
 ### 🐛 Fix Facebook Reels & Video Pagination Crawling
