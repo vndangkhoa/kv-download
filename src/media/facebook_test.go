@@ -230,3 +230,21 @@ func TestLiveFacebookScrape(t *testing.T) {
 		t.Logf("  [%d] %s -> %s", i+1, e.Title, e.Url)
 	}
 }
+
+func TestLiveFacebookReelsScrapeChutchit(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping live test in short mode")
+	}
+	info, errMsg, err := ScrapeFacebookVideos("https://www.facebook.com/chutchit.v0/reels/", "", 1, 100)
+	if err != nil {
+		t.Fatalf("ScrapeFacebookVideos error: %v (errMsg: %s)", err, errMsg)
+	}
+	if info == nil || len(info.Entries) <= 2 {
+		t.Fatalf("Expected all reels from chutchit.v0 (> 2), got %d (errMsg: %s)", len(info.Entries), errMsg)
+	}
+	t.Logf("Successfully scanned %d videos for %s (TotalCount: %d)", len(info.Entries), info.Title, info.TotalCount)
+	for i, e := range info.Entries[:5] {
+		t.Logf("  [%d] %s -> %s (thumb: %s)", i+1, e.Title, e.Url, e.Thumbnail)
+	}
+}
+

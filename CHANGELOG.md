@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.0.17] - 2026-09-03
+
+### 🐛 Fix Facebook Reels & Video Pagination Crawling
+- **URL Path Sanitization**: Stripped trailing subpaths (`/reels`, `/reels/`, `/reels_tab`, `/videos`, etc.) in URL normalizers and GraphQL fetchers so links like `https://www.facebook.com/chutchit.v0/reels/` cleanly resolve to the creator's reels tab rather than throwing 404s.
+- **Safe Unicode/Surrogate Decoding**: Fixed Unicode surrogates and emojis in video captions and descriptions causing crashes during GraphQL extraction and stdout streaming.
+- **Full GraphQL Pagination**: Ensured all collection reels (up to 500 items) are discovered and streamed without truncation.
+
+---
+
 ## [1.0.16] - 2026-09-03
 
 ### 📁 Flat Channel Organization & Separate Video/Thumbnail Libraries

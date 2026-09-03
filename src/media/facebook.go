@@ -145,8 +145,11 @@ func normalizeFacebookVideosURL(inputURL string) (string, error) {
 	if strings.HasPrefix(path, "people/") {
 		return "https://www.facebook.com/" + path + "/", nil
 	}
-	if strings.HasSuffix(path, "/videos") {
-		path = strings.TrimSuffix(path, "/videos")
+	for _, s := range []string{"/reels_tab", "/reels", "/videos_by", "/videos_tagged", "/videos", "/posts", "/photos_by", "/photos", "/about"} {
+		if strings.HasSuffix(strings.ToLower(path), s) {
+			path = path[:len(path)-len(s)]
+			break
+		}
 	}
 	return "https://m.facebook.com/" + path + "/videos/", nil
 }
@@ -779,9 +782,9 @@ func ScrapeFacebookVideos(inputURL, cookies string, start, limit int) (*ScanInfo
 	cookieHeader := fbCookieHeader(cookies, inputURL)
 	profile := extractFbProfile(inputURL)
 
-	maxFetch := start + limit - 1
-	if maxFetch < 150 {
-		maxFetch = 150
+	maxFetch := fbScrapeMaxEntries
+	if start+limit-1 > maxFetch {
+		maxFetch = start + limit - 1
 	}
 
 	var entries []ScanEntry
@@ -845,23 +848,32 @@ func extractFbVid(raw string) string {
 // fbStreamGraphQLAll uses browser-impersonated Python curl_cffi to paginate through
 // Facebook GraphQL collections (Reels, Videos, Posts) and streams each entry as JSON.
 func fbStreamGraphQLAll(ctx context.Context, inputURL, cookieHeader string, maxItems int, onEntry func(ScanEntry)) error {
-	pyCode := `import sys, json, re
+	pyCode := `import sys, json, re, urllib.parse
 from curl_cffi import requests
 
 profile_url = sys.argv[1].rstrip("/")
 cookies = sys.argv[2] if len(sys.argv) > 2 else ""
 max_items = int(sys.argv[3]) if len(sys.argv) > 3 and sys.argv[3].isdigit() else 200
 
-if "profile.php?id=" in profile_url:
-    id_m = re.search(r"id=(\d+)", profile_url)
-    pid = id_m.group(1) if id_m else ""
+u = urllib.parse.urlparse(profile_url)
+qs = urllib.parse.parse_qs(u.query)
+pid = qs.get("id", [""])[0]
+
+if pid:
     reels_url = f"https://www.facebook.com/profile.php?id={pid}&sk=reels_tab"
     videos_url = f"https://www.facebook.com/profile.php?id={pid}&sk=videos"
     main_url = f"https://www.facebook.com/profile.php?id={pid}"
 else:
-    reels_url = profile_url + "/reels_tab"
-    videos_url = profile_url + "/videos"
-    main_url = profile_url
+    path = u.path.strip("/")
+    suffixes = ["/reels_tab", "/reels", "/videos_by", "/videos_tagged", "/videos", "/posts", "/photos_by", "/photos", "/about"]
+    for s in suffixes:
+        if path.lower().endswith(s):
+            path = path[:-len(s)]
+            break
+    base = f"https://www.facebook.com/{path}"
+    reels_url = f"{base}/reels_tab"
+    videos_url = f"{base}/videos"
+    main_url = base
 
 headers = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
@@ -878,24 +890,44 @@ def emit(item):
         sys.stdout.write(json.dumps(item, ensure_ascii=False) + "\n")
         sys.stdout.flush()
     except Exception:
-        pass
+        try:
+            sys.stdout.write(json.dumps(item, ensure_ascii=True) + "\n")
+            sys.stdout.flush()
+        except Exception:
+            pass
 
 vids_seen = set()
 
+def safe_decode_json_str(s):
+    try:
+        return json.loads('"' + s.replace('"', '\\"') + '"')
+    except Exception:
+        try:
+            return s.encode('utf-8', 'ignore').decode('unicode_escape', 'ignore')
+        except Exception:
+            return s
+
 def extract_meta(chunk, vid):
     thumb = ""
-    tm = re.findall(r"(?i)(?:first_frame_thumbnail|thumbnailImage|preferred_thumbnail|image|\"uri\")[:\s\"\{]+(https://[^\"]+?(?:fbcdn\.net|fbsbx\.com)[^\"]+)", chunk)
-    v_thumbs = [u for u in tm if "t15" in u or "dst-jpg" in u or "p960x960" in u or "s960x960" in u]
-    if not v_thumbs:
-        v_thumbs = [u for u in tm if "t39" not in u and "blank.gif" not in u]
-    if v_thumbs:
-        thumb = v_thumbs[0].replace(r"\/", "/")
+    try:
+        tm = re.findall(r'(?i)(?:first_frame_thumbnail|thumbnailImage|preferred_thumbnail|image|"uri")[:\s"\{]+(https://[^\"]+?(?:fbcdn\.net|fbsbx\.com)[^\"]+)', chunk)
+        v_thumbs = [u for u in tm if "t15" in u or "dst-jpg" in u or "p960x960" in u or "s960x960" in u]
+        if not v_thumbs:
+            v_thumbs = [u for u in tm if "t39" not in u and "blank.gif" not in u]
+        if v_thumbs:
+            thumb = v_thumbs[0].replace(r"\/", "/")
+    except Exception:
+        pass
+
     title = ""
-    txtm = re.search(r"\"text\":\"([^\"]+)\"", chunk)
-    if txtm:
-        cand = txtm.group(1).encode("utf-8").decode("unicode_escape", "ignore").strip()
-        if len(cand) > 3 and cand not in ["Profile", "Reels", "Videos", "Follow", "Message", "No reels to show"]:
-            title = cand
+    try:
+        txtm = re.search(r'"text":"((?:[^"\\\\]|\\\\.)*)"', chunk)
+        if txtm:
+            cand = safe_decode_json_str(txtm.group(1)).strip()
+            if len(cand) > 3 and cand not in ["Profile", "Reels", "Videos", "Follow", "Message", "No reels to show"]:
+                title = cand
+    except Exception:
+        pass
     return title, thumb
 
 # 1. reels_tab
@@ -903,19 +935,22 @@ try:
     r = session.get(reels_url, headers=headers, timeout=25)
     text = r.text
     unescaped = text.replace(r"\/", "/")
-    initial_vids = re.findall(r"(?:/reel/|/videos/|\"video_id\":\s*\"|\"video\":\s*\{\s*\"id\":\s*\")(\d{6,})", unescaped)
+    initial_vids = re.findall(r'(?:/reel/|/videos/|\"video_id\":\s*\"|\"video\":\s*\{\s*\"id\":\s*\")(\d{6,})', unescaped)
     for v in initial_vids:
         if v in vids_seen: continue
         vids_seen.add(v)
-        idx = unescaped.find(v)
-        chunk = unescaped[max(0, idx - 10000):min(len(unescaped), idx + 10000)]
-        t, th = extract_meta(chunk, v)
-        emit({"id": f"https://www.facebook.com/reel/{v}", "title": t or f"Facebook reel #{v}", "url": f"https://www.facebook.com/reel/{v}", "thumbnail": th, "category": "Reels"})
+        try:
+            idx = unescaped.find(v)
+            chunk = unescaped[max(0, idx - 10000):min(len(unescaped), idx + 10000)]
+            t, th = extract_meta(chunk, v)
+            emit({"id": f"https://www.facebook.com/reel/{v}", "title": t or f"Facebook reel #{v}", "url": f"https://www.facebook.com/reel/{v}", "thumbnail": th, "category": "Reels"})
+        except Exception:
+            emit({"id": f"https://www.facebook.com/reel/{v}", "title": f"Facebook reel #{v}", "url": f"https://www.facebook.com/reel/{v}", "thumbnail": "", "category": "Reels"})
         if len(vids_seen) >= max_items: break
 
-    lsd_m = re.search(r"\"LSD\",\[\],\{\"token\":\"([^\"]+)\"", text)
+    lsd_m = re.search(r'\"LSD\",\[\],\{\"token\":\"([^\"]+)\"', text)
     lsd = lsd_m.group(1) if lsd_m else ""
-    cursor_m = re.search(r"\"end_cursor\":\"([^\"]+)\"[^}}]*\"has_next_page\":true\}\},\"id\":\"([^\"]+)\"", text)
+    cursor_m = re.search(r'\"end_cursor\":\"([^\"]+)\"[^}}]*\"has_next_page\":true\}\},\"id\":\"([^\"]+)\"', text)
     if lsd and cursor_m:
         cursor = cursor_m.group(1)
         coll_id = cursor_m.group(2)
@@ -953,18 +988,21 @@ try:
             }
             resp = session.post("https://www.facebook.com/api/graphql/", data=payload, headers=headers, timeout=20)
             resp_text = resp.text.replace(r"\/", "/")
-            page_vids = re.findall(r"\"video\":\{\"id\":\"(\d+)\"", resp_text) + re.findall(r"\"video_id\":\"(\d+)\"", resp_text)
+            page_vids = re.findall(r'\"video\":\{\"id\":\"(\d+)\"', resp_text) + re.findall(r'\"video_id\":\"(\d+)\"', resp_text) + re.findall(r'/reel/(\d+)', resp_text)
             new_in_page = 0
             for v in page_vids:
                 if v in vids_seen: continue
                 vids_seen.add(v)
                 new_in_page += 1
-                idx = resp_text.find(v)
-                chunk = resp_text[max(0, idx - 10000):min(len(resp_text), idx + 10000)]
-                t, th = extract_meta(chunk, v)
-                emit({"id": f"https://www.facebook.com/reel/{v}", "title": t or f"Facebook reel #{v}", "url": f"https://www.facebook.com/reel/{v}", "thumbnail": th, "category": "Reels"})
+                try:
+                    idx = resp_text.find(v)
+                    chunk = resp_text[max(0, idx - 10000):min(len(resp_text), idx + 10000)]
+                    t, th = extract_meta(chunk, v)
+                    emit({"id": f"https://www.facebook.com/reel/{v}", "title": t or f"Facebook reel #{v}", "url": f"https://www.facebook.com/reel/{v}", "thumbnail": th, "category": "Reels"})
+                except Exception:
+                    emit({"id": f"https://www.facebook.com/reel/{v}", "title": f"Facebook reel #{v}", "url": f"https://www.facebook.com/reel/{v}", "thumbnail": "", "category": "Reels"})
                 if len(vids_seen) >= max_items: break
-            pi = re.search(r"\"page_info\":\{[^}]*\"end_cursor\":\"([^\"]+)\"[^}]*\"has_next_page\":(true|false)", resp.text)
+            pi = re.search(r'\"page_info\":\{[^}]*\"end_cursor\":\"([^\"]+)\"[^}]*\"has_next_page\":(true|false)', resp.text)
             if pi and pi.group(2) == "true" and new_in_page > 0 and len(vids_seen) < max_items:
                 cursor = pi.group(1)
             else:
@@ -977,14 +1015,17 @@ if len(vids_seen) < max_items:
     try:
         vr = session.get(videos_url, headers=headers, timeout=20)
         v_text = vr.text.replace(r"\/", "/")
-        regular_vids = re.findall(r"(?:/videos/|\"video_id\":\s*\"|\"video\":\s*\{\s*\"id\":\s*\")(\d{6,})", v_text)
+        regular_vids = re.findall(r'(?:/videos/|\"video_id\":\s*\"|\"video\":\s*\{\s*\"id\":\s*\")(\d{6,})', v_text)
         for v in regular_vids:
             if v in vids_seen: continue
             vids_seen.add(v)
-            idx = v_text.find(v)
-            chunk = v_text[max(0, idx - 10000):min(len(v_text), idx + 10000)]
-            t, th = extract_meta(chunk, v)
-            emit({"id": f"https://www.facebook.com/watch/?v={v}", "title": t or f"Facebook video #{v}", "url": f"https://www.facebook.com/watch/?v={v}", "thumbnail": th, "category": "Videos"})
+            try:
+                idx = v_text.find(v)
+                chunk = v_text[max(0, idx - 10000):min(len(v_text), idx + 10000)]
+                t, th = extract_meta(chunk, v)
+                emit({"id": f"https://www.facebook.com/watch/?v={v}", "title": t or f"Facebook video #{v}", "url": f"https://www.facebook.com/watch/?v={v}", "thumbnail": th, "category": "Videos"})
+            except Exception:
+                emit({"id": f"https://www.facebook.com/watch/?v={v}", "title": f"Facebook video #{v}", "url": f"https://www.facebook.com/watch/?v={v}", "thumbnail": "", "category": "Videos"})
             if len(vids_seen) >= max_items: break
     except Exception:
         pass
@@ -994,14 +1035,17 @@ if len(vids_seen) < max_items:
     try:
         pr = session.get(main_url, headers=headers, timeout=20)
         p_text = pr.text.replace(r"\/", "/")
-        post_vids = re.findall(r"(?:/posts/|\"video_id\":\s*\"|\"video\":\s*\{\s*\"id\":\s*\")(\d{6,})", p_text)
+        post_vids = re.findall(r'(?:/posts/|\"video_id\":\s*\"|\"video\":\s*\{\s*\"id\":\s*\")(\d{6,})', p_text)
         for v in post_vids:
             if v in vids_seen: continue
             vids_seen.add(v)
-            idx = p_text.find(v)
-            chunk = p_text[max(0, idx - 10000):min(len(p_text), idx + 10000)]
-            t, th = extract_meta(chunk, v)
-            emit({"id": f"https://www.facebook.com/watch/?v={v}", "title": t or f"Facebook post #{v}", "url": f"https://www.facebook.com/watch/?v={v}", "thumbnail": th, "category": "Posts"})
+            try:
+                idx = p_text.find(v)
+                chunk = p_text[max(0, idx - 10000):min(len(p_text), idx + 10000)]
+                t, th = extract_meta(chunk, v)
+                emit({"id": f"https://www.facebook.com/watch/?v={v}", "title": t or f"Facebook post #{v}", "url": f"https://www.facebook.com/watch/?v={v}", "thumbnail": th, "category": "Posts"})
+            except Exception:
+                emit({"id": f"https://www.facebook.com/watch/?v={v}", "title": f"Facebook post #{v}", "url": f"https://www.facebook.com/watch/?v={v}", "thumbnail": "", "category": "Posts"})
             if len(vids_seen) >= max_items: break
     except Exception:
         pass
