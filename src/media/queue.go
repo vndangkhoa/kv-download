@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"io"
 	"net/http"
 	"net/url"
 	"os"
@@ -63,28 +62,34 @@ type DownloadTask struct {
 }
 
 type QueueManager struct {
-	mu           sync.RWMutex
-	tasks        map[string]*DownloadTask
-	queue        []string
-	maxWorkers   int
-	activeWorker int
-	workChan     chan string
+	mu            sync.RWMutex
+	tasks         map[string]*DownloadTask
+	queue         []string
+	maxWorkers    int
+	activeWorkers int
 }
 
 var GlobalQueue *QueueManager
 
 func init() {
-	GlobalQueue = NewQueueManager(3)
+	defaultWorkers := 3
+	if env := strings.TrimSpace(os.Getenv("MR_MAX_WORKERS")); env != "" {
+		if n, err := strconv.Atoi(env); err == nil && n > 0 {
+			defaultWorkers = n
+		}
+	}
+	GlobalQueue = NewQueueManager(defaultWorkers)
 	GlobalQueue.LoadState()
-	go GlobalQueue.workerLoop()
 }
 
 func NewQueueManager(maxWorkers int) *QueueManager {
+	if maxWorkers < 1 {
+		maxWorkers = 1
+	}
 	return &QueueManager{
 		tasks:      make(map[string]*DownloadTask),
 		queue:      make([]string, 0),
 		maxWorkers: maxWorkers,
-		workChan:   make(chan string, 100),
 	}
 }
 
@@ -144,10 +149,7 @@ func (q *QueueManager) AddFullWithMeta(url string, format string, cookies string
 	q.saveStateLocked()
 	q.broadcastTaskUpdate(task)
 
-	select {
-	case q.workChan <- task.ID:
-	default:
-	}
+	q.dispatchLocked()
 
 	return task
 }
@@ -207,10 +209,7 @@ func (q *QueueManager) Retry(id string) bool {
 		q.saveStateLocked()
 		q.broadcastTaskUpdate(task)
 
-		select {
-		case q.workChan <- id:
-		default:
-		}
+		q.dispatchLocked()
 		return true
 	}
 	return false
@@ -231,23 +230,8 @@ func (q *QueueManager) Delete(id string, deleteFile bool) bool {
 
 	q.removeFromQueueLocked(id)
 
-	if deleteFile && task.MediaID != "" {
-		filePath, err := getFileFromId(task.MediaID)
-		if err == nil {
-			_ = os.Remove(filePath)
-			dirID, _, _ := strings.Cut(task.MediaID, "/")
-			// support both legacy hash and category/hash media IDs
-			if strings.Contains(dirID, "/") {
-				// edge: shouldn't happen after Cut but keep safe
-				dirID = strings.Split(task.MediaID, "/")[0]
-			}
-			// Check if mediaID was category/hash/file style
-			parts := strings.Split(task.MediaID, "/")
-			if len(parts) == 3 {
-				dirID = parts[1]
-			}
-			_ = os.RemoveAll(resolveMediaDirectory(dirID))
-		}
+	if deleteFile {
+		deleteTaskFiles(id, task.MediaID)
 	}
 
 	delete(q.tasks, id)
@@ -297,15 +281,12 @@ func (q *QueueManager) RetryAllFailed() int {
 			t.CompletedAt = nil
 			q.queue = append(q.queue, id)
 			q.broadcastTaskUpdate(t)
-			select {
-			case q.workChan <- id:
-			default:
-			}
 			count++
 		}
 	}
 	if count > 0 {
 		q.saveStateLocked()
+		q.dispatchLocked()
 	}
 	return count
 }
@@ -328,23 +309,65 @@ func (q *QueueManager) GetTasks() []*DownloadTask {
 	return q.getTasksLocked()
 }
 
-func (q *QueueManager) workerLoop() {
-	for taskID := range q.workChan {
-		q.mu.Lock()
-		task, exists := q.tasks[taskID]
-		if !exists || task.Status != StatusQueued {
-			q.mu.Unlock()
-			continue
+func (q *QueueManager) SetMaxWorkers(n int) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if n < 1 {
+		n = 1
+	}
+	if n > 16 {
+		n = 16
+	}
+	q.maxWorkers = n
+	log.Info().Msgf("Queue max concurrent workers set to %d", n)
+	q.dispatchLocked()
+}
+
+func (q *QueueManager) GetMaxWorkers() int {
+	q.mu.RLock()
+	defer q.mu.RUnlock()
+	return q.maxWorkers
+}
+
+func (q *QueueManager) GetActiveWorkers() int {
+	q.mu.RLock()
+	defer q.mu.RUnlock()
+	return q.activeWorkers
+}
+
+func (q *QueueManager) dispatchLocked() {
+	for q.activeWorkers < q.maxWorkers && len(q.queue) > 0 {
+		var nextTask *DownloadTask
+		var nextIdx = -1
+		for i, id := range q.queue {
+			if t, ok := q.tasks[id]; ok && t.Status == StatusQueued {
+				nextTask = t
+				nextIdx = i
+				break
+			}
+		}
+		if nextTask == nil || nextIdx == -1 {
+			break
 		}
 
-		ctx, cancel := context.WithCancel(context.Background())
-		task.cancelFunc = cancel
-		task.Status = StatusDownloading
-		q.saveStateLocked()
-		q.mu.Unlock()
+		q.queue = append(q.queue[:nextIdx], q.queue[nextIdx+1:]...)
 
-		q.broadcastTaskUpdate(task)
-		q.processTask(ctx, task)
+		q.activeWorkers++
+		ctx, cancel := context.WithCancel(context.Background())
+		nextTask.cancelFunc = cancel
+		nextTask.Status = StatusDownloading
+		q.saveStateLocked()
+		q.broadcastTaskUpdate(nextTask)
+
+		go func(t *DownloadTask, c context.Context) {
+			defer func() {
+				q.mu.Lock()
+				q.activeWorkers--
+				q.dispatchLocked()
+				q.mu.Unlock()
+			}()
+			q.processTask(c, t)
+		}(nextTask, ctx)
 	}
 }
 
@@ -371,7 +394,14 @@ func (q *QueueManager) processTask(ctx context.Context, task *DownloadTask) {
 				q.failTask(task, err.Error())
 				return
 			}
-			_ = organizeDownloadedFiles(dirID)
+			ch := task.Channel
+			if ch == "" {
+				ch = task.Uploader
+			}
+			if ch == "" {
+				ch = task.PlaylistTitle
+			}
+			_ = organizeDownloadedTaskFiles(dirID, ch, task.Title)
 			medias, _ := getAllFilesForId(dirID)
 			if len(medias) > 0 {
 				q.completeTask(task, medias[0], dirID)
@@ -387,7 +417,14 @@ func (q *QueueManager) processTask(ctx context.Context, task *DownloadTask) {
 			log.Info().Msgf("Routing direct file %s via aria2c", target.URL)
 			err := anpan.DownloadDirectFileAria(ctx, target.URL, targetDir, fn, 16)
 			if err == nil {
-				_ = organizeDownloadedFiles(dirID)
+				ch := task.Channel
+				if ch == "" {
+					ch = task.Uploader
+				}
+				if ch == "" {
+					ch = task.PlaylistTitle
+				}
+				_ = organizeDownloadedTaskFiles(dirID, ch, task.Title)
 				medias, _ := getAllFilesForId(dirID)
 				if len(medias) > 0 {
 					q.completeTask(task, medias[0], dirID)
@@ -397,7 +434,7 @@ func (q *QueueManager) processTask(ctx context.Context, task *DownloadTask) {
 		}
 	}
 
-	outputTemplate := targetDir + "%(title,channel+id,uploader+id,id)s.%(ext)s"
+	outputTemplate := targetDir + "%(title,description,uploader_id,id)s.%(ext)s"
 
 	var lastErr string
 	maxAttempts := 3
@@ -483,25 +520,34 @@ func (q *QueueManager) processTask(ctx context.Context, task *DownloadTask) {
 		args = append(args, task.URL)
 
 		cmd := exec.CommandContext(ctx, "yt-dlp", args...)
-		stdout, _ := cmd.StdoutPipe()
-		stderr, _ := cmd.StderrPipe()
+		cmd.Env = append(os.Environ(), "PYTHONUNBUFFERED=1")
+
+		stdoutPipe, err := cmd.StdoutPipe()
+		if err != nil {
+			lastErr = err.Error()
+			continue
+		}
+		var stderrBuf bytes.Buffer
+		cmd.Stderr = &stderrBuf
 
 		if err := cmd.Start(); err != nil {
 			lastErr = err.Error()
-			time.Sleep(300 * time.Millisecond)
 			continue
 		}
 
-		var stderrBuf bytes.Buffer
-		go io.Copy(&stderrBuf, stderr)
+		scanner := bufio.NewScanner(stdoutPipe)
+		buf := make([]byte, 64*1024)
+		scanner.Buffer(buf, 1024*1024)
 
-		scanner := bufio.NewScanner(stdout)
 		for scanner.Scan() {
-			line := scanner.Text()
-			q.parseProgressLine(task, line)
+			line := strings.TrimSpace(scanner.Text())
+			if line != "" {
+				q.parseProgressLine(task, line)
+			}
 		}
 
-		err := cmd.Wait()
+		err = cmd.Wait()
+
 		if ctx.Err() == context.Canceled {
 			q.mu.Lock()
 			task.Status = StatusCancelled
@@ -515,7 +561,14 @@ func (q *QueueManager) processTask(ctx context.Context, task *DownloadTask) {
 
 		if err == nil {
 			moveJsonFiles(dirID)
-			_ = organizeDownloadedFiles(dirID)
+			ch := task.Channel
+			if ch == "" {
+				ch = task.Uploader
+			}
+			if ch == "" {
+				ch = task.PlaylistTitle
+			}
+			_ = organizeDownloadedTaskFiles(dirID, ch, task.Title)
 			medias, _ := getAllFilesForId(dirID)
 			if len(medias) > 0 {
 				q.completeTask(task, medias[0], dirID)
@@ -832,6 +885,19 @@ func QueueAddHandler(w http.ResponseWriter, r *http.Request) {
 		for _, u := range urls {
 			u = strings.TrimSpace(u)
 			if u != "" {
+				if IsFacebookProfileURL(u) {
+					if scan, _, err := ScrapeFacebookVideos(u, body.Cookies, 1, 100); err == nil && scan != nil && len(scan.Entries) > 0 {
+						for _, entry := range scan.Entries {
+							tTitle := entry.Title
+							if tTitle == "" {
+								tTitle = scan.Title
+							}
+							task := GlobalQueue.AddFullWithMeta(entry.Url, body.Format, body.Cookies, body.RateLimit, tTitle, entry.Thumbnail, scan.Title, scan.Channel, "")
+							addedTasks = append(addedTasks, task)
+						}
+						continue
+					}
+				}
 				task := GlobalQueue.AddFullWithMeta(u, body.Format, body.Cookies, body.RateLimit, "", "", body.PlaylistTitle, body.Channel, "")
 				addedTasks = append(addedTasks, task)
 			}
@@ -916,5 +982,46 @@ func QueueRetryFailedHandler(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
 		"success": true,
 		"retried": count,
+	})
+}
+
+func QueueGetWorkersHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"maxWorkers":    GlobalQueue.GetMaxWorkers(),
+		"activeWorkers": GlobalQueue.GetActiveWorkers(),
+	})
+}
+
+func QueueSetWorkersHandler(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Workers int `json:"workers"`
+	}
+	countParam := r.URL.Query().Get("count")
+	if countParam == "" {
+		countParam = r.URL.Query().Get("workers")
+	}
+	if countParam != "" {
+		if n, err := strconv.Atoi(countParam); err == nil && n > 0 {
+			body.Workers = n
+		}
+	} else if r.Body != nil {
+		_ = json.NewDecoder(r.Body).Decode(&body)
+	}
+
+	if body.Workers < 1 {
+		body.Workers = 1
+	}
+	if body.Workers > 16 {
+		body.Workers = 16
+	}
+
+	GlobalQueue.SetMaxWorkers(body.Workers)
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"success":       true,
+		"maxWorkers":    GlobalQueue.GetMaxWorkers(),
+		"activeWorkers": GlobalQueue.GetActiveWorkers(),
 	})
 }

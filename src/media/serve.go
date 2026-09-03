@@ -17,6 +17,22 @@ This will serve the fetched files to the client
 */
 
 func ServeMedia(w http.ResponseWriter, r *http.Request) {
+	relFile := strings.TrimSpace(r.URL.Query().Get("file"))
+	if relFile == "" {
+		relFile = strings.TrimSpace(r.URL.Query().Get("path"))
+	}
+	if relFile != "" {
+		if strings.Contains(relFile, "..") || strings.HasPrefix(relFile, "/") {
+			http.Error(w, "Invalid file path", http.StatusBadRequest)
+			return
+		}
+		fullPath := filepath.Join(getDownloadDir(), relFile)
+		if fi, err := os.Stat(fullPath); err == nil && !fi.IsDir() {
+			streamFileToClient(w, r, fullPath)
+			return
+		}
+	}
+
 	id := r.URL.Query().Get("id")
 	log.Info().Msgf("Serving file %s", id)
 	if id == "" {

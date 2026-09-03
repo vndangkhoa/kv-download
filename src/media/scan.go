@@ -38,6 +38,7 @@ type ScanEntry struct {
 	Uploader    string          `json:"uploader,omitempty"`
 	Channel     string          `json:"channel,omitempty"`
 	ViewCount   int64           `json:"view_count,omitempty"`
+	Category    string          `json:"category,omitempty"`
 }
 
 type ScanInfo struct {
@@ -85,6 +86,10 @@ func ScanUrlWithPagination(inputUrl string, cookies string, start int, limit int
 	url := strings.TrimSpace(inputUrl)
 	if url == "" {
 		return nil, "", errors.New("missing URL")
+	}
+
+	if IsFacebookProfileURL(url) {
+		return ScrapeFacebookVideos(url, cookies, start, limit)
 	}
 
 	log.Info().Msgf("Scanning %s (batch: %d:%d, hasCustomCookies: %t)", url, start, start+limit-1, cookies != "")
@@ -463,6 +468,10 @@ func StreamScanUrl(ctx context.Context, inputUrl string, cookies string, onEntry
 		if idx := strings.Index(cleanURL, "?"); idx != -1 {
 			cleanURL = cleanURL[:idx]
 		}
+	}
+
+	if IsFacebookProfileURL(cleanURL) {
+		return StreamFacebookVideos(ctx, cleanURL, cookies, onEntry, onMeta)
 	}
 
 	args := []string{

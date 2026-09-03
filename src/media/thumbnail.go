@@ -2,6 +2,7 @@ package media
 
 import (
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/exec"
@@ -61,8 +62,47 @@ func ExtractThumbnailFromAudio(audioPath, thumbPath string) error {
 
 // ServeThumbnailHandler handles /thumbnail and /api/thumbnail requests.
 // It checks for existing image files in the media folder or dynamically generates
-// a thumbnail frame via ffmpeg if missing.
+// a thumbnail frame via ffmpeg if missing. It also proxies remote image URLs.
 func ServeThumbnailHandler(w http.ResponseWriter, r *http.Request) {
+	remoteURL := strings.TrimSpace(r.URL.Query().Get("url"))
+	if remoteURL != "" && (strings.HasPrefix(remoteURL, "http://") || strings.HasPrefix(remoteURL, "https://")) {
+		req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, remoteURL, nil)
+		if err == nil {
+			req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
+			req.Header.Set("Accept", "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8")
+			if resp, err := httpClient.Do(req); err == nil && resp.StatusCode == http.StatusOK {
+				defer resp.Body.Close()
+				w.Header().Set("Cache-Control", "public, max-age=86400")
+				ct := resp.Header.Get("Content-Type")
+				if ct == "" {
+					ct = "image/jpeg"
+				}
+				w.Header().Set("Content-Type", ct)
+				_, _ = io.Copy(w, resp.Body)
+				return
+			}
+		}
+	}
+
+	relPath := strings.TrimSpace(r.URL.Query().Get("path"))
+	if relPath == "" {
+		relPath = strings.TrimSpace(r.URL.Query().Get("file"))
+	}
+	if relPath != "" {
+		if !strings.Contains(relPath, "..") && !strings.HasPrefix(relPath, "/") {
+			fullPath := filepath.Join(getDownloadDir(), relPath)
+			ext := strings.ToLower(filepath.Ext(fullPath))
+			if ext == ".jpg" || ext == ".jpeg" || ext == ".png" || ext == ".webp" {
+				if fi, err := os.Stat(fullPath); err == nil && fi.Size() > 0 {
+					w.Header().Set("Cache-Control", "public, max-age=86400")
+					w.Header().Set("Content-Type", getMimeType(fullPath))
+					http.ServeFile(w, r, fullPath)
+					return
+				}
+			}
+		}
+	}
+
 	id := strings.TrimSpace(r.URL.Query().Get("id"))
 	if id == "" {
 		http.Redirect(w, r, "/static/logo.svg", http.StatusTemporaryRedirect)

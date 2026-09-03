@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.0.16] - 2026-09-03
+
+### 📁 Flat Channel Organization & Separate Video/Thumbnail Libraries
+- **Direct Channel File Hierarchy**: Videos are stored directly in `<downloads>/videos/<ChannelName>/<Caption>.mp4` without intermediate hash subdirectories.
+- **Dedicated Cover Thumbnails**: Matching cover images are stored in `<downloads>/thumbnails/<ChannelName>/<Caption>.jpg` sharing the exact same sanitized caption base name.
+- **Caption Sanitization**: Strips illegal filesystem characters, emojis, and hashtags while preserving human-readable titles.
+
+### 🖼️ Disk-Backed Media Gallery & Interactive Folder Browser (`/api/gallery`)
+- **Direct Disk Scanner**: The Media Gallery reads directly from disk (`/api/gallery`) so downloaded files permanently persist even after clearing recent downloads in the Download Center.
+- **Channel Folder Navigation Bar**: Interactive folder filter chips (`📁 All Folders`, `📁 <Channel/Creator Name>`) allow one-click filtering by creator.
+- **Safe Download Center Clearing**: Clearing recent downloads in the Download Center only clears the active task queue view (`deleteFile = false`), leaving files on disk and in the Media Gallery intact.
+- **Permanent File Deletion**: Deleting from the Media Gallery prompts for confirmation and permanently removes both the video and its paired thumbnail from disk (`DELETE /api/gallery/file`).
+
+### 🎬 Facebook Profile & Reels Discovery
+- **Deep Profile Scraping**: Added native Facebook profile and reels scanner (`facebook.go`) supporting `/profile.php?id=...` and named creator handles (`facebook.com/<handle>`).
+- **Cookie Header Parsing & Extraction**: Handles Netscape and raw cookie headers for authenticated pagination.
+
+---
+
 ## [1.0.15] - 2026-09-03
 
 ### 🛠️ Organized Library — Duplicate & Share Fixes

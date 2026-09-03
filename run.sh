@@ -99,6 +99,7 @@ mkdir -p "$DOWNLOAD_DIR/json"
 # Export runtime environment
 export PORT="$PORT"
 export MR_DOWNLOAD_DIR="$DOWNLOAD_DIR"
+export MR_IMPERSONATE="${MR_IMPERSONATE:-chrome}"
 
 # Get Local IP Address for LAN access display
 LOCAL_IP="127.0.0.1"

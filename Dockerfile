@@ -26,6 +26,7 @@ LABEL org.opencontainers.image.licenses="MIT"
 
 # This is where the downloaded files will be saved in the container.
 ENV MR_DOWNLOAD_DIR="/download"
+ENV MR_IMPERSONATE="chrome"
 
 RUN apk add --update --no-cache \
     # https://github.com/yt-dlp/yt-dlp/issues/14404 \
