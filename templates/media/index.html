@@ -152,39 +152,160 @@
             transition: background-color 5000s ease-in-out 0s;
         }
 
-        /* Matrix Theme Specific Styling */
-        body.theme-matrix {
-            color: #00ff66 !important;
-            font-family: 'Share Tech Mono', 'JetBrains Mono', monospace !important;
+        /* Light Theme Specific Styling */
+        body.theme-light {
+            background-color: #f8fafc !important;
+            color: #0f172a !important;
         }
-        body.theme-matrix .glass-panel {
-            background: rgba(2, 14, 6, 0.85) !important;
-            border-color: rgba(0, 255, 102, 0.25) !important;
-            box-shadow: 0 0 25px rgba(0, 255, 102, 0.08) !important;
+        body.theme-light .glass-panel {
+            background: rgba(255, 255, 255, 0.88) !important;
+            border-color: rgba(0, 0, 0, 0.08) !important;
+            box-shadow: 0 4px 20px -2px rgba(0, 0, 0, 0.06) !important;
         }
-        body.theme-matrix input[type='text'],
-        body.theme-matrix input[type='search'],
-        body.theme-matrix input[type='url'],
-        body.theme-matrix textarea,
-        body.theme-matrix select,
-        body.theme-matrix .input-recessed {
-            background-color: #020c06 !important;
-            color: #00ff66 !important;
-            -webkit-text-fill-color: #00ff66 !important;
-            border: 1px solid rgba(0, 255, 102, 0.35) !important;
-            font-family: 'JetBrains Mono', monospace !important;
-            box-shadow: inset 0 2px 5px rgba(0, 0, 0, 0.8), 0 0 10px rgba(0, 255, 102, 0.1) !important;
+        body.theme-light .glass-panel:hover {
+            border-color: rgba(0, 0, 0, 0.15) !important;
         }
-        body.theme-matrix input::placeholder,
-        body.theme-matrix textarea::placeholder {
-            color: rgba(0, 255, 102, 0.4) !important;
-            -webkit-text-fill-color: rgba(0, 255, 102, 0.4) !important;
+        body.theme-light .glass-surface {
+            background: rgba(255, 255, 255, 0.95) !important;
+            border-color: rgba(0, 0, 0, 0.08) !important;
+            box-shadow: 0 20px 40px -10px rgba(0, 0, 0, 0.08), inset 0 1px 0 0 rgba(255, 255, 255, 1) !important;
         }
-        body.theme-matrix .btn-primary-glow {
-            background: linear-gradient(135deg, #00bb44 0%, #00ff66 100%) !important;
-            box-shadow: 0 0 20px rgba(0, 255, 102, 0.5) !important;
-            color: #020603 !important;
-            font-weight: 800 !important;
+        body.theme-light header {
+            background: rgba(255, 255, 255, 0.85) !important;
+            border-bottom: 1px solid rgba(0, 0, 0, 0.08) !important;
+        }
+        body.theme-light .app-sidenav {
+            background: #ffffff !important;
+            border-right: 1px solid rgba(0, 0, 0, 0.08) !important;
+        }
+        body.theme-light nav.md\:hidden {
+            background: rgba(255, 255, 255, 0.96) !important;
+            border-top: 1px solid rgba(0, 0, 0, 0.08) !important;
+        }
+        body.theme-light input[type='text'],
+        body.theme-light input[type='search'],
+        body.theme-light input[type='url'],
+        body.theme-light input[type='email'],
+        body.theme-light input[type='password'],
+        body.theme-light input[type='number'],
+        body.theme-light textarea,
+        body.theme-light select,
+        body.theme-light .input-recessed {
+            background-color: #ffffff !important;
+            color: #0f172a !important;
+            border: 1px solid rgba(0, 0, 0, 0.15) !important;
+            box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.04) !important;
+            -webkit-text-fill-color: #0f172a !important;
+        }
+        body.theme-light input[type='text']:focus,
+        body.theme-light input[type='search']:focus,
+        body.theme-light input[type='url']:focus,
+        body.theme-light textarea:focus,
+        body.theme-light select:focus,
+        body.theme-light .input-recessed:focus-within {
+            border-color: rgba(147, 51, 234, 0.6) !important;
+            box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.04), 0 0 0 3px rgba(168, 85, 247, 0.15) !important;
+        }
+        body.theme-light input::placeholder,
+        body.theme-light textarea::placeholder {
+            color: #94a3b8 !important;
+            -webkit-text-fill-color: #94a3b8 !important;
+        }
+        body.theme-light input:-webkit-autofill,
+        body.theme-light input:-webkit-autofill:hover, 
+        body.theme-light input:-webkit-autofill:focus, 
+        body.theme-light textarea:-webkit-autofill,
+        body.theme-light select:-webkit-autofill {
+            -webkit-text-fill-color: #0f172a !important;
+            -webkit-box-shadow: 0 0 0px 1000px #ffffff inset !important;
+        }
+        /* Text adaptations for light theme */
+        body.theme-light #topTitle,
+        body.theme-light h1, body.theme-light h2, body.theme-light h3, body.theme-light h4,
+        body.theme-light .text-white:not(.btn-primary-glow):not(.btn-primary-glow *):not(.bg-primary *):not([class*="from-"]):not([class*="bg-gradient-"] *):not(.badge-solid *) {
+            color: #0f172a !important;
+        }
+        body.theme-light .text-on-surface-variant {
+            color: #475569 !important;
+        }
+        body.theme-light .bg-white\/5,
+        body.theme-light .bg-white\/10 {
+            background-color: rgba(0, 0, 0, 0.04) !important;
+        }
+        body.theme-light .border-white\/5,
+        body.theme-light .border-white\/10,
+        body.theme-light .border-white\/15 {
+            border-color: rgba(0, 0, 0, 0.08) !important;
+        }
+        body.theme-light .bg-black\/20,
+        body.theme-light .bg-black\/40,
+        body.theme-light .bg-black\/60 {
+            background-color: rgba(0, 0, 0, 0.05) !important;
+        }
+        body.theme-light .sidenav-link:hover {
+            background-color: rgba(0, 0, 0, 0.05) !important;
+            color: #0f172a !important;
+        }
+        body.theme-light .sidenav-link.active {
+            background: linear-gradient(135deg, rgba(160, 120, 255, 0.18), rgba(99, 102, 241, 0.12)) !important;
+            color: #7c3aed !important;
+        }
+        body.theme-light .format-pill-card {
+            background: rgba(0, 0, 0, 0.03) !important;
+            border: 1px solid rgba(0, 0, 0, 0.1) !important;
+            color: #334155 !important;
+        }
+        body.theme-light .format-pill-card:hover {
+            background: rgba(0, 0, 0, 0.06) !important;
+            color: #0f172a !important;
+        }
+        body.theme-light .format-pill-card.active {
+            background: linear-gradient(135deg, #a078ff, #7c3aed) !important;
+            color: #ffffff !important;
+            border-color: transparent !important;
+        }
+        body.theme-light .format-pill-card.active * {
+            color: #ffffff !important;
+        }
+        body.theme-light #connStatus {
+            background: rgba(0, 0, 0, 0.04) !important;
+            border-color: rgba(0, 0, 0, 0.08) !important;
+        }
+        body.theme-light #connStatus #navGlobalSpeed {
+            color: #0f172a !important;
+        }
+        body.theme-light #themeToggleBtn:hover {
+            background-color: rgba(0, 0, 0, 0.06) !important;
+            color: #0f172a !important;
+        }
+        body.theme-light .modal-backdrop {
+            background-color: rgba(15, 23, 42, 0.45) !important;
+        }
+        body.theme-light [id$="Modal"] > div,
+        body.theme-light #albumModal > div,
+        body.theme-light #settingsModal > div,
+        body.theme-light #cookiesModal > div,
+        body.theme-light #shortcutModal > div {
+            background: #ffffff !important;
+            color: #0f172a !important;
+            border-color: rgba(0, 0, 0, 0.1) !important;
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.2) !important;
+        }
+        body.theme-light #themePillContainer {
+            background: rgba(0, 0, 0, 0.06) !important;
+            border-color: rgba(0, 0, 0, 0.08) !important;
+        }
+        body.theme-light .theme-pill-btn {
+            color: #64748b !important;
+        }
+        body.theme-light .theme-pill-btn.active {
+            background: #7c3aed !important;
+            color: #ffffff !important;
+        }
+        body.theme-light .album-item-card {
+            background: #ffffff !important;
+            border: 1px solid rgba(0, 0, 0, 0.08) !important;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04) !important;
         }
 
         .btn-primary-glow {
@@ -530,8 +651,7 @@
         }
     </style>
 </head>
-<body class="theme-simple">
-<canvas id="matrixCanvas" class="d-none" style="position:fixed;inset:0;z-index:0;pointer-events:none;"></canvas>
+<body class="theme-dark">
 <div class="ambient-glow-mesh" style="position:fixed;inset:0;pointer-events:none;z-index:0;overflow:hidden;">
     <div style="position:absolute;width:600px;height:600px;top:-150px;left:-100px;background:radial-gradient(circle,rgba(6,182,212,.18) 0%,rgba(59,130,246,.06) 60%,transparent 80%);filter:blur(100px);border-radius:50%;"></div>
     <div style="position:absolute;width:550px;height:550px;top:25%;right:-120px;background:radial-gradient(circle,rgba(160,120,255,.16) 0%,rgba(99,102,241,.06) 60%,transparent 80%);filter:blur(100px);border-radius:50%;"></div>
@@ -609,7 +729,7 @@
                 <span class="text-white/30 hidden xs:inline sm:inline">•</span>
                 <span id="navGlobalSpeed" class="text-white font-medium">0 KB/s</span>
             </div>
-            <button type="button" id="themeToggleBtn" class="w-8 h-8 sm:w-9 sm:h-9 rounded-full flex items-center justify-center text-on-surface-variant hover:text-white hover:bg-white/10 transition-colors" title="Toggle Glass / Matrix theme">
+            <button type="button" id="themeToggleBtn" class="w-8 h-8 sm:w-9 sm:h-9 rounded-full flex items-center justify-center text-on-surface-variant hover:text-white hover:bg-white/10 transition-colors" title="Toggle Theme (System / Dark / Light)">
                 <span class="material-symbols-outlined text-[18px]">dark_mode</span>
             </button>
             <div class="w-7 h-7 sm:w-8 sm:h-8 rounded-full bg-gradient-to-br from-primary-container to-secondary-container flex items-center justify-center text-[10px] sm:text-[11px] font-bold text-white shadow-sm">KV</div>
@@ -628,33 +748,36 @@
                     <div class="relative flex-1 group min-w-0">
                         <span class="material-symbols-outlined absolute left-4 top-4 text-on-surface-variant group-focus-within:text-primary transition-colors text-[20px]">link</span>
                         <textarea id="urlInput" name="url" rows="1" placeholder="Paste link here... (YouTube, TikTok, Twitter/X, Instagram, Threads, Reddit, Vimeo, M3U8...)" class="w-full input-recessed py-3.5 pl-12 pr-12 text-[14px] text-white placeholder:text-on-surface-variant/50 focus:outline-none resize-none min-h-[52px] max-h-[160px]"></textarea>
-                        <button type="button" id="btnClearInput" class="d-none absolute right-3 top-3.5 flex items-center p-1 text-on-surface-variant hover:text-white transition-colors" title="Clear input">
-                            <span class="material-symbols-outlined text-[18px]">backspace</span>
+                        <button type="button" id="btnClearInput" class="d-none absolute right-3.5 top-3.5 w-7 h-7 rounded-lg bg-white/10 hover:bg-white/20 text-on-surface-variant hover:text-white flex items-center justify-center transition-colors" title="Clear input">
+                            <span class="material-symbols-outlined text-[16px]">close</span>
                         </button>
-                        <div id="detectedPlatformBadge" class="hidden absolute -top-2.5 -right-1 text-[10px] px-2.5 py-0.5 rounded-full bg-primary-container/20 border border-primary/30 text-primary font-semibold flex items-center gap-1 cursor-pointer">
-                            <i class="bi bi-link-45deg"></i> <span id="detectedPlatformText">Ready</span>
-                        </div>
                     </div>
-                    <div class="flex flex-wrap sm:flex-nowrap gap-2 shrink-0">
-                        <div class="flex gap-2 flex-1 sm:flex-initial">
-                            <button type="button" id="btnPasteClipboard" class="flex-1 sm:flex-initial px-4 py-3.5 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-white text-[13px] font-semibold flex items-center justify-center gap-2 transition-all min-h-[52px]">
-                                <span class="material-symbols-outlined text-[18px]">content_paste</span> <span>Paste</span>
-                            </button>
-                            <button type="button" id="btnQuickCookie" class="flex-1 sm:flex-initial px-4 py-3.5 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-on-surface-variant hover:text-white text-[13px] font-semibold flex items-center justify-center gap-2 transition-all min-h-[52px]" title="Cookie settings">
-                                <i class="bi bi-cookie text-amber-400"></i> <span>Cookies</span>
-                            </button>
-                        </div>
-                        <button type="button" id="submitBtn" class="w-full sm:w-auto btn-primary-glow px-6 py-3.5 rounded-xl font-bold text-[13px] flex items-center justify-center gap-2 whitespace-nowrap min-h-[52px]">
-                            <span class="material-symbols-outlined text-[18px]" id="submitBtnIcon">download</span> <span id="submitBtnText">Download</span>
+                    <div class="flex items-center gap-2 shrink-0">
+                        <button type="button" id="btnPasteClipboard" class="px-3.5 py-3.5 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-on-surface-variant hover:text-white flex items-center gap-1.5 text-[13px] font-medium transition-colors" title="Paste from clipboard">
+                            <span class="material-symbols-outlined text-[18px]">content_paste</span>
+                            <span class="hidden sm:inline">Paste</span>
+                        </button>
+                        <button type="button" id="submitBtn" class="btn-primary-glow px-6 py-3.5 rounded-xl font-bold text-[14px] flex items-center justify-center gap-2 transition-all flex-1 sm:flex-none min-w-[120px]">
+                            <span id="submitBtnIcon" class="material-symbols-outlined text-[18px]">download</span>
+                            <span id="submitBtnText">Download</span>
                         </button>
                     </div>
                 </div>
 
-                <div class="flex items-center justify-between text-[11px] text-on-surface-variant">
-                    <div id="urlCountIndicator" class="flex items-center gap-1.5 opacity-0 transition-opacity">
-                        <i class="bi bi-list-check text-cyan-400"></i> <span id="urlCountNumber" class="font-bold text-white">0</span> URL(s) detected
+                <!-- Live Auto-Detection Tag & Multi-URL Count -->
+                <div class="flex items-center justify-between flex-wrap gap-2 text-[11px] pt-1">
+                    <div class="flex items-center gap-2">
+                        <div id="detectedPlatformBadge" class="d-none inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-primary/10 border border-primary/20 text-primary font-medium">
+                            <span class="w-1.5 h-1.5 rounded-full bg-primary animate-pulse"></span>
+                            <span id="detectedPlatformText">Detected</span>
+                        </div>
+                        <div id="urlCountIndicator" class="text-on-surface-variant opacity-0 transition-opacity flex items-center gap-1">
+                            <i class="bi bi-stack text-primary"></i> <span id="urlCountNumber">1</span> <span id="urlCountLabel">URL</span>
+                        </div>
                     </div>
-                    <div>Press <kbd class="px-1.5 py-0.5 rounded bg-white/10 text-white font-mono text-[10px]">Ctrl+Enter</kbd> to start • 1000+ sites & M3U8 streams</div>
+                    <div class="flex items-center gap-1 text-on-surface-variant/70 text-[11px] ml-auto">
+                        <span class="inline-flex items-center gap-1"><kbd class="px-1.5 py-0.5 rounded bg-white/5 border border-white/10 font-mono text-[10px]">Ctrl</kbd> + <kbd class="px-1.5 py-0.5 rounded bg-white/5 border border-white/10 font-mono text-[10px]">Enter</kbd> to quick enqueue</span>
+                    </div>
                 </div>
 
                 <!-- Format / Quality Selector Carousel -->
@@ -664,11 +787,11 @@
                         <span class="text-[10px] text-on-surface-variant/60 font-normal">Choose preference</span>
                     </div>
                     <div class="format-pill-carousel" id="formatCarousel">
-                        <button type="button" class="format-pill-card active" data-format="best"><i class="bi bi-stars text-primary"></i> <span>Auto (Best Quality)</span></button>
-                        <button type="button" class="format-pill-card" data-format="1080p"><i class="bi bi-badge-hd-fill text-cyan-400"></i> <span>1080p FHD</span></button>
-                        <button type="button" class="format-pill-card" data-format="720p"><i class="bi bi-display text-blue-400"></i> <span>720p HD</span></button>
-                        <button type="button" class="format-pill-card" data-format="480p"><i class="bi bi-phone text-amber-400"></i> <span>480p SD</span></button>
-                        <button type="button" class="format-pill-card" data-format="audio_mp3"><i class="bi bi-music-note-beamed text-emerald-400"></i> <span>Audio MP3 (320k)</span></button>
+                        <button type="button" class="format-pill-card active" data-format="highest"><i class="bi bi-stars text-amber-400"></i> <span>Highest (Max Resolution)</span></button>
+                        <button type="button" class="format-pill-card" data-format="optimal"><i class="bi bi-badge-hd-fill text-cyan-400"></i> <span>Optimal (for Bandwidth)</span></button>
+                        <button type="button" class="format-pill-card" data-format="normal"><i class="bi bi-display text-blue-400"></i> <span>Normal (720p)</span></button>
+                        <button type="button" class="format-pill-card" data-format="low"><i class="bi bi-phone text-emerald-400"></i> <span>Low (480p)</span></button>
+                        <button type="button" class="format-pill-card" data-format="audio_mp3"><i class="bi bi-music-note-beamed text-pink-400"></i> <span>Audio MP3 (320k)</span></button>
                         <button type="button" class="format-pill-card" data-format="audio_m4a"><i class="bi bi-soundwave text-indigo-400"></i> <span>Audio M4A</span></button>
                     </div>
                 </div>
@@ -1109,11 +1232,12 @@
                     <div class="p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 sm:gap-4 border-b border-white/5">
                         <div class="flex-1 min-w-0">
                             <div class="text-[13px] font-bold text-white flex items-center gap-1.5"><i class="bi bi-palette text-pink-400"></i> Visual Theme</div>
-                            <div class="text-[11px] text-on-surface-variant">Choose Liquid Glass or Cyberdeck Matrix rain animation</div>
+                            <div class="text-[11px] text-on-surface-variant">System (syncs with OS), Dark Glass, or Clean Light theme</div>
                         </div>
-                        <div class="flex bg-black/40 p-1 rounded-xl border border-white/10 shrink-0 self-start sm:self-auto">
-                            <button type="button" class="theme-pill-btn active px-4 py-1.5 rounded-lg text-[12px] font-semibold transition-all" data-theme="simple">Glass</button>
-                            <button type="button" class="theme-pill-btn px-4 py-1.5 rounded-lg text-[12px] font-semibold text-on-surface-variant transition-all" data-theme="matrix">Matrix</button>
+                        <div id="themePillContainer" class="flex bg-black/40 p-1 rounded-xl border border-white/10 shrink-0 self-start sm:self-auto gap-1">
+                            <button type="button" class="theme-pill-btn active px-3 py-1.5 rounded-lg text-[12px] font-semibold transition-all" data-theme="system"><i class="bi bi-display mr-1"></i> System</button>
+                            <button type="button" class="theme-pill-btn px-3 py-1.5 rounded-lg text-[12px] font-semibold text-on-surface-variant transition-all" data-theme="dark"><i class="bi bi-moon-stars mr-1"></i> Dark</button>
+                            <button type="button" class="theme-pill-btn px-3 py-1.5 rounded-lg text-[12px] font-semibold text-on-surface-variant transition-all" data-theme="light"><i class="bi bi-sun mr-1"></i> Light</button>
                         </div>
                     </div>
 
@@ -1378,10 +1502,10 @@ es.onmessage = (e) => console.log(JSON.parse(e.data));</pre>
                 <div class="flex items-center gap-1.5 shrink-0">
                     <label for="albumFormatSelect" class="text-[11px] text-on-surface-variant font-semibold hidden xs:inline">Quality:</label>
                     <select id="albumFormatSelect" class="bg-black/60 border border-white/15 rounded-lg px-2.5 py-1 text-white text-[11px] font-medium focus:outline-none">
-                        <option value="best" selected>Auto (Best)</option>
-                        <option value="1080p">1080p FHD</option>
-                        <option value="720p">720p HD</option>
-                        <option value="480p">480p SD</option>
+                        <option value="highest" selected>Highest (Max Resolution)</option>
+                        <option value="optimal">Optimal (for Bandwidth)</option>
+                        <option value="normal">Normal (720p)</option>
+                        <option value="low">Low (480p)</option>
                         <option value="audio_mp3">Audio MP3</option>
                         <option value="audio_m4a">Audio M4A</option>
                     </select>
@@ -1550,11 +1674,15 @@ es.onmessage = (e) => console.log(JSON.parse(e.data));</pre>
     // State
     var tasksMap = {};
     var currentFilter = 'all';
-    var selectedFormat = 'best';
+    var selectedFormat = 'highest';
     var currentViewMode = localStorage.getItem('kv_view_mode') || 'standard';
     var currentHistoryViewMode = localStorage.getItem('kv_history_view_mode') || 'compact';
     var currentHistoryTypeFilter = 'all';
-    var currentTheme = localStorage.getItem('kv_theme') || 'simple';
+    var currentThemeMode = localStorage.getItem('kv_theme_mode');
+    if (!currentThemeMode) {
+        var legacyTheme = localStorage.getItem('kv_theme');
+        currentThemeMode = (legacyTheme === 'dark' || legacyTheme === 'light' || legacyTheme === 'system') ? legacyTheme : 'system';
+    }
     var currentSpeedLimit = localStorage.getItem('kv_speed_limit') || 'unlimited';
     var activeView = 'download-center';
     var currentAlbumEntries = [];
@@ -1644,13 +1772,6 @@ es.onmessage = (e) => console.log(JSON.parse(e.data));</pre>
     var btnSaveCookies = document.getElementById('btnSaveCookies');
     var cookieNavBadge = document.getElementById('cookieNavBadge');
     var btnCopyIosCode = document.getElementById('btnCopyIosCode');
-
-    // Matrix Rain
-    var matrixCanvas = document.getElementById('matrixCanvas');
-    var ctx = matrixCanvas ? matrixCanvas.getContext('2d') : null;
-    var matrixAnimFrame = null;
-    var chars = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZアイウエオカキクケコサシスセソタチツテトナニヌネノハヒフヘホマミムメモヤユヨラリルレロワン';
-    var fontSize = 15, drops = [], lastMatrixTime = 0;
 
     // View Navigation
     function switchView(viewName) {
@@ -2197,7 +2318,7 @@ es.onmessage = (e) => console.log(JSON.parse(e.data));</pre>
             submitBtn.disabled = false;
             submitBtnIcon.textContent = 'download';
             submitBtnIcon.style.animation = '';
-            submitBtnText.textContent = currentTheme === 'matrix' ? '[ ENQUEUE ]' : 'Download';
+            submitBtnText.textContent = 'Download';
 
             if (xhr.status === 200) {
                 try {
@@ -2217,7 +2338,7 @@ es.onmessage = (e) => console.log(JSON.parse(e.data));</pre>
             submitBtn.disabled = false;
             submitBtnIcon.textContent = 'download';
             submitBtnIcon.style.animation = '';
-            submitBtnText.textContent = currentTheme === 'matrix' ? '[ ENQUEUE ]' : 'Download';
+            submitBtnText.textContent = 'Download';
             showToast('Network error while enqueuing', 'error');
         };
         xhr.send(JSON.stringify(payload));
@@ -3253,87 +3374,79 @@ es.onmessage = (e) => console.log(JSON.parse(e.data));</pre>
         tab.addEventListener('click', function() { setFilter(this.getAttribute('data-filter')); });
     });
 
-    // Theme Switcher & Matrix Mode
-    function initMatrixRain() {
-        if (!ctx) return;
-        var dpr = window.devicePixelRatio || 1;
-        matrixCanvas.width = window.innerWidth * dpr;
-        matrixCanvas.height = window.innerHeight * dpr;
-        matrixCanvas.style.width = window.innerWidth + 'px';
-        matrixCanvas.style.height = window.innerHeight + 'px';
-        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-        var cols = Math.floor(window.innerWidth / fontSize);
-        drops = [];
-        for (var i = 0; i < cols; i++) drops[i] = Math.floor(Math.random() * -60);
+    // Theme Switcher & Real-time System Sync (System / Dark / Light)
+    function getSystemTheme() {
+        return (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) ? 'dark' : 'light';
     }
 
-    function renderMatrixFrame(ts) {
-        if (!ctx || currentTheme !== 'matrix') return;
-        if (!lastMatrixTime) lastMatrixTime = ts;
-        var el = ts - lastMatrixTime;
-        if (el > 40) {
-            lastMatrixTime = ts;
-            ctx.fillStyle = 'rgba(2, 6, 3, 0.09)';
-            ctx.fillRect(0, 0, window.innerWidth, window.innerHeight);
-            ctx.font = fontSize + 'px "Share Tech Mono", monospace';
-            for (var i = 0; i < drops.length; i++) {
-                var t = chars.charAt(Math.floor(Math.random() * chars.length));
-                var x = i * fontSize, y = drops[i] * fontSize;
-                if (Math.random() > 0.85) {
-                    ctx.fillStyle = '#ffffff';
-                    ctx.shadowColor = '#00ff66';
-                    ctx.shadowBlur = 8;
-                } else {
-                    ctx.fillStyle = '#00ff66';
-                    ctx.shadowBlur = 0;
-                }
-                ctx.fillText(t, x, y);
-                if (y > window.innerHeight && Math.random() > 0.98) drops[i] = 0;
-                drops[i]++;
-            }
+    function getEffectiveTheme(mode) {
+        if (mode === 'system') return getSystemTheme();
+        return mode === 'light' ? 'light' : 'dark';
+    }
+
+    function applyTheme(mode) {
+        if (!mode || (mode !== 'system' && mode !== 'dark' && mode !== 'light')) {
+            mode = 'system';
         }
-        matrixAnimFrame = requestAnimationFrame(renderMatrixFrame);
-    }
+        currentThemeMode = mode;
+        localStorage.setItem('kv_theme_mode', mode);
 
-    function startMatrixRain() {
-        initMatrixRain();
-        if (matrixAnimFrame) cancelAnimationFrame(matrixAnimFrame);
-        lastMatrixTime = 0;
-        matrixAnimFrame = requestAnimationFrame(renderMatrixFrame);
-        window.addEventListener('resize', initMatrixRain);
-    }
+        var effective = getEffectiveTheme(mode);
 
-    function stopMatrixRain() {
-        if (matrixAnimFrame) cancelAnimationFrame(matrixAnimFrame);
-        matrixAnimFrame = null;
-        window.removeEventListener('resize', initMatrixRain);
-    }
+        // Apply classes to HTML and body
+        if (effective === 'light') {
+            document.documentElement.classList.remove('dark');
+            document.documentElement.classList.add('light');
+            document.body.classList.remove('theme-dark', 'theme-simple');
+            document.body.classList.add('theme-light');
+        } else {
+            document.documentElement.classList.remove('light');
+            document.documentElement.classList.add('dark');
+            document.body.classList.remove('theme-light');
+            document.body.classList.add('theme-dark', 'theme-simple');
+        }
 
-    function applyTheme(theme) {
-        currentTheme = theme;
-        document.body.classList.remove('theme-simple', 'theme-matrix');
-        document.body.classList.add('theme-' + theme);
-        localStorage.setItem('kv_theme', theme);
-
+        // Update pills in Settings modal
         document.querySelectorAll('.theme-pill-btn').forEach(function(b) {
-            var isMatch = b.getAttribute('data-theme') === theme;
+            var th = b.getAttribute('data-theme');
+            var isMatch = th === mode;
             b.classList.toggle('active', isMatch);
-            b.className = isMatch ? 'theme-pill-btn active px-4 py-1.5 rounded-lg text-[12px] font-semibold bg-primary text-black transition-all' : 'theme-pill-btn px-4 py-1.5 rounded-lg text-[12px] font-semibold text-on-surface-variant hover:text-white transition-all';
+            if (isMatch) {
+                b.className = 'theme-pill-btn active px-3 py-1.5 rounded-lg text-[12px] font-semibold bg-primary text-black shadow-sm transition-all';
+            } else {
+                b.className = 'theme-pill-btn px-3 py-1.5 rounded-lg text-[12px] font-semibold text-on-surface-variant hover:text-white transition-all';
+            }
         });
 
+        // Update Top Navigation theme toggle button
         if (themeToggleBtn) {
-            themeToggleBtn.innerHTML = theme === 'matrix' ? '<i class="bi bi-terminal-fill text-emerald-400 text-[16px]"></i>' : '<span class="material-symbols-outlined text-[18px]">dark_mode</span>';
-            themeToggleBtn.title = theme === 'matrix' ? 'Theme: Matrix Rain (Click to switch to Glass)' : 'Theme: Glass (Click to switch to Matrix)';
+            if (mode === 'system') {
+                themeToggleBtn.innerHTML = effective === 'light'
+                    ? '<span class="material-symbols-outlined text-[18px]">light_mode</span>'
+                    : '<span class="material-symbols-outlined text-[18px]">dark_mode</span>';
+                themeToggleBtn.title = 'Theme: System (' + (effective === 'light' ? 'Light' : 'Dark') + ') — Click to switch to ' + (effective === 'light' ? 'Dark' : 'Light');
+            } else if (effective === 'light') {
+                themeToggleBtn.innerHTML = '<span class="material-symbols-outlined text-[18px] text-amber-500">light_mode</span>';
+                themeToggleBtn.title = 'Theme: Light — Click to switch to Dark';
+            } else {
+                themeToggleBtn.innerHTML = '<span class="material-symbols-outlined text-[18px] text-indigo-300">dark_mode</span>';
+                themeToggleBtn.title = 'Theme: Dark — Click to switch to Light';
+            }
         }
+    }
 
-        if (theme === 'matrix') {
-            matrixCanvas.classList.remove('d-none');
-            startMatrixRain();
-            if (submitBtnText) submitBtnText.textContent = '[ ENQUEUE ]';
-        } else {
-            matrixCanvas.classList.add('d-none');
-            stopMatrixRain();
-            if (submitBtnText) submitBtnText.textContent = 'Download';
+    // Reactive listener for OS system theme changes
+    if (window.matchMedia) {
+        var darkMatcher = window.matchMedia('(prefers-color-scheme: dark)');
+        var onSystemThemeChange = function() {
+            if (currentThemeMode === 'system') {
+                applyTheme('system');
+            }
+        };
+        if (darkMatcher.addEventListener) {
+            darkMatcher.addEventListener('change', onSystemThemeChange);
+        } else if (darkMatcher.addListener) {
+            darkMatcher.addListener(onSystemThemeChange);
         }
     }
 
@@ -3341,15 +3454,17 @@ es.onmessage = (e) => console.log(JSON.parse(e.data));</pre>
         btn.addEventListener('click', function() {
             var th = this.getAttribute('data-theme');
             applyTheme(th);
-            showToast('Theme switched to ' + (th === 'matrix' ? 'Matrix Rain' : 'Liquid Glass'), 'info');
+            var label = th === 'system' ? 'System (' + getSystemTheme() + ')' : (th === 'light' ? 'Light' : 'Dark');
+            showToast('Theme set to ' + label, 'info');
         });
     });
 
     if (themeToggleBtn) {
         themeToggleBtn.addEventListener('click', function() {
-            var nextTheme = currentTheme === 'matrix' ? 'simple' : 'matrix';
+            var effective = getEffectiveTheme(currentThemeMode);
+            var nextTheme = effective === 'dark' ? 'light' : 'dark';
             applyTheme(nextTheme);
-            showToast('Theme switched to ' + (nextTheme === 'matrix' ? 'Matrix Rain' : 'Liquid Glass'), 'info');
+            showToast('Theme switched to ' + (nextTheme === 'light' ? 'Light' : 'Dark'), 'info');
         });
     }
 
@@ -4515,7 +4630,7 @@ es.onmessage = (e) => console.log(JSON.parse(e.data));</pre>
     }
 
     // Initialization
-    applyTheme(currentTheme);
+    applyTheme(currentThemeMode);
     applyViewMode(currentViewMode);
     applyHistoryViewMode(currentHistoryViewMode);
     fetchQueueTasks();

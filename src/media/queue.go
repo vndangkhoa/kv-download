@@ -110,7 +110,7 @@ func (q *QueueManager) AddFullWithMeta(url string, format string, cookies string
 	defer q.mu.Unlock()
 
 	if format == "" {
-		format = "best"
+		format = "highest"
 	}
 
 	initialThumb := thumbnail
@@ -472,20 +472,26 @@ func (q *QueueManager) processTask(ctx context.Context, task *DownloadTask) {
 			}
 		}
 
-		// Apply Format Selection
+		// Apply Format Selection (Highest / Optimal / Normal / Low / Audio)
 		switch task.Format {
-		case "1080p":
+		case "highest", "best", "max", "source":
+			args = append(args, "--format", "bestvideo+bestaudio/best")
+		case "optimal", "1080p":
 			args = append(args, "--format", "bestvideo[height<=1080]+bestaudio/best[height<=1080]/best")
-		case "720p":
+		case "normal", "720p":
 			args = append(args, "--format", "bestvideo[height<=720]+bestaudio/best[height<=720]/best")
-		case "480p":
+		case "low", "480p", "360p":
 			args = append(args, "--format", "bestvideo[height<=480]+bestaudio/best[height<=480]/best")
 		case "audio_mp3":
 			args = append(args, "--extract-audio", "--audio-format", "mp3")
 		case "audio_m4a":
 			args = append(args, "--extract-audio", "--audio-format", "m4a")
 		default:
-			args = append(args, "--format", "bv[height<=1080][ext*=mp4]+ba/best[height<=1080]/best")
+			if strings.Contains(task.Format, "+") || strings.Contains(task.Format, "[") {
+				args = append(args, "--format", task.Format)
+			} else {
+				args = append(args, "--format", "bestvideo+bestaudio/best")
+			}
 		}
 
 		if impersonate := strings.TrimSpace(os.Getenv("MR_IMPERSONATE")); impersonate != "" {
@@ -706,6 +712,14 @@ func (q *QueueManager) parseProgressLine(task *DownloadTask, line string) {
 			task.Percent = pVal
 			updated = true
 		}
+	} else if strings.Contains(line, "[Merger]") || strings.Contains(line, "Merging formats into") {
+		task.Speed = "Merging"
+		task.ETA = "Combining audio+video"
+		updated = true
+	} else if strings.Contains(line, "[VideoRemuxer]") || strings.Contains(line, "Remuxing video") {
+		task.Speed = "Finalizing"
+		task.ETA = "Remuxing container"
+		updated = true
 	}
 
 	q.mu.Unlock()
@@ -905,6 +919,45 @@ func QueueAddHandler(w http.ResponseWriter, r *http.Request) {
 						continue
 					}
 				}
+
+				isPlaylist := strings.Contains(u, "list=") || strings.Contains(u, "/playlist") ||
+					(strings.Contains(u, "tiktok.com/@") && !strings.Contains(u, "/video/") && !strings.Contains(u, "/photo/")) ||
+					(strings.Contains(u, "soundcloud.com/") && (strings.Contains(u, "/sets/") || strings.Contains(u, "/albums/")))
+				if isPlaylist {
+					if scan, _, err := ScanUrlWithPagination(u, body.Cookies, 1, 200); err == nil && scan != nil && len(scan.Entries) > 0 {
+						plTitle := scan.Title
+						if plTitle == "" {
+							plTitle = body.PlaylistTitle
+						}
+						plChannel := scan.Channel
+						if plChannel == "" {
+							plChannel = scan.Uploader
+						}
+						if plChannel == "" {
+							plChannel = body.Channel
+						}
+						for _, entry := range scan.Entries {
+							eUrl := entry.Url
+							if eUrl == "" && entry.Id != "" {
+								if strings.Contains(u, "youtube.com") || strings.Contains(u, "youtu.be") {
+									eUrl = "https://www.youtube.com/watch?v=" + entry.Id
+								} else {
+									eUrl = entry.Id
+								}
+							}
+							if eUrl != "" {
+								eThumb := entry.Thumbnail
+								if eThumb == "" && len(entry.Thumbnails) > 0 {
+									eThumb = entry.Thumbnails[len(entry.Thumbnails)-1].URL
+								}
+								task := GlobalQueue.AddFullWithMeta(eUrl, body.Format, body.Cookies, body.RateLimit, entry.Title, eThumb, plTitle, plChannel, entry.Uploader)
+								addedTasks = append(addedTasks, task)
+							}
+						}
+						continue
+					}
+				}
+
 				task := GlobalQueue.AddFullWithMeta(u, body.Format, body.Cookies, body.RateLimit, "", "", body.PlaylistTitle, body.Channel, "")
 				addedTasks = append(addedTasks, task)
 			}
