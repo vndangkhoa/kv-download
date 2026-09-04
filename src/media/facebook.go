@@ -49,6 +49,8 @@ var (
 
 	// Matches <a href="..."> to enumerate links on the page.
 	fbHrefRe = regexp.MustCompile(`href="([^"]*)"`)
+	// Also match data-href which Facebook's mobile site uses for interactive elements (Load More, etc.)
+	fbDataHrefRe = regexp.MustCompile(`data-href="([^"]*)"`)
 	// Matches <img ... src="..."> for thumbnails.
 	fbImgRe = regexp.MustCompile(`(?is)<\s*img[^>]+src="([^"]+)"`)
 
@@ -255,6 +257,9 @@ func fbCanonicalVideoUrl(href string) string {
 func fbCanonicalLinkUrl(href string) string {
 	h := strings.TrimSpace(html.UnescapeString(href))
 	h = strings.ReplaceAll(h, `\/`, `/`)
+	if h == "" {
+		return ""
+	}
 	if strings.HasPrefix(h, "//") {
 		return "https:" + h
 	}
@@ -267,8 +272,23 @@ func fbCanonicalLinkUrl(href string) string {
 		}
 		return h
 	}
+	// Handle query-string only URLs like "profile.php?id=123&sk=reels_tab&cursor=xxx"
+	if !strings.Contains(h, "/") && strings.Contains(h, "=") {
+		return "https://m.facebook.com/" + h
+	}
 	if strings.HasPrefix(h, "/") {
 		return "https://m.facebook.com" + h
+	}
+	// Handle relative URLs like "handle/videos?cursor=xxx" or "profile.php?id=xxx&sk=videos"
+	if strings.Contains(h, "facebook.com") || strings.Contains(h, "fb.com") || strings.Contains(h, "profile.php") {
+		if !strings.HasPrefix(h, "http") {
+			return "https://m.facebook.com/" + h
+		}
+		return h
+	}
+	// Handle relative paths with content sections: "profile/videos?cursor=xxx"
+	if strings.Contains(h, "/videos") || strings.Contains(h, "/reels") || strings.Contains(h, "/posts") {
+		return "https://m.facebook.com/" + h
 	}
 	return ""
 }
@@ -487,6 +507,10 @@ func isFbPaginationLink(profileHandle, lowHref string) bool {
 	if strings.Contains(lowHref, "watch?") {
 		return false
 	}
+	// Exclude profile home / about / etc.
+	if lowHref == "/" || lowHref == "/profile.php" || strings.Contains(lowHref, "/about") {
+		return false
+	}
 
 	lowerHandle := strings.ToLower(profileHandle)
 
@@ -500,10 +524,42 @@ func isFbPaginationLink(profileHandle, lowHref string) bool {
 	// Profile-relative links like "/Linhchanh.2k/videos/?section=..." or
 	// "/Bar85gvgvgv/reels/?cursor=..."
 	if lowerHandle != "" && (strings.Contains(lowHref, "/"+lowerHandle+"/videos") ||
-		strings.Contains(lowHref, "/"+lowerHandle+"/reels")) {
+		strings.Contains(lowHref, "/"+lowerHandle+"/reels") ||
+		strings.Contains(lowHref, "/"+lowerHandle+"/posts")) {
 		return true
 	}
-	if (strings.Contains(lowHref, "/videos/") || strings.Contains(lowHref, "/reels/")) &&
+
+	// Detect any URL that contains profile path + content section + pagination params
+	if lowerHandle != "" && strings.Contains(lowHref, "/"+lowerHandle+"/") {
+		// Has profile path — check if it points to a content section with params
+		if (strings.Contains(lowHref, "/videos/") ||
+			strings.Contains(lowHref, "/reels/") ||
+			strings.Contains(lowHref, "/posts/") ||
+			strings.Contains(lowHref, "/photos/") ||
+			strings.Contains(lowHref, "/profile.php")) &&
+			(strings.Contains(lowHref, "?") ||
+				strings.Contains(lowHref, "cursor") ||
+				strings.Contains(lowHref, "after") ||
+				strings.Contains(lowHref, "bookmark") ||
+				strings.Contains(lowHref, "ref=") ||
+				strings.Contains(lowHref, "page=") ||
+				strings.Contains(lowHref, "timeline") ||
+				strings.Contains(lowHref, "sk=") ||
+				strings.Contains(lowHref, "multi_permalinks") ||
+				strings.Contains(lowHref, "section") ||
+				strings.Contains(lowHref, "sort_order") ||
+				strings.Contains(lowHref, "order_by") ||
+				strings.Contains(lowHref, "offset") ||
+				strings.Contains(lowHref, "min_time") ||
+				strings.Contains(lowHref, "max_time") ||
+				strings.Contains(lowHref, "start_time") ||
+				strings.Contains(lowHref, "end_time")) {
+			return true
+		}
+	}
+
+	if (strings.Contains(lowHref, "/videos/") || strings.Contains(lowHref, "/reels/") ||
+		strings.Contains(lowHref, "/posts/")) &&
 		(strings.Contains(lowHref, "cursor") ||
 			strings.Contains(lowHref, "after") ||
 			strings.Contains(lowHref, "bookmark") ||
@@ -514,18 +570,49 @@ func isFbPaginationLink(profileHandle, lowHref string) bool {
 			strings.Contains(lowHref, "multi_permalinks") ||
 			strings.Contains(lowHref, "section") ||
 			strings.Contains(lowHref, "sort_order") ||
-			strings.Contains(lowHref, "order_by")) {
+			strings.Contains(lowHref, "order_by") ||
+			strings.Contains(lowHref, "offset") ||
+			strings.Contains(lowHref, "min_time") ||
+			strings.Contains(lowHref, "max_time") ||
+			strings.Contains(lowHref, "start_time") ||
+			strings.Contains(lowHref, "end_time") ||
+			strings.Contains(lowHref, "start")) {
 		return true
 	}
-	// Generic "See more" / older-posts anchors that point at the videos feed.
-	markers := []string{"see_more", "see more", "show_more", "older", "morevideos", "more_videos"}
+
+	// Generic "See more" / "Load more" / older-posts anchors that point at the videos feed.
+	markers := []string{"see_more", "see more", "show_more", "show more", "load_more", "load more",
+		"older", "morevideos", "more_videos", "more-videos", "load-more", "see-next", "see next",
+		"next-page", "next page", "next page→", "load-items", "see-all", "load more",
+		"show-more", "older-posts", "older posts", "see previous", "previous", "show less",
+		"more-content", "load more content", "see all posts", "view more", "show all",
+		"older-videos", "older videos", "more-reels", "more reels"}
 	for _, m := range markers {
 		if strings.Contains(lowHref, m) {
-			if strings.Contains(lowHref, "/videos") || strings.Contains(lowHref, "/reels") || strings.Contains(lowHref, "/posts") {
+			if strings.Contains(lowHref, "/videos") || strings.Contains(lowHref, "/reels") ||
+				strings.Contains(lowHref, "/posts") || strings.Contains(lowHref, "profile.php") {
 				return true
 			}
 		}
 	}
+
+	// Fallback: any link that contains profile handle and a content section keyword with a query string
+	// This catches patterns like "/handle/videos?cursor=xxx" even without named params
+	if lowerHandle != "" && (strings.Contains(lowHref, "/"+lowerHandle+"/videos") ||
+		strings.Contains(lowHref, "/"+lowerHandle+"/reels") ||
+		strings.Contains(lowHref, "/"+lowerHandle+"/posts")) &&
+		strings.Contains(lowHref, "?") {
+		return true
+	}
+
+	// Broad fallback: links containing facebook content sections + query params that look like pagination
+	if strings.Contains(lowHref, "facebook.com") &&
+		(strings.Contains(lowHref, "/videos/") || strings.Contains(lowHref, "/reels/") ||
+			strings.Contains(lowHref, "/posts/")) &&
+		strings.Contains(lowHref, "?") {
+		return true
+	}
+
 	return false
 }
 
@@ -564,6 +651,36 @@ func parseFbVideoLinks(profileHandle string, html string) (entries []ScanEntry, 
 			continue
 		}
 
+		low := strings.ToLower(rawHref)
+		if isFbPaginationLink(profileHandle, low) {
+			if np := fbCanonicalLinkUrl(rawHref); np != "" {
+				nextPages = append(nextPages, np)
+			}
+		}
+	}
+
+	// Also scan data-href attributes (Facebook's mobile site uses these for
+	// "Load more", "See more" buttons and other interactive elements).
+	dlocs := fbDataHrefRe.FindAllStringSubmatchIndex(html, -1)
+	for _, loc := range dlocs {
+		rawHref := html[loc[2]:loc[3]]
+		if rawHref == "" {
+			continue
+		}
+		// Try to extract individual video links from data-href too.
+		canonical, vid, category := categorizeFbHref(rawHref)
+		if canonical != "" {
+			if duplicateFbScanEntry(entries, canonical) || duplicateFbVid(entries, vid) {
+				continue
+			}
+			entries = append(entries, ScanEntry{
+				Id:       canonical,
+				Title:    fbTitleForCategory(category, vid),
+				Url:      canonical,
+				Category: category,
+			})
+			continue
+		}
 		low := strings.ToLower(rawHref)
 		if isFbPaginationLink(profileHandle, low) {
 			if np := fbCanonicalLinkUrl(rawHref); np != "" {
@@ -882,7 +999,7 @@ func extractFbVid(raw string) string {
 // fbStreamGraphQLAll uses browser-impersonated Python curl_cffi to paginate through
 // Facebook GraphQL collections (Reels, Videos, Posts) and streams each entry as JSON.
 func fbStreamGraphQLAll(ctx context.Context, inputURL, cookieHeader string, maxItems int, onEntry func(ScanEntry)) error {
-	pyCode := `import sys, json, re, urllib.parse
+	pyCode := `import sys, json, re, urllib.parse, time
 from curl_cffi import requests
 
 profile_url = sys.argv[1].rstrip("/")
@@ -964,7 +1081,7 @@ def extract_meta(chunk, vid):
         pass
     return title, thumb
 
-# 1. reels_tab
+# 1. reels_tab (reels_tab / Reels collection)
 try:
     r = session.get(reels_url, headers=headers, timeout=25)
     text = r.text
@@ -984,17 +1101,29 @@ try:
 
     lsd_m = re.search(r'\"LSD\",\[\],\{\"token\":\"([^\"]+)\"', text)
     lsd = lsd_m.group(1) if lsd_m else ""
-    # More robust cursor extraction — match end_cursor and has_next_page independently
+
+    # More flexible cursor extraction — try multiple patterns
     cursor_m = re.search(r'\"end_cursor\":\"([^\"]+)\"', text)
-    has_next = re.search(r'\"has_next_page\":true', text)
-    if lsd and cursor_m and has_next:
+    if not cursor_m:
+        cursor_m = re.search(r'\"cursor\":\"([^\"]+)\"', text)
+    if not cursor_m:
+        cursor_m = re.search(r'\"bookmark\":\"([^\"]+)\"', text)
+
+    # More flexible has_next_page detection — handle multiple formats
+    has_next = re.search(r'\"has_next_page\":\s*true', text, re.IGNORECASE)
+    if not has_next:
+        has_next = re.search(r'\"hasNextPage\":\s*true', text)
+    if not has_next:
+        has_next = re.search(r'\"has_next\":\s*true', text)
+
+    if lsd and cursor_m:
         cursor = cursor_m.group(1)
         # Find collection ID using multiple fallback patterns
         coll_id = ""
         cursor_pos = cursor_m.start()
-        # Pattern 1: relay_context near cursor (within 20KB window)
+        # Pattern 1: relay_context near cursor (within 30KB window)
         for cid_m in re.finditer(r'\"id\":\"(\d+)\",\s*\"relay_context":\{', text):
-            if abs(cid_m.start() - cursor_pos) < 20000:
+            if abs(cid_m.start() - cursor_pos) < 30000:
                 coll_id = cid_m.group(1)
                 break
         # Pattern 2: relay_context anywhere in page
@@ -1005,9 +1134,15 @@ try:
         # Pattern 3: any numeric ID near cursor (for pages without relay_context)
         if not coll_id:
             for id_m in re.finditer(r'\"id\":\"(\d+)\",', text):
-                if abs(id_m.start() - cursor_pos) < 20000:
+                if abs(id_m.start() - cursor_pos) < 30000:
                     coll_id = id_m.group(1)
                     break
+        # Pattern 4: any 6+ digit numeric ID anywhere in first 50KB
+        if not coll_id:
+            for id_m in re.finditer(r'\"id\":\"(\d{6,})\"', text[:50000]):
+                coll_id = id_m.group(1)
+                break
+
         pv_names = [
           "__relay_internal__pv__FBReels_deprecate_short_form_video_context_gkrelayprovider",
           "__relay_internal__pv__FBReelsMediaFooter_comet_enable_reels_ads_gkrelayprovider",
@@ -1030,41 +1165,84 @@ try:
           "__relay_internal__pv__FBUnifiedVideoMenu_fb_reels_ranking_debug_tool_gkrelayprovider",
           "__relay_internal__pv__CometAudioLanguageUtils_comet_translations_revamp_preferred_languages_gkrelayprovider"
         ]
+
+        # Try multiple doc_id variations for better compatibility
+        doc_ids = [
+            "28401661769429506",  # ProfileCometAppCollectionReelsRendererPaginationQuery
+            "28401661769429507",  # alternative
+            "5584859874153550",   # ProfileCometTimelineFeedUnitPagingLoaderQuery
+            "5063279343743129",   # ProfileCometTimelineFeedQuery
+        ]
+
+        page_num = 0
         while cursor and len(vids_seen) < max_items:
-            # Use coll_id if available, otherwise fetch without it (some pages work)
-            vars_dict = {"count": 100, "cursor": cursor, "id": coll_id if coll_id else "0", "renderLocation": None, "scale": None, "useDefaultActor": False}
-            for pv in pv_names: vars_dict[pv] = False
-            payload = {
-                "av": "0", "__user": "0", "__a": "1", "lsd": lsd,
-                "fb_api_caller_class": "RelayModern",
-                "fb_api_req_friendly_name": "ProfileCometAppCollectionReelsRendererPaginationQuery",
-                "variables": json.dumps(vars_dict),
-                "doc_id": "28401661769429506"
-            }
-            resp = session.post("https://www.facebook.com/api/graphql/", data=payload, headers=headers, timeout=20)
-            resp_text = resp.text.replace(r"\/", "/")
-            page_vids = re.findall(r'\"video\":\{\"id\":\"(\d+)\"', resp_text) + re.findall(r'\"video_id\":\"(\d+)\"', resp_text) + re.findall(r'/reel/(\d+)', resp_text)
-            new_in_page = 0
-            for v in page_vids:
-                if v in vids_seen: continue
-                vids_seen.add(v)
-                new_in_page += 1
-                try:
-                    idx = resp_text.find(v)
-                    chunk = resp_text[max(0, idx - 10000):min(len(resp_text), idx + 10000)]
-                    t, th = extract_meta(chunk, v)
-                    emit({"id": f"https://www.facebook.com/reel/{v}", "title": t or f"Facebook reel #{v}", "url": f"https://www.facebook.com/reel/{v}", "thumbnail": th, "category": "Reels"})
-                except Exception:
-                    emit({"id": f"https://www.facebook.com/reel/{v}", "title": f"Facebook reel #{v}", "url": f"https://www.facebook.com/reel/{v}", "thumbnail": "", "category": "Reels"})
-                if len(vids_seen) >= max_items: break
-            pi_m = re.search(r'\"page_info\":\{[^}]*\"end_cursor\":\"([^\"]+)\"', resp_text)
-            has_next_resp = re.search(r'\"has_next_page\":(true|false)', resp_text)
-            if has_next_resp and has_next_resp.group(1) == "true" and len(vids_seen) < max_items:
-                if pi_m:
-                    cursor = pi_m.group(1)
-                else:
+            page_num += 1
+            success = False
+            for doc_id in doc_ids:
+                if len(vids_seen) >= max_items:
                     break
-            else:
+                # Use coll_id if available, otherwise fetch without it
+                cid_val = coll_id if coll_id else "0"
+                vars_dict = {"count": 100, "cursor": cursor, "id": cid_val, "renderLocation": None, "scale": None, "useDefaultActor": False}
+                for pv in pv_names: vars_dict[pv] = False
+                payload = {
+                    "av": "0", "__user": "0", "__a": "1", "lsd": lsd,
+                    "fb_api_caller_class": "RelayModern",
+                    "fb_api_req_friendly_name": "ProfileCometAppCollectionReelsRendererPaginationQuery",
+                    "variables": json.dumps(vars_dict),
+                    "doc_id": doc_id
+                }
+                try:
+                    resp = session.post("https://www.facebook.com/api/graphql/", data=payload, headers=headers, timeout=20)
+                    resp_text = resp.text.replace(r"\/", "/")
+
+                    # Check if response indicates end of data
+                    if '"data":null' in resp_text or '"entry_point":false' in resp_text:
+                        break
+
+                    # Try multiple extraction patterns for video IDs
+                    page_vids = []
+                    page_vids += re.findall(r'\"video\":\{\"id\":\"(\d+)\"', resp_text)
+                    page_vids += re.findall(r'\"video_id\":\"(\d+)\"', resp_text)
+                    page_vids += re.findall(r'/reel/(\d+)', resp_text)
+                    page_vids += re.findall(r'\"__typename":"ReelVideo","id":"(\d+)"', resp_text)
+                    page_vids += re.findall(r'\"node".*?"id":"(\d+)"', resp_text)
+
+                    new_in_page = 0
+                    for v in page_vids:
+                        if v in vids_seen: continue
+                        vids_seen.add(v)
+                        new_in_page += 1
+                        try:
+                            idx = resp_text.find(v)
+                            chunk = resp_text[max(0, idx - 10000):min(len(resp_text), idx + 10000)]
+                            t, th = extract_meta(chunk, v)
+                            emit({"id": f"https://www.facebook.com/reel/{v}", "title": t or f"Facebook reel #{v}", "url": f"https://www.facebook.com/reel/{v}", "thumbnail": th, "category": "Reels"})
+                        except Exception:
+                            emit({"id": f"https://www.facebook.com/reel/{v}", "title": f"Facebook reel #{v}", "url": f"https://www.facebook.com/reel/{v}", "thumbnail": "", "category": "Reels"})
+                        if len(vids_seen) >= max_items: break
+
+                    # Try multiple cursor extraction patterns from GraphQL response
+                    pi_m = re.search(r'\"page_info\":\{[^}]*\"end_cursor\":\"([^\"]+)\"', resp_text)
+                    if not pi_m:
+                        pi_m = re.search(r'\"end_cursor\":\"([^\"]+)\"', resp_text)
+                    if not pi_m:
+                        pi_m = re.search(r'\"cursor\":\"([^\"]+)\"', resp_text)
+
+                    has_next_resp = re.search(r'\"has_next_page\":\s*true', resp_text, re.IGNORECASE)
+                    if not has_next_resp:
+                        has_next_resp = re.search(r'\"hasNextPage\":\s*true', resp_text)
+
+                    if has_next_resp and pi_m and len(vids_seen) < max_items:
+                        cursor = pi_m.group(1)
+                        success = True
+                        # Add a small delay between pages to avoid rate limiting
+                        time.sleep(0.5)
+                    else:
+                        break
+                except Exception:
+                    continue
+            if not success:
                 break
 except Exception:
     pass
@@ -1091,6 +1269,7 @@ if len(vids_seen) < max_items:
 
 # 3. Main profile timeline posts
 if len(vids_seen) < max_items:
+    time.sleep(0.5)  # Rate limit between sections
     try:
         pr = session.get(main_url, headers=headers, timeout=20)
         p_text = pr.text.replace(r"\/", "/")
@@ -1108,6 +1287,105 @@ if len(vids_seen) < max_items:
             if len(vids_seen) >= max_items: break
     except Exception:
         pass
+
+# 4. Fallback: Try mobile M-site and additional URLs if we got fewer than 20 items
+if len(vids_seen) < 20:
+    # Determine profile identifier for additional scrapes
+    profile_path = path if pid == "" else pid
+
+    # Try mobile M-site
+    mobile_urls = [
+        f"https://m.facebook.com/{path}/videos/",
+        f"https://m.facebook.com/{path}/reels/",
+        f"https://m.facebook.com/{path}/videos_by/",
+        f"https://m.facebook.com/{path}/reels_tab/",
+    ]
+
+    for mu in mobile_urls:
+        if len(vids_seen) >= max_items:
+            break
+        try:
+            mr = session.get(mu, headers=headers, timeout=20)
+            if mr.status_code == 200:
+                m_text = mr.text.replace(r"\/", "/")
+                m_vids = re.findall(r'(?:/reel/|/videos/|\"video_id\":\s*\"|\"video\":\s*\{\s*\"id\":\s*\")(\d{6,})', m_text)
+                for v in m_vids:
+                    if v in vids_seen: continue
+                    vids_seen.add(v)
+                    try:
+                        idx = m_text.find(v)
+                        chunk = m_text[max(0, idx - 10000):min(len(m_text), idx + 10000)]
+                        t, th = extract_meta(chunk, v)
+                        emit({"id": f"https://www.facebook.com/reel/{v}", "title": t or f"Facebook reel #{v}", "url": f"https://www.facebook.com/reel/{v}", "thumbnail": th, "category": "Reels"})
+                    except Exception:
+                        emit({"id": f"https://www.facebook.com/reel/{v}", "title": f"Facebook reel #{v}", "url": f"https://www.facebook.com/reel/{v}", "thumbnail": "", "category": "Reels"})
+                    if len(vids_seen) >= max_items: break
+        except Exception:
+            pass
+
+    # Try additional GraphQL queries for timeline and posts
+    if len(vids_seen) < 20 and lsd:
+        try:
+            # Try a different GraphQL query for general timeline content
+            vars_dict2 = {"count": 50, "fetch_media_items_count": 50, "fetch_media_items_skip": 0, "scale": 1, "renderLocation": "profile-profile-container", "useDefaultActor": False, "prefetchDelay": 0, "hasCacheableVideoQueryId": False, "token": 0}
+            for pv in pv_names: vars_dict2[pv] = False
+            payload2 = {
+                "av": "0", "__user": "0", "__a": "1", "lsd": lsd,
+                "fb_api_caller_class": "RelayModern",
+                "fb_api_req_friendly_name": "ProfileCometTimelineFeedUnitPagingLoaderQuery",
+                "variables": json.dumps(vars_dict2),
+                "doc_id": "5584859874153550"
+            }
+            gr = session.post("https://www.facebook.com/api/graphql/", data=payload2, headers=headers, timeout=20)
+            if gr.status_code == 200:
+                gr_text = gr.text.replace(r"\/", "/")
+                gr_vids = re.findall(r'"video":\s*\{\s*"id":\s*"(\d+)"', gr_text)
+                gr_vids += re.findall(r'"video_id":\s*"(\d+)"', gr_text)
+                gr_vids += re.findall(r'/video/(\d{6,})', gr_text)
+                gr_vids += re.findall(r'/reel/(\d{6,})', gr_text)
+                for v in gr_vids:
+                    if v in vids_seen: continue
+                    vids_seen.add(v)
+                    try:
+                        idx = gr_text.find(v)
+                        chunk = gr_text[max(0, idx - 10000):min(len(gr_text), idx + 10000)]
+                        t, th = extract_meta(chunk, v)
+                        emit({"id": f"https://www.facebook.com/reel/{v}", "title": t or f"Facebook reel #{v}", "url": f"https://www.facebook.com/reel/{v}", "thumbnail": th, "category": "Reels"})
+                    except Exception:
+                        emit({"id": f"https://www.facebook.com/reel/{v}", "title": f"Facebook reel #{v}", "url": f"https://www.facebook.com/reel/{v}", "thumbnail": "", "category": "Reels"})
+                    if len(vids_seen) >= max_items: break
+        except Exception:
+            pass
+
+    # Last resort: try fetching the profile timeline with offset-based pagination via HTML
+    if len(vids_seen) < 20:
+        try:
+            # Try fetching with timeline offset
+            for offset in range(100, 500, 50):
+                if len(vids_seen) >= max_items:
+                    break
+                time.sleep(0.3)  # Rate limit
+                offset_url = f"https://m.facebook.com/{path}/videos/?after={offset}" if pid == "" else f"https://m.facebook.com/profile.php?id={pid}&sk=videos&after={offset}"
+                or_ = session.get(offset_url, headers=headers, timeout=15)
+                if or_.status_code == 200:
+                    or_text = or_.text.replace(r"\/", "/")
+                    or_vids = re.findall(r'(?:/reel/|/videos/|\"video_id\":\s*\"|\"video\":\s*\{\s*\"id\":\s*\")(\d{6,})', or_text)
+                    for v in or_vids:
+                        if v in vids_seen: continue
+                        vids_seen.add(v)
+                        try:
+                            idx = or_text.find(v)
+                            chunk = or_text[max(0, idx - 10000):min(len(or_text), idx + 10000)]
+                            t, th = extract_meta(chunk, v)
+                            emit({"id": f"https://www.facebook.com/reel/{v}", "title": t or f"Facebook reel #{v}", "url": f"https://www.facebook.com/reel/{v}", "thumbnail": th, "category": "Reels"})
+                        except Exception:
+                            emit({"id": f"https://www.facebook.com/reel/{v}", "title": f"Facebook reel #{v}", "url": f"https://www.facebook.com/reel/{v}", "thumbnail": "", "category": "Reels"})
+                        if len(vids_seen) >= max_items: break
+        except Exception:
+            pass
+
+# Print total count to stderr for debugging
+print(f"TOTAL_VIDEOS_FOUND:{len(vids_seen)}", file=sys.stderr)
 `
 	cmd := exec.CommandContext(ctx, "python3", "-c", pyCode, inputURL, cookieHeader, strconv.Itoa(maxItems))
 	stdoutPipe, err := cmd.StdoutPipe()
@@ -1242,18 +1520,39 @@ func fbProfileTabs(profile, mobileURL string) []string {
 			id = profile
 		}
 		tabs = append(tabs,
+			// Desktop URL variations
 			"https://www.facebook.com/profile.php?id="+id+"&sk=reels_tab",
 			"https://www.facebook.com/profile.php?id="+id+"&sk=videos",
 			"https://www.facebook.com/profile.php?id="+id+"&sk=videos_by",
+			"https://www.facebook.com/profile.php?id="+id+"&sk=videos_tagged",
 			"https://www.facebook.com/profile.php?id="+id+"&sk=photos_by",
 			"https://www.facebook.com/profile.php?id="+id,
+			// Mobile M-site variations
 			"https://m.facebook.com/profile.php?id="+id,
 			"https://m.facebook.com/profile.php?id="+id+"&sk=reels_tab",
+			"https://m.facebook.com/profile.php?id="+id+"&sk=videos",
+			"https://m.facebook.com/profile.php?id="+id+"&sk=videos_by",
+			"https://m.facebook.com/profile.php?id="+id+"&sk=posts",
+			"https://m.facebook.com/profile.php?id="+id+"&sk=photos_by",
+			// Profile path variations (URL-encoded)
 			"https://www.facebook.com/"+id+"/reels_tab/",
+			"https://www.facebook.com/"+id+"/reels_tab",
+			"https://www.facebook.com/"+id+"/reels/",
+			"https://www.facebook.com/"+id+"/reels",
 			"https://www.facebook.com/"+id+"/videos/",
+			"https://www.facebook.com/"+id+"/videos",
 			"https://www.facebook.com/"+id+"/videos_by/",
+			"https://www.facebook.com/"+id+"/videos_by",
+			"https://www.facebook.com/"+id+"/videos_tagged/",
+			"https://www.facebook.com/"+id+"/videos_tagged",
+			"https://www.facebook.com/"+id+"/posts/",
+			"https://www.facebook.com/"+id+"/posts",
 			"https://m.facebook.com/"+id+"/videos/",
+			"https://m.facebook.com/"+id+"/videos",
 			"https://m.facebook.com/"+id+"/reels/",
+			"https://m.facebook.com/"+id+"/reels",
+			"https://m.facebook.com/"+id+"/posts/",
+			"https://m.facebook.com/"+id+"?v=timeline",
 		)
 	} else {
 		profileEnc := url.PathEscape(profile)
@@ -1263,18 +1562,36 @@ func fbProfileTabs(profile, mobileURL string) []string {
 
 		desktopVideos := strings.Replace(mobileURL, "m.facebook.com", "www.facebook.com", 1)
 		tabs = append(tabs,
+			// Desktop URL variations
 			"https://www.facebook.com/"+profile+"/reels_tab/",
+			"https://www.facebook.com/"+profile+"/reels_tab",
 			"https://www.facebook.com/"+profile+"/reels/",
+			"https://www.facebook.com/"+profile+"/reels",
 			"https://www.facebook.com/"+profile+"/videos/",
+			"https://www.facebook.com/"+profile+"/videos",
 			"https://www.facebook.com/"+profile+"/videos_by/",
+			"https://www.facebook.com/"+profile+"/videos_by",
 			"https://www.facebook.com/"+profile+"/videos_tagged/",
+			"https://www.facebook.com/"+profile+"/videos_tagged",
 			"https://www.facebook.com/"+profile+"/posts/",
+			"https://www.facebook.com/"+profile+"/posts",
+			// Mobile M-site variations
 			"https://m.facebook.com/"+profile+"/videos_by/",
+			"https://m.facebook.com/"+profile+"/videos_by",
 			"https://m.facebook.com/"+profile+"/reels/",
+			"https://m.facebook.com/"+profile+"/reels",
 			"https://m.facebook.com/"+profile+"/videos/",
+			"https://m.facebook.com/"+profile+"/videos",
+			"https://m.facebook.com/"+profile+"/posts/",
+			"https://m.facebook.com/"+profile+"/posts",
 			"https://m.facebook.com/"+profile+"?v=timeline",
+			"https://m.facebook.com/"+profile,
+			// URL-encoded variations
 			"https://www.facebook.com/"+profileEnc+"/videos/",
 			"https://www.facebook.com/"+profileEnc+"/reels/",
+			"https://www.facebook.com/"+profileEnc+"/posts/",
+			"https://m.facebook.com/"+profileEnc+"/videos/",
+			"https://m.facebook.com/"+profileEnc+"/reels/",
 			desktopVideos,
 		)
 	}

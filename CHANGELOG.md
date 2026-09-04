@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.0.22] - 2026-09-04
+
+### 🐛 Fix Facebook Videos Pagination — Expand Link Detection & Data-Href Support
+- **data-href Scraping**: Added `data-href` attribute parsing (Facebook mobile site uses these for "Load More", "See More" buttons) alongside existing `href` scanning for complete pagination discovery.
+- **Expanded Pagination Link Detection**: Added support for new pagination markers including "load more", "show more", "load-items", "see all posts", "view more", "show all", "older-videos", "more-reels", and many more. Also added detection for `offset`, `min_time`, `max_time`, `start_time`, `end_time`, and `start` query parameters.
+- **Relative URL Handling**: Improved `fbCanonicalLinkUrl` to handle empty URLs, query-string only URLs (`profile.php?id=123&sk=reels_tab`), relative paths with content sections (`/handle/videos`, `/profile.php`), and broader content section detection.
+- **Profile Post & Photos Pagination**: Extended pagination detection to include `/posts/` and `/photos/` content sections alongside `/videos/` and `/reels/`.
+- **Empty URL Safety**: Added guard against empty strings in canonical URL resolution to prevent panics.
+
+### ⚡ Improved Video Download Format Selection
+- **Better 1080p MP4 Selection**: Changed default yt-dlp format from `b/bv*+ba/best` to `bv[height<=1080][ext*=mp4]+ba/best[height<=1080]/best` for more reliable 1080p MP4 video + best audio selection across all platforms.
+
+### 🎬 Range Request Support for Video/Audio Seeking
+- **HTTP Range Headers**: Added `serveFileWithRanges` handler supporting `bytes=start-end` range requests for HTML5 video/audio player seeking functionality.
+- **Proper MKV MIME Type**: Fixed MKV file serving from incorrect `video/mp4` to correct `video/x-matroska` MIME type.
+- **Inline vs Attachment**: Content-Disposition now properly differentiates between inline playback (for embedded players) and attachment download based on request parameters.
+
+---
+
 ## [1.0.18] - 2026-09-03
 
 ### 🐛 Fix Facebook Videos Scrape — Return All Videos, Not Just Current Page

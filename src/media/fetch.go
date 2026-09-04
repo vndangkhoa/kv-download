@@ -260,7 +260,7 @@ func downloadMedia(url string, requestArgs map[string]string) (string, string, e
 	cookiesPath := getCookiesPath()
 
 	defaultArgs := map[string]string{
-		"--format":                "b/bv*+ba/best",
+		"--format":                "bv[height<=1080][ext*=mp4]+ba/best[height<=1080]/best",
 		"--trim-filenames":        "120",
 		"--no-playlist":           "",
 		"--remux-video":           "mp4",

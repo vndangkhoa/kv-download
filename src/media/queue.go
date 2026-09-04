@@ -485,7 +485,7 @@ func (q *QueueManager) processTask(ctx context.Context, task *DownloadTask) {
 		case "audio_m4a":
 			args = append(args, "--extract-audio", "--audio-format", "m4a")
 		default:
-			args = append(args, "--format", "b/bv*+ba/best")
+			args = append(args, "--format", "bv[height<=1080][ext*=mp4]+ba/best[height<=1080]/best")
 		}
 
 		if impersonate := strings.TrimSpace(os.Getenv("MR_IMPERSONATE")); impersonate != "" {

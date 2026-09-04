@@ -3,13 +3,14 @@ package media
 import (
 	"archive/zip"
 	"fmt"
-	"github.com/rs/zerolog/log"
 	"io"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/rs/zerolog/log"
 )
 
 /**
@@ -129,7 +130,7 @@ func getMimeType(filename string) string {
 	case ".webm":
 		return "video/webm"
 	case ".mkv":
-		return "video/mp4"
+		return "video/x-matroska"
 	case ".mov":
 		return "video/quicktime"
 	case ".avi":
@@ -169,15 +170,112 @@ func streamFileToClient(w http.ResponseWriter, r *http.Request, filename string)
 
 	fileContentType := getMimeType(filename)
 	baseName := filepath.Base(filename)
-	disposition := "attachment"
-	if r.URL.Query().Get("inline") == "true" || r.Header.Get("Range") != "" {
+
+	// Determine if this should be inline playback or attachment download
+	isInline := r.URL.Query().Get("inline") == "true" || r.Header.Get("Range") != ""
+
+	var disposition string
+	if isInline {
 		disposition = "inline"
+	} else {
+		disposition = "attachment"
 	}
 
-	w.Header().Set("Content-Disposition", fmt.Sprintf(`%s; filename="%s"; filename*=UTF-8''%s`, disposition, baseName, url.PathEscape(baseName)))
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`%s; filename="%s"; filename*=UTF-8''%s`, disposition, url.PathEscape(baseName), url.PathEscape(baseName)))
 	w.Header().Set("Content-Type", fileContentType)
 	w.Header().Set("Accept-Ranges", "bytes")
 
-	log.Info().Msgf("Opening file for streaming %s (%s, %d bytes)", filename, fileContentType, fi.Size())
+	log.Info().Msgf("Opening file for streaming %s (%s, %d bytes, inline=%v)", filename, fileContentType, fi.Size(), isInline)
+
+	serveFileWithRanges(w, r, filename, baseName, fi)
+}
+
+// serveFileWithRanges serves a file with proper HTTP range request support.
+// This is essential for video/audio seeking in HTML5 video players.
+func serveFileWithRanges(w http.ResponseWriter, r *http.Request, filename string, baseName string, fi os.FileInfo) {
+	// Check for Range header to support seeking (essential for video playback)
+	rangeHeader := r.Header.Get("Range")
+	if rangeHeader != "" && strings.HasPrefix(rangeHeader, "bytes=") {
+		// Parse Range header: "bytes=start-end"
+		parts := strings.SplitN(rangeHeader[6:], "-", 2)
+		var start, end int64
+
+		if len(parts) == 2 && parts[1] != "" {
+			// Parse start and end from "bytes=start-end"
+			fmt.Sscanf(parts[0], "%d", &start)
+			fmt.Sscanf(parts[1], "%d", &end)
+		} else if len(parts) == 1 && parts[0] != "" {
+			// Parse "bytes=start-"
+			fmt.Sscanf(parts[0], "%d", &start)
+			end = fi.Size() - 1
+		} else {
+			// Invalid range, serve full file
+			http.ServeFile(w, r, filename)
+			return
+		}
+
+		if end == 0 {
+			end = fi.Size() - 1
+		}
+		if end >= fi.Size() {
+			end = fi.Size() - 1
+		}
+
+		if start < 0 || start >= fi.Size() {
+			// Invalid range, serve full file
+			http.ServeFile(w, r, filename)
+			return
+		}
+
+		// Open file and seek to start position
+		f, err := os.Open(filename)
+		if err != nil {
+			http.Error(w, "File not found", http.StatusNotFound)
+			return
+		}
+		defer f.Close()
+
+		_, err = f.Seek(start, io.SeekStart)
+		if err != nil {
+			http.Error(w, "Seek error", http.StatusInternalServerError)
+			return
+		}
+
+		// Send partial content response
+		contentLength := end - start + 1
+		w.Header().Set("Content-Length", fmt.Sprintf("%d", contentLength))
+		w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, end, fi.Size()))
+		w.WriteHeader(http.StatusPartialContent)
+
+		// Stream the requested byte range
+		buf := make([]byte, 32*1024)
+		toRead := contentLength
+		for toRead > 0 {
+			n := int64(len(buf))
+			if n > toRead {
+				n = toRead
+			}
+			nrInt, er := f.Read(buf[:n])
+			nr := int64(nrInt)
+			if nr > 0 {
+				_, ww := w.Write(buf[:nr])
+				if ww != nil {
+					return
+				}
+			}
+			toRead -= int64(nr)
+			if nr == 0 || nr < n {
+				break
+			}
+			// Handle write error
+			if er != nil && er != io.EOF {
+				log.Error().Msgf("Error reading file for range response: %v", er)
+				return
+			}
+		}
+		return
+	}
+
+	// No Range header — serve the full file
 	http.ServeFile(w, r, filename)
 }
