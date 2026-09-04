@@ -316,3 +316,31 @@ func TestStreamFacebookShareLink(t *testing.T) {
 	t.Logf("Successfully streamed %d items for %s", len(items), metaTitle)
 }
 
+func TestStreamFacebookBaoNgocShareLink(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping live test in short mode")
+	}
+	shareURL := "https://www.facebook.com/share/1MAjfNpz2Z/"
+	var items []ScanEntry
+	var metaTitle string
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+	defer cancel()
+
+	err := StreamScanUrl(ctx, shareURL, "", func(entry ScanEntry, count int) {
+		items = append(items, entry)
+		t.Logf("Streamed item #%d: %s -> %s", count, entry.Title, entry.Url)
+	}, func(title, uploader, channel, thumbnail string, total int) {
+		metaTitle = title
+		t.Logf("Stream meta: %s (uploader: %s)", title, uploader)
+	})
+
+	if err != nil && err != context.DeadlineExceeded && err != context.Canceled {
+		t.Fatalf("StreamScanUrl error: %v", err)
+	}
+	if len(items) < 20 {
+		t.Fatalf("Expected >= 20 streamed items from share link %s, got %d", shareURL, len(items))
+	}
+	t.Logf("Successfully streamed %d items for %s", len(items), metaTitle)
+}
+
+

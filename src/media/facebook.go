@@ -1595,7 +1595,6 @@ try:
 
         doc_ids = [
             "28401661769429506",  # ProfileCometAppCollectionReelsRendererPaginationQuery
-            "28401661769429507",
         ]
 
         page_num = 0
@@ -1654,6 +1653,7 @@ try:
                         cursor = pi_m.group(1)
                         success = True
                         time.sleep(0.3)
+                        break
                     else:
                         break
                 except Exception:
