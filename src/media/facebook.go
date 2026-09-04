@@ -308,7 +308,9 @@ func extractFbProfileFromShareURL(inputURL, cookieHeader string) (profileHandle,
 	}
 	if strings.HasPrefix(path, "people/") {
 		parts := strings.Split(path, "/")
-		if len(parts) >= 2 && parts[1] != "" {
+		if len(parts) >= 3 && parts[2] != "" {
+			return parts[1], "https://m.facebook.com/profile.php?id=" + parts[2] + "&sk=reels_tab"
+		} else if len(parts) >= 2 && parts[1] != "" {
 			return parts[1], "https://m.facebook.com/" + path + "/videos/"
 		}
 	}
