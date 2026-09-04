@@ -76,12 +76,166 @@ func IsFacebookProfileURL(raw string) bool {
 	if IsFacebookVideoURL(raw) {
 		return false
 	}
+	if IsFacebookShareURL(raw) {
+		return false
+	}
 	// Exclude obvious non-profile paths.
 	u, err := url.Parse(strings.TrimSpace(raw))
 	if err != nil || u.Path == "" || u.Path == "/" {
 		return false
 	}
 	return true
+}
+
+// IsFacebookShareURL reports whether raw is a Facebook share URL (e.g. /share/19DvwXL6QX/).
+// Share links are resolved to the actual profile URL first.
+func IsFacebookShareURL(raw string) bool {
+	if !fbHostnameRe.MatchString(raw) {
+		return false
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return false
+	}
+	return strings.HasPrefix(u.Path, "/share/")
+}
+
+// resolveFbShareURL follows the redirect of a Facebook share link to find the actual
+// profile/video/page URL. Returns the resolved URL or empty string on failure.
+func resolveFbShareURL(inputURL string) string {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// Try curl_cffi first (handles JS redirects better)
+	result, err := resolveShareCurlCffi(ctx, inputURL)
+	if err == nil && result != "" {
+		return result
+	}
+
+	// Fallback: use Go's http client with redirect following disabled to catch the Location header
+	req, err := http.NewRequestWithContext(ctx, http.MethodHead, inputURL, nil)
+	if err != nil {
+		return ""
+	}
+	req.Header.Set("User-Agent", "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1")
+
+	client := &http.Client{
+		Timeout:   10 * time.Second,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse // Stop after first redirect
+		},
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return ""
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 300 && resp.StatusCode < 400 {
+		loc := resp.Header.Get("Location")
+		if loc != "" {
+			return loc
+		}
+	}
+
+	return ""
+}
+
+// resolveShareCurlCffi uses Python curl_cffi to follow Facebook share link redirects.
+// Facebook share links often use JS-based redirects that require a full browser.
+func resolveShareCurlCffi(ctx context.Context, shareURL string) (string, error) {
+	pyCode := `import sys
+try:
+    from curl_cffi import requests
+except ImportError:
+    sys.exit(2)
+
+url = sys.argv[1]
+try:
+    session = requests.Session(impersonate="chrome124")
+    resp = session.get(url, headers={
+        "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1"
+    }, timeout=15)
+    # session.get follows redirects, final_url is the resolved URL
+    print(resp.url)
+    sys.exit(0)
+except Exception:
+    sys.exit(1)
+`
+	cmd := exec.CommandContext(ctx, "python3", "-c", pyCode, shareURL)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err == nil && stdout.Len() > 0 {
+		resolved := strings.TrimSpace(stdout.String())
+		if strings.HasPrefix(resolved, "http") {
+			return resolved, nil
+		}
+	}
+	return "", fmt.Errorf("curl_cffi resolve failed")
+}
+
+// extractFbProfileFromShareURL tries to extract the actual profile handle from a
+// resolved Facebook share link. It returns the profile handle and the normalized
+// profile URL for scraping.
+func extractFbProfileFromShareURL(inputURL string) (profileHandle, normalizedURL string) {
+	resolved := resolveFbShareURL(inputURL)
+	if resolved == "" {
+		return "Facebook", ""
+	}
+
+	// Try to extract the profile handle from the resolved URL
+	u, err := url.Parse(resolved)
+	if err != nil {
+		return "Facebook", ""
+	}
+
+	// Check for profile ID query param
+	if id := u.Query().Get("id"); id != "" {
+		return id, "https://m.facebook.com/profile.php?id=" + id + "&sk=reels_tab"
+	}
+
+	// Extract the path and check if it's a profile/page/group
+	path := strings.Trim(strings.TrimSpace(u.Path), "/")
+	if strings.HasPrefix(path, "pages/") {
+		parts := strings.Split(path, "/")
+		if len(parts) >= 2 && parts[1] != "" {
+			return parts[1], "https://m.facebook.com/" + path + "/reels/"
+		}
+	}
+	if strings.HasPrefix(path, "groups/") {
+		parts := strings.Split(path, "/")
+		if len(parts) >= 2 && parts[1] != "" {
+			return parts[1], "https://m.facebook.com/" + path + "/reels/"
+		}
+	}
+	if strings.HasPrefix(path, "people/") {
+		parts := strings.Split(path, "/")
+		if len(parts) >= 2 && parts[1] != "" {
+			return parts[1], "https://m.facebook.com/" + path + "/videos/"
+		}
+	}
+
+	// Generic profile path (e.g., /username or /username/videos/)
+	if path != "" && !strings.HasPrefix(path, "share/") &&
+		!strings.HasPrefix(path, "login") && !strings.HasPrefix(path, "notes") &&
+		!strings.HasPrefix(path, "messages") && !strings.HasPrefix(path, "groups") &&
+		!strings.HasPrefix(path, "events") && !strings.HasPrefix(path, "photos") {
+		// Strip known non-profile suffixes
+		suffixes := []string{"/reels_tab", "/reels", "/videos_by", "/videos_tagged", "/videos", "/posts", "/photos_by", "/photos", "/about"}
+		for _, s := range suffixes {
+			if strings.HasSuffix(strings.ToLower(path), s) {
+				path = path[:len(path)-len(s)]
+				break
+			}
+		}
+		if path != "" {
+			return path, "https://m.facebook.com/" + path + "/videos/"
+		}
+	}
+
+	return "Facebook", ""
 }
 
 // extractFbProfile returns the human-readable profile/page/group handle used for
@@ -989,6 +1143,90 @@ func ScrapeFacebookVideos(inputURL, cookies string, start, limit int) (*ScanInfo
 	}, "", nil
 }
 
+// ScrapeFacebookVideosFromNormalized scrapes a Facebook profile using a pre-normalized
+// mobile URL and profile handle. Used when share links have been resolved.
+func ScrapeFacebookVideosFromNormalized(normalizedURL, cookies, profileHandle string, start, limit int) (*ScanInfo, string, error) {
+	if start <= 0 {
+		start = 1
+	}
+	if limit <= 0 {
+		limit = 24
+	}
+
+	cookieHeader := fbCookieHeader(cookies, normalizedURL)
+
+	maxFetch := fbScrapeMaxEntries
+	if start+limit-1 > maxFetch {
+		maxFetch = start + limit - 1
+	}
+
+	// Collect from both GraphQL and HTML scrapers with dedup so we never miss
+	// videos. We always scrape up to fbScrapeMaxEntries so the offset-window
+	// can paginate through all results.
+	graphQLSeen := make(map[string]bool)
+	graphQLEntries := make([]ScanEntry, 0, fbScrapeMaxEntries)
+	_ = fbStreamGraphQLAll(context.Background(), normalizedURL, cookieHeader, fbScrapeMaxEntries, func(e ScanEntry) {
+		if graphQLSeen[e.Url] || graphQLSeen[e.Id] {
+			return
+		}
+		graphQLSeen[e.Url] = true
+		graphQLSeen[e.Id] = true
+		graphQLEntries = append(graphQLEntries, e)
+	})
+
+	// Always run HTML scraper as a secondary source.
+	htmlEntries, _, _, sErr := scrapeFbAll(context.Background(), normalizedURL, cookieHeader, profileHandle, fbScrapeMaxEntries)
+	if sErr != nil && len(graphQLEntries) == 0 && len(htmlEntries) == 0 {
+		return nil, sErr.Error(), sErr
+	}
+
+	// Merge: keep GraphQL entries first, then add HTML entries (skip duplicates).
+	seen := make(map[string]bool)
+	for _, e := range graphQLEntries {
+		seen[e.Url] = true
+		seen[e.Id] = true
+	}
+	for _, e := range htmlEntries {
+		if !seen[e.Url] && !seen[e.Id] {
+			seen[e.Url] = true
+			seen[e.Id] = true
+			graphQLEntries = append(graphQLEntries, e)
+		}
+	}
+
+	entries := graphQLEntries
+
+	// Apply offset window (start is 1-based, limit is the page size).
+	total := len(entries)
+	if start > total {
+		entries = nil
+	} else {
+		end := start - 1 + limit
+		if end > total {
+			end = total
+		}
+		entries = entries[start-1 : end]
+	}
+
+	if len(entries) == 0 {
+		return nil, "", nil
+	}
+
+	hasMore := total > start+limit-1
+	return &ScanInfo{
+		Title:      profileHandle + " — Facebook Videos",
+		Count:      len(entries),
+		TotalCount: total,
+		IsPlaylist: len(entries) > 1,
+		Entries:    entries,
+		Channel:    profileHandle,
+		Start:      start,
+		Limit:      limit,
+		HasMore:    hasMore,
+		NextStart:  start + len(entries),
+	}, "", nil
+}
+
 func extractFbVid(raw string) string {
 	if m := fbVideoIdRe.FindStringSubmatch(raw); len(m) >= 3 {
 		return m[2]
@@ -1459,6 +1697,88 @@ func StreamFacebookVideos(ctx context.Context, inputURL, cookies string, onEntry
 
 		pageCtx, cancel := context.WithTimeout(ctx, fbRequestTimeout)
 		found, nextPages, loginWall, ferr := scrapeFbVideoPage(pageCtx, currentPage, cookieHeader, profile)
+		cancel()
+		if ferr != nil {
+			if emittedAtLeastOne || len(queue) > 0 {
+				continue
+			}
+			return ferr
+		}
+		if loginWall {
+			if emittedAtLeastOne || len(queue) > 0 {
+				continue
+			}
+			return fmt.Errorf("Facebook requires authentication: the profile returned a login wall. Provide Facebook cookies (cookies.txt) to list its videos")
+		}
+
+		emitted := false
+		for _, e := range found {
+			vid := extractFbVid(e.Url)
+			if seen[vid] || seen[e.Url] {
+				continue
+			}
+			seen[vid] = true
+			seen[e.Url] = true
+			count++
+			emitted = true
+			emittedAtLeastOne = true
+			onEntry(e, count)
+			if count >= limit {
+				break
+			}
+		}
+
+		if !emitted && len(found) == 0 {
+			continue
+		}
+		for _, np := range nextPages {
+			if !visited[np] {
+				queue = append(queue, np)
+			}
+		}
+		log.Debug().Msgf("facebook scraper queue=%d, emitted=%d, total=%d", len(queue), len(found), count)
+	}
+
+	return nil
+}
+
+// StreamFacebookVideosFromNormalized streams video links live for a pre-normalized
+// mobile URL and profile handle. Used when share links have been resolved.
+func StreamFacebookVideosFromNormalized(ctx context.Context, normalizedURL, cookies, profileHandle string, onEntry func(ScanEntry, int), onMeta func(title, uploader, channel, thumbnail string, total int)) error {
+	cookieHeader := fbCookieHeader(cookies, normalizedURL)
+	title := profileHandle + " — Facebook Videos"
+
+	onMeta(title, profileHandle, profileHandle, "", 0)
+
+	limit := fbScrapeMaxEntries
+	visited := make(map[string]bool)
+	seen := make(map[string]bool)
+	count := 0
+
+	// 1. Run GraphQL & multi-category paginated scanner
+	_ = fbStreamGraphQLAll(ctx, normalizedURL, cookieHeader, limit, func(e ScanEntry) {
+		if seen[e.Url] || seen[e.Id] {
+			return
+		}
+		seen[e.Url] = true
+		seen[e.Id] = true
+		count++
+		onEntry(e, count)
+	})
+
+	// 2. HTML mobile queue: finds additional videos
+	queue := fbProfileTabs(profileHandle, normalizedURL)
+	emittedAtLeastOne := false
+	for len(queue) > 0 && count < limit && ctx.Err() == nil {
+		currentPage := queue[0]
+		queue = queue[1:]
+		if currentPage == "" || visited[currentPage] {
+			continue
+		}
+		visited[currentPage] = true
+
+		pageCtx, cancel := context.WithTimeout(ctx, fbRequestTimeout)
+		found, nextPages, loginWall, ferr := scrapeFbVideoPage(pageCtx, currentPage, cookieHeader, profileHandle)
 		cancel()
 		if ferr != nil {
 			if emittedAtLeastOne || len(queue) > 0 {
