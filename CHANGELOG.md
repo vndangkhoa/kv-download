@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.0.23] - 2026-09-04
+
+### 🎯 Facebook Share Link Resolution — Auto-Redirect `/share/` URLs to Profiles
+- **Share URL Detection**: `IsFacebookShareURL()` recognizes Facebook share links (`/share/19DvwXL6QX/`) and routes them to the new resolution pipeline.
+- **Two-Stage Redirect Resolution**: `resolveFbShareURL()` uses Python `curl_cffi` Chrome impersonation first (handles JS redirects), then falls back to Go `http.Client` HEAD request with `Location` header capture.
+- **Profile Handle Extraction**: `extractFbProfileFromShareURL()` parses resolved URLs to extract profile handles from pages (`/pages/...`), groups (`/groups/...`), people (`/people/...`), and generic profiles (`/username`), auto-normalizing to the appropriate mobile URL with content section suffixes (`/reels/`, `/videos/`).
+- **Normalized Scraping Functions**: `ScrapeFacebookVideosFromNormalized()` and `StreamFacebookVideosFromNormalized()` accept pre-resolved mobile URLs + profile handles, skipping the extra resolution step.
+- **Scan Integration**: `scan.go` and `stream.go` now auto-detect share links, resolve them transparently, and fall back gracefully to the original URL if resolution fails.
+
+---
+
 ## [1.0.22] - 2026-09-04
 
 ### 🐛 Fix Facebook Videos Pagination — Expand Link Detection & Data-Href Support
