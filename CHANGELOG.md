@@ -7,7 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [1.0.27] - 2026-09-04
+## [1.0.29] - 2026-09-04
+
+### 🖥️ Complete Frontend Rewrite — App.js Architecture + Enhanced Launcher
+
+**Frontend Architecture**:
+- **New App.js** (171KB): Modern JavaScript SPA replacing inline scripts — complete rewrite of the entire UI layer
+- **Streamlined index.html**: Reduced from 4000+ lines of inline JS to clean HTML with App.js bundle
+- Cookie Manager light theme: comprehensive style fixes for modal elements, tabs, code blocks
+- Task cards light theme: status indicators, progress bars, play buttons, album cards
+- Floating player and gallery UI improvements for light theme
+
+**run.sh Launcher Overhaul**:
+- **Auto-detect Go**: Fallback chain from snap → `/usr/lib/go-1.24` → `/usr/local/go` with DBus validation
+- **Build mode flags**: `-r/--release` for optimized build, `-v/--view dev|release` for explicit mode
+- **Dependency validation**: Warnings (not hard exits) for missing yt-dlp/ffmpeg with installation tips
+- **Organized library**: Creates `videos/`, `music/`, `photos/`, `other/`, `json/`, `thumbnails/` directories automatically
+- **Enhanced startup banner**: Displays Go version, build mode, yt-dlp version alongside existing info
+- **Help text**: Added examples with `--build`, `--release`, `--open` flags and `MR_IMPERSONATE` env var docs
+
+**launch.sh Quick Start**:
+- New one-liner launcher: `./launch.sh [port]` — auto-builds release, runs, and opens browser
+
+---
+
+## [1.0.28] - 2026-09-04
 
 ### 🎨 Light Theme Replacement
 - **Full Light theme** replacing Matrix (green/cyber) theme — clean, lightweight design with indigo/sky/emerald accent palette
