@@ -517,7 +517,14 @@ func (q *QueueManager) processTask(ctx context.Context, task *DownloadTask) {
 			args = append(args, arg, value)
 		}
 
-		args = append(args, task.URL)
+		targetURL := task.URL
+		if IsFacebookShareURL(targetURL) {
+			if resolved := resolveFbShareURL(targetURL, task.Cookies); resolved != "" && !IsFacebookShareURL(resolved) {
+				targetURL = resolved
+			}
+		}
+
+		args = append(args, targetURL)
 
 		cmd := exec.CommandContext(ctx, "yt-dlp", args...)
 		cmd.Env = append(os.Environ(), "PYTHONUNBUFFERED=1")

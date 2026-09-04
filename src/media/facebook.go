@@ -105,33 +105,34 @@ func IsFacebookShareURL(raw string) bool {
 // It sends cookies from the request (passed via cookieHeader) for better results,
 // but also works without cookies since share links often resolve without auth.
 func resolveFbShareURL(inputURL, cookieHeader string) string {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	// 1. Try curl_cffi first (handles JS redirects better, best results)
+	// 1. Try curl_cffi first (handles desktop 302 redirects and JS redirects best)
 	result, err := resolveShareCurlCffi(ctx, inputURL, cookieHeader)
-	if err == nil && result != "" {
+	if err == nil && result != "" && !IsFacebookShareURL(result) && !strings.Contains(result, "/share/") {
 		return result
 	}
 
 	// 2. Parse the share page HTML directly to extract profile info (works without cookies/redirects)
 	result = extractProfileFromSharePageHTML(ctx, inputURL, cookieHeader)
-	if result != "" {
+	if result != "" && !IsFacebookShareURL(result) && !strings.Contains(result, "/share/") {
 		return result
 	}
 
-	// 3. Fallback: use Go's http client with redirect following disabled to catch the Location header
+	// 3. Fallback: use Go's http client with Desktop User-Agent to catch redirect Location header
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, inputURL, nil)
 	if err != nil {
 		return ""
 	}
-	req.Header.Set("User-Agent", "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1")
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
+	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8")
 	if cookieHeader != "" {
 		req.Header.Set("Cookie", cookieHeader)
 	}
 
 	client := &http.Client{
-		Timeout:   10 * time.Second,
+		Timeout: 10 * time.Second,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			return http.ErrUseLastResponse // Stop after first redirect
 		},
@@ -147,16 +148,19 @@ func resolveFbShareURL(inputURL, cookieHeader string) string {
 	var loc string
 	if resp.StatusCode >= 300 && resp.StatusCode < 400 {
 		loc = resp.Header.Get("Location")
-		if loc != "" {
+		if loc != "" && !IsFacebookShareURL(loc) && !strings.Contains(loc, "/share/") {
 			return loc
 		}
 	}
 
 	// Even without redirect, try to extract profile info from the response body
-	if loc == "" {
+	if loc == "" || IsFacebookShareURL(loc) {
 		loc = extractProfileFromHTML(resp.Body)
 	}
-	return loc
+	if loc != "" && !IsFacebookShareURL(loc) && !strings.Contains(loc, "/share/") {
+		return loc
+	}
+	return ""
 }
 
 // extractProfileFromSharePageHTML fetches the share page and extracts profile info
@@ -166,7 +170,8 @@ func extractProfileFromSharePageHTML(ctx context.Context, shareURL, cookieHeader
 	if err != nil {
 		return ""
 	}
-	req.Header.Set("User-Agent", "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1")
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
+	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8")
 	if cookieHeader != "" {
 		req.Header.Set("Cookie", cookieHeader)
 	}
@@ -204,13 +209,17 @@ func extractProfileFromHTML(r io.Reader) string {
 	// 1. Try OG URL meta tag: <meta property="og:url" content="...">
 	ogUrlRe := regexp.MustCompile(`(?i)<meta\s+property=["']og:url["']\s+content=["']([^"']+)["']`)
 	if m := ogUrlRe.FindStringSubmatch(html); len(m) >= 2 {
-		return m[1]
+		if !strings.Contains(m[1], "/share/") {
+			return m[1]
+		}
 	}
 
 	// 2. Try canonical URL meta tag: <link rel="canonical" href="...">
 	canonicalRe := regexp.MustCompile(`(?i)<link\s+rel=["']canonical["']\s+href=["']([^"']+)["']`)
 	if m := canonicalRe.FindStringSubmatch(html); len(m) >= 2 {
-		return m[1]
+		if !strings.Contains(m[1], "/share/") {
+			return m[1]
+		}
 	}
 
 	// 3. Try JS initialData/initialCacheData blocks that contain profile URLs
@@ -221,23 +230,32 @@ func extractProfileFromHTML(r io.Reader) string {
 		jsBlock := m[1]
 		profileRe := regexp.MustCompile(`https?://(?:m|www)\.facebook\.com/([a-zA-Z0-9_.~%-]+)(?:/[a-zA-Z0-9_.~%-]*)?(?:/|$|["'])`)
 		if pm := profileRe.FindStringSubmatch(jsBlock); len(pm) >= 2 {
-			return "https://www.facebook.com/" + pm[1]
+			if pm[1] != "share" && pm[1] != "login" && pm[1] != "home" {
+				return "https://www.facebook.com/" + pm[1]
+			}
 		}
 	}
 
 	// 4. Try to find any Facebook profile URL in the HTML
 	profileRe := regexp.MustCompile(`https?://(?:m|www)\.facebook\.com/([a-zA-Z0-9_.~%-]+)(?:/reels|/videos|/posts|/profile\.php|/[a-z]+|/|["'&])`)
-	if m := profileRe.FindStringSubmatch(html); len(m) >= 2 {
-		return "https://www.facebook.com/" + m[1]
+	for _, m := range profileRe.FindAllStringSubmatch(html, -1) {
+		if len(m) >= 2 {
+			handle := m[1]
+			if handle != "share" && handle != "login" && handle != "home" && handle != "recover" &&
+				handle != "help" && handle != "policies" && handle != "rsrc.php" && handle != "profile.php" && handle != "watch" {
+				return "https://www.facebook.com/" + handle
+			}
+		}
 	}
 
 	// 5. Look for profile URI in React state: 'uri':'/username'
 	uriRe := regexp.MustCompile(`['"](?:uri|profileUri|canonical_url)['"]\s*:\s*['"]/(.+?)[/'"']`)
 	if m := uriRe.FindStringSubmatch(html); len(m) >= 2 {
 		uri := m[1]
-		// Only extract if it looks like a profile (not a post/video)
+		// Only extract if it looks like a profile (not a post/video/share)
 		if !strings.Contains(uri, "/video/") && !strings.Contains(uri, "/posts/") &&
-			!strings.Contains(uri, "/reel/") && !strings.Contains(uri, "/share/") {
+			!strings.Contains(uri, "/reel/") && !strings.Contains(uri, "/share/") &&
+			uri != "login" && uri != "home" && uri != "share" {
 			return "https://www.facebook.com/" + uri
 		}
 	}
@@ -245,8 +263,10 @@ func extractProfileFromHTML(r io.Reader) string {
 	// 6. Try to find profile name in OG metadata: <meta property="og:title" content="John Doe">
 	ogTitleRe := regexp.MustCompile(`(?i)<meta\s+property=["']og:title["']\s+content=["']([^"']+)["']`)
 	if m := ogTitleRe.FindStringSubmatch(html); len(m) >= 2 {
-		// The title usually contains the profile name, use it as a hint
-		return m[1]
+		cand := strings.TrimSpace(m[1])
+		if cand != "" && cand != "Facebook" && !strings.Contains(cand, "Log in") {
+			return cand
+		}
 	}
 
 	return ""
@@ -257,7 +277,7 @@ func extractProfileFromHTML(r io.Reader) string {
 // profile URL for scraping.
 func extractFbProfileFromShareURL(inputURL, cookieHeader string) (profileHandle, normalizedURL string) {
 	resolved := resolveFbShareURL(inputURL, cookieHeader)
-	if resolved == "" {
+	if resolved == "" || IsFacebookShareURL(resolved) || strings.Contains(resolved, "/share/") || IsFacebookVideoURL(resolved) {
 		return "Facebook", ""
 	}
 
@@ -294,7 +314,7 @@ func extractFbProfileFromShareURL(inputURL, cookieHeader string) (profileHandle,
 	}
 
 	// Generic profile path (e.g., /username or /username/videos/)
-	if path != "" && !strings.HasPrefix(path, "share/") &&
+	if path != "" && !strings.HasPrefix(path, "share/") && path != "share" &&
 		!strings.HasPrefix(path, "login") && !strings.HasPrefix(path, "notes") &&
 		!strings.HasPrefix(path, "messages") && !strings.HasPrefix(path, "groups") &&
 		!strings.HasPrefix(path, "events") && !strings.HasPrefix(path, "photos") {
@@ -306,7 +326,7 @@ func extractFbProfileFromShareURL(inputURL, cookieHeader string) (profileHandle,
 				break
 			}
 		}
-		if path != "" {
+		if path != "" && path != "share" {
 			return path, "https://m.facebook.com/" + path + "/videos/"
 		}
 	}
@@ -339,18 +359,63 @@ if cookies_str:
                 if name and value:
                     cookies[name] = value
 
-headers = {
-    "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1",
+session = requests.Session(impersonate="chrome124")
+
+# Strategy 1: Desktop Chrome impersonation with redirect following (Facebook redirects desktop browsers via 302 directly to profile)
+headers_desktop = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
 }
 
-session = requests.Session(impersonate="chrome124")
 try:
-    resp = session.get(url, headers=headers, cookies=cookies, timeout=15)
-    # session.get follows redirects, final_url is the resolved URL
-    print(resp.url)
-    sys.exit(0)
+    resp = session.get(url, headers=headers_desktop, cookies=cookies, timeout=12, allow_redirects=True)
+    final_url = resp.url
+    if final_url and "/share/" not in final_url and ("facebook.com" in final_url or "fb.com" in final_url):
+        print(final_url)
+        sys.exit(0)
+    
+    text = resp.text
+    # Check link canonical
+    m = re.search(r'<link\s+rel=["\x27]canonical["\x27]\s+href=["\x27]([^"\x27]+)["\x27]', text, re.IGNORECASE)
+    if m and "/share/" not in m.group(1):
+        print(m.group(1))
+        sys.exit(0)
+
+    # Check og:url
+    m = re.search(r'<meta\s+property=["\x27]og:url["\x27]\s+content=["\x27]([^"\x27]+)["\x27]', text, re.IGNORECASE)
+    if m and "/share/" not in m.group(1):
+        print(m.group(1))
+        sys.exit(0)
+
+    # Check window.location redirect in script
+    m = re.search(r'window\.location(?:\.replace)?\([\'"]([^\'"]+)[\'"]\)', text)
+    if m and "/share/" not in m.group(1):
+        print(m.group(1).replace(r"\/", "/"))
+        sys.exit(0)
 except Exception:
-    sys.exit(1)
+    pass
+
+# Strategy 2: Mobile headers fallback if desktop failed
+headers_mobile = {
+    "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1",
+}
+try:
+    resp = session.get(url, headers=headers_mobile, cookies=cookies, timeout=12, allow_redirects=True)
+    if resp.url and "/share/" not in resp.url:
+        print(resp.url)
+        sys.exit(0)
+    text = resp.text
+    # Extract profile paths from links
+    links = re.findall(r'https?://(?:www\.|m\.)?facebook\.com/([a-zA-Z0-9_.~%-]+)/?', text)
+    for l in links:
+        if l not in ["share", "login", "home", "recover", "help", "policies", "rsrc.php", "profile.php", "watch"]:
+            print(f"https://www.facebook.com/{l}")
+            sys.exit(0)
+except Exception:
+    pass
+
+sys.exit(1)
 `
 	cmd := exec.CommandContext(ctx, "python3", "-c", pyCode, shareURL, cookieHeader)
 	var stdout, stderr bytes.Buffer
@@ -358,7 +423,7 @@ except Exception:
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err == nil && stdout.Len() > 0 {
 		resolved := strings.TrimSpace(stdout.String())
-		if strings.HasPrefix(resolved, "http") {
+		if strings.HasPrefix(resolved, "http") && !strings.Contains(resolved, "/share/") {
 			return resolved, nil
 		}
 	}
@@ -1483,30 +1548,27 @@ try:
 
     if lsd and cursor_m:
         cursor = cursor_m.group(1)
-        # Find collection ID using multiple fallback patterns
-        coll_id = ""
         cursor_pos = cursor_m.start()
-        # Pattern 1: relay_context near cursor (within 30KB window)
-        for cid_m in re.finditer(r'\"id\":\"(\d+)\",\s*\"relay_context":\{', text):
-            if abs(cid_m.start() - cursor_pos) < 30000:
-                coll_id = cid_m.group(1)
-                break
-        # Pattern 2: relay_context anywhere in page
+        coll_id = ""
+
+        # 1. Base64 app_collection ID near cursor
+        chunk_c = text[max(0, cursor_pos - 8000):min(len(text), cursor_pos + 8000)]
+        coll_m = re.search(r'\"id\":\"(YXBwX2NvbGxlY3Rpb246[^\"]+)\"', chunk_c)
+        if coll_m:
+            coll_id = coll_m.group(1)
         if not coll_id:
-            cid_m = re.search(r'\"id\":\"(\d+)\",\s*\"relay_context":\{', text)
-            if cid_m:
-                coll_id = cid_m.group(1)
-        # Pattern 3: any numeric ID near cursor (for pages without relay_context)
+            coll_m = re.search(r'\"id\":\"(YXBwX[a-zA-Z0-9_=-]+)\"', chunk_c)
+            if coll_m:
+                coll_id = coll_m.group(1)
         if not coll_id:
-            for id_m in re.finditer(r'\"id\":\"(\d+)\",', text):
-                if abs(id_m.start() - cursor_pos) < 30000:
-                    coll_id = id_m.group(1)
+            coll_m = re.search(r'\"id\":\"(YXBwX2NvbGxlY3Rpb246[^\"]+)\"', text)
+            if coll_m:
+                coll_id = coll_m.group(1)
+        if not coll_id:
+            for cid_m in re.finditer(r'\"id\":\"(\d+)\",\s*\"relay_context":\{', text):
+                if abs(cid_m.start() - cursor_pos) < 30000:
+                    coll_id = cid_m.group(1)
                     break
-        # Pattern 4: any 6+ digit numeric ID anywhere in first 50KB
-        if not coll_id:
-            for id_m in re.finditer(r'\"id\":\"(\d{6,})\"', text[:50000]):
-                coll_id = id_m.group(1)
-                break
 
         pv_names = [
           "__relay_internal__pv__FBReels_deprecate_short_form_video_context_gkrelayprovider",
@@ -1531,12 +1593,9 @@ try:
           "__relay_internal__pv__CometAudioLanguageUtils_comet_translations_revamp_preferred_languages_gkrelayprovider"
         ]
 
-        # Try multiple doc_id variations for better compatibility
         doc_ids = [
             "28401661769429506",  # ProfileCometAppCollectionReelsRendererPaginationQuery
-            "28401661769429507",  # alternative
-            "5584859874153550",   # ProfileCometTimelineFeedUnitPagingLoaderQuery
-            "5063279343743129",   # ProfileCometTimelineFeedQuery
+            "28401661769429507",
         ]
 
         page_num = 0
@@ -1546,9 +1605,8 @@ try:
             for doc_id in doc_ids:
                 if len(vids_seen) >= max_items:
                     break
-                # Use coll_id if available, otherwise fetch without it
                 cid_val = coll_id if coll_id else "0"
-                vars_dict = {"count": 100, "cursor": cursor, "id": cid_val, "renderLocation": None, "scale": None, "useDefaultActor": False}
+                vars_dict = {"count": 30, "cursor": cursor, "id": cid_val, "renderLocation": None, "scale": None, "useDefaultActor": False}
                 for pv in pv_names: vars_dict[pv] = False
                 payload = {
                     "av": "0", "__user": "0", "__a": "1", "lsd": lsd,
@@ -1559,19 +1617,18 @@ try:
                 }
                 try:
                     resp = session.post("https://www.facebook.com/api/graphql/", data=payload, headers=headers, timeout=20)
-                    resp_text = resp.text.replace(r"\/", "/")
+                    resp_text = resp.text
+                    unescaped_resp = resp_text.replace(r"\/", "/")
 
-                    # Check if response indicates end of data
-                    if '"data":null' in resp_text or '"entry_point":false' in resp_text:
+                    if '"data":null' in resp_text and '"errors"' not in resp_text:
                         break
 
-                    # Try multiple extraction patterns for video IDs
                     page_vids = []
-                    page_vids += re.findall(r'\"video\":\{\"id\":\"(\d+)\"', resp_text)
-                    page_vids += re.findall(r'\"video_id\":\"(\d+)\"', resp_text)
-                    page_vids += re.findall(r'/reel/(\d+)', resp_text)
-                    page_vids += re.findall(r'\"__typename":"ReelVideo","id":"(\d+)"', resp_text)
-                    page_vids += re.findall(r'\"node".*?"id":"(\d+)"', resp_text)
+                    page_vids += re.findall(r'/reel/(\d+)', unescaped_resp)
+                    page_vids += re.findall(r'app_item:[^:]+:[^:]+:[^:]+::(\d+)', unescaped_resp)
+                    page_vids += re.findall(r'\"video\":\{\"id\":\"(\d+)\"', unescaped_resp)
+                    page_vids += re.findall(r'\"video_id\":\"(\d+)\"', unescaped_resp)
+                    page_vids += re.findall(r'\"__typename":"ReelVideo","id":"(\d+)"', unescaped_resp)
 
                     new_in_page = 0
                     for v in page_vids:
@@ -1579,30 +1636,24 @@ try:
                         vids_seen.add(v)
                         new_in_page += 1
                         try:
-                            idx = resp_text.find(v)
-                            chunk = resp_text[max(0, idx - 10000):min(len(resp_text), idx + 10000)]
+                            idx = unescaped_resp.find(v)
+                            chunk = unescaped_resp[max(0, idx - 10000):min(len(unescaped_resp), idx + 10000)]
                             t, th = extract_meta(chunk, v)
                             emit({"id": f"https://www.facebook.com/reel/{v}", "title": t or f"Facebook reel #{v}", "url": f"https://www.facebook.com/reel/{v}", "thumbnail": th, "category": "Reels"})
                         except Exception:
                             emit({"id": f"https://www.facebook.com/reel/{v}", "title": f"Facebook reel #{v}", "url": f"https://www.facebook.com/reel/{v}", "thumbnail": "", "category": "Reels"})
                         if len(vids_seen) >= max_items: break
 
-                    # Try multiple cursor extraction patterns from GraphQL response
                     pi_m = re.search(r'\"page_info\":\{[^}]*\"end_cursor\":\"([^\"]+)\"', resp_text)
                     if not pi_m:
                         pi_m = re.search(r'\"end_cursor\":\"([^\"]+)\"', resp_text)
                     if not pi_m:
                         pi_m = re.search(r'\"cursor\":\"([^\"]+)\"', resp_text)
 
-                    has_next_resp = re.search(r'\"has_next_page\":\s*true', resp_text, re.IGNORECASE)
-                    if not has_next_resp:
-                        has_next_resp = re.search(r'\"hasNextPage\":\s*true', resp_text)
-
-                    if has_next_resp and pi_m and len(vids_seen) < max_items:
+                    if pi_m and (new_in_page > 0 or '"has_next_page":true' in resp_text or '"has_next_page": true' in resp_text):
                         cursor = pi_m.group(1)
                         success = True
-                        # Add a small delay between pages to avoid rate limiting
-                        time.sleep(0.5)
+                        time.sleep(0.3)
                     else:
                         break
                 except Exception:

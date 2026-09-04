@@ -305,7 +305,14 @@ func downloadMedia(url string, requestArgs map[string]string) (string, string, e
 		}
 	}
 
-	args = append(args, url)
+	targetURL := url
+	if IsFacebookShareURL(targetURL) {
+		if resolved := resolveFbShareURL(targetURL, ""); resolved != "" && !IsFacebookShareURL(resolved) {
+			targetURL = resolved
+		}
+	}
+
+	args = append(args, targetURL)
 
 	const maxAttempts = 3
 	var lastErr, lastStderr string

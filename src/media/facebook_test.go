@@ -1,8 +1,10 @@
 package media
 
 import (
+	"context"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestIsFacebookVideoURL(t *testing.T) {
@@ -66,8 +68,8 @@ func TestNormalizeFacebookVideosURL(t *testing.T) {
 		{"https://www.facebook.com/Linhchanh.2k/", "https://m.facebook.com/Linhchanh.2k/videos/", false},
 		{"https://www.facebook.com/Linhchanh.2k/videos", "https://m.facebook.com/Linhchanh.2k/videos/", false},
 		{"https://www.facebook.com/Linhchanh.2k/videos/", "https://m.facebook.com/Linhchanh.2k/videos/", false},
-		{"https://www.facebook.com/pages/MyPage/1234567890", "https://m.facebook.com/pages/MyPage/1234567890/videos/", false},
-		{"https://www.facebook.com/groups/mygrouppage", "https://m.facebook.com/groups/mygrouppage/videos/", false},
+		{"https://www.facebook.com/pages/MyPage/1234567890", "https://m.facebook.com/pages/MyPage/1234567890/reels/", false},
+		{"https://www.facebook.com/groups/mygrouppage", "https://m.facebook.com/groups/mygrouppage/reels/", false},
 		{"https://www.facebook.com/profile.php?id=61592464987497", "https://www.facebook.com/profile.php?id=61592464987497&sk=reels_tab", false},
 		{"https://www.fb.com/Linhchanh.2k", "", true},
 		{"https://www.youtube.com/watch?v=123", "", true},
@@ -246,5 +248,71 @@ func TestLiveFacebookReelsScrapeChutchit(t *testing.T) {
 	for i, e := range info.Entries[:5] {
 		t.Logf("  [%d] %s -> %s (thumb: %s)", i+1, e.Title, e.Url, e.Thumbnail)
 	}
+}
+
+func TestResolveFbShareLink(t *testing.T) {
+	shareURL := "https://www.facebook.com/share/18AgVPBsRT/"
+	resolved := resolveFbShareURL(shareURL, "")
+	if resolved == "" || IsFacebookShareURL(resolved) {
+		t.Fatalf("resolveFbShareURL failed to resolve %s, got %q", shareURL, resolved)
+	}
+	if !strings.Contains(resolved, "djfakfang") {
+		t.Errorf("expected resolved URL to contain 'djfakfang', got %q", resolved)
+	}
+	t.Logf("Successfully resolved %s -> %s", shareURL, resolved)
+
+	profileHandle, normalizedURL := extractFbProfileFromShareURL(shareURL, "")
+	if profileHandle != "djfakfang" {
+		t.Errorf("extractFbProfileFromShareURL handle = %q, want %q", profileHandle, "djfakfang")
+	}
+	if !strings.Contains(normalizedURL, "djfakfang") {
+		t.Errorf("extractFbProfileFromShareURL normalizedURL = %q, want djfakfang URL", normalizedURL)
+	}
+	t.Logf("Profile: %s, Normalized URL: %s", profileHandle, normalizedURL)
+}
+
+func TestScanFacebookShareLink(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping live test in short mode")
+	}
+	shareURL := "https://www.facebook.com/share/18AgVPBsRT/"
+	info, errMsg, err := ScanUrlWithPagination(shareURL, "", 1, 50)
+	if err != nil {
+		t.Fatalf("ScanUrlWithPagination error: %v (errMsg: %s)", err, errMsg)
+	}
+	if info == nil || len(info.Entries) <= 1 {
+		t.Fatalf("Expected multiple videos from share link %s, got %d (errMsg: %s)", shareURL, len(info.Entries), errMsg)
+	}
+	t.Logf("Successfully fetched %d videos for %s from share link %s", len(info.Entries), info.Title, shareURL)
+	for i, e := range info.Entries {
+		t.Logf("  [%d] %s -> %s", i+1, e.Title, e.Url)
+	}
+}
+
+func TestStreamFacebookShareLink(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping live test in short mode")
+	}
+	shareURL := "https://www.facebook.com/share/18AgVPBsRT/"
+	var items []ScanEntry
+	var metaTitle string
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	err := StreamScanUrl(ctx, shareURL, "", func(entry ScanEntry, count int) {
+		items = append(items, entry)
+		t.Logf("Streamed item #%d: %s -> %s", count, entry.Title, entry.Url)
+	}, func(title, uploader, channel, thumbnail string, total int) {
+		metaTitle = title
+		t.Logf("Stream meta: %s (uploader: %s)", title, uploader)
+	})
+
+	if err != nil && err != context.DeadlineExceeded && err != context.Canceled {
+		t.Fatalf("StreamScanUrl error: %v", err)
+	}
+	if len(items) <= 1 {
+		t.Fatalf("Expected > 1 streamed items from share link %s, got %d", shareURL, len(items))
+	}
+	t.Logf("Successfully streamed %d items for %s", len(items), metaTitle)
 }
 

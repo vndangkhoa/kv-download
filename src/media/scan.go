@@ -89,14 +89,19 @@ func ScanUrlWithPagination(inputUrl string, cookies string, start int, limit int
 	}
 
 	if IsFacebookShareURL(url) {
-		// Share links need to be resolved to the actual profile URL first
-		profileHandle, normalizedURL := extractFbProfileFromShareURL(url, cookies)
-		if profileHandle != "Facebook" && normalizedURL != "" {
-			log.Info().Msgf("Resolved Facebook share link: %s -> profile=%s, URL=%s", url, profileHandle, normalizedURL)
-			return ScrapeFacebookVideosFromNormalized(normalizedURL, cookies, profileHandle, start, limit)
+		resolved := resolveFbShareURL(url, cookies)
+		if resolved != "" && IsFacebookVideoURL(resolved) {
+			log.Info().Msgf("Resolved Facebook share link to single video: %s -> %s", url, resolved)
+			url = resolved
+		} else {
+			profileHandle, normalizedURL := extractFbProfileFromShareURL(url, cookies)
+			if profileHandle != "Facebook" && normalizedURL != "" {
+				log.Info().Msgf("Resolved Facebook share link: %s -> profile=%s, URL=%s", url, profileHandle, normalizedURL)
+				return ScrapeFacebookVideosFromNormalized(normalizedURL, cookies, profileHandle, start, limit)
+			}
+			// If resolution failed, try the original URL as a fallback
+			return ScrapeFacebookVideos(url, cookies, start, limit)
 		}
-		// If resolution failed, try the original URL as a fallback
-		return ScrapeFacebookVideos(url, cookies, start, limit)
 	}
 
 	if IsFacebookProfileURL(url) {
@@ -482,12 +487,18 @@ func StreamScanUrl(ctx context.Context, inputUrl string, cookies string, onEntry
 	}
 
 	if IsFacebookShareURL(cleanURL) {
-		profileHandle, normalizedURL := extractFbProfileFromShareURL(cleanURL, cookies)
-		if profileHandle != "Facebook" && normalizedURL != "" {
-			log.Info().Msgf("Resolved Facebook share link for stream: %s -> profile=%s, URL=%s", cleanURL, profileHandle, normalizedURL)
-			return StreamFacebookVideosFromNormalized(ctx, normalizedURL, cookies, profileHandle, onEntry, onMeta)
+		resolved := resolveFbShareURL(cleanURL, cookies)
+		if resolved != "" && IsFacebookVideoURL(resolved) {
+			log.Info().Msgf("Resolved Facebook share link to single video for stream: %s -> %s", cleanURL, resolved)
+			cleanURL = resolved
+		} else {
+			profileHandle, normalizedURL := extractFbProfileFromShareURL(cleanURL, cookies)
+			if profileHandle != "Facebook" && normalizedURL != "" {
+				log.Info().Msgf("Resolved Facebook share link for stream: %s -> profile=%s, URL=%s", cleanURL, profileHandle, normalizedURL)
+				return StreamFacebookVideosFromNormalized(ctx, normalizedURL, cookies, profileHandle, onEntry, onMeta)
+			}
+			return StreamFacebookVideos(ctx, cleanURL, cookies, onEntry, onMeta)
 		}
-		return StreamFacebookVideos(ctx, cleanURL, cookies, onEntry, onMeta)
 	}
 
 	if IsFacebookProfileURL(cleanURL) {
