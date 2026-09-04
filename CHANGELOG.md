@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.0.25] - 2026-09-04
+
+### 🎯 Improved Facebook Share Link Resolution — Desktop UA, Redirect Loop Prevention, Better Collection ID
+- **Desktop User-Agent**: Switched from mobile Safari UA to Chrome 124/Windows desktop UA (`Windows NT 10.0; Win64; x64`) for Facebook's 302 redirect detection — desktop browsers get redirected directly to profile URLs.
+- **Share URL Loop Prevention**: All resolution layers now validate results — reject any URL containing `/share/` or detected as a share URL to avoid infinite resolution loops.
+- **Enhanced curl_cffi Python Script**: Two-strategy approach — desktop Chrome impersonation with redirect following (catches 302→profile), parses canonical/og:url/window.location from share page HTML, then falls back to mobile UA strategy that extracts profile handles from links.
+- **Collection ID Extraction**: New base64-encoded `app_collection` ID detection near cursor position (`YXBwX2NvbGxlY3Rpb24:`) with 4-tier fallbacks for GraphQL pagination — wider 8KB window, broader base64 pattern, then numeric relay_context IDs.
+- **fetch.go + queue.go**: Share URL resolution before passing to yt-dlp — resolves in `downloadMedia()` and `processTask()` with cookies from download task.
+- **scan.go**: Detects resolved share→single-video redirects and passes directly instead of profile scraping; improved fallback path.
+- **Tests**: New `facebook_test.go` with share URL resolution test coverage.
+
+---
+
 ## [1.0.24] - 2026-09-04
 
 ### 🎯 Cookie-Aware Facebook Share Link Resolution with HTML Meta Extraction
