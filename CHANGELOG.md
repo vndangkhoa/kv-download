@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.0.27] - 2026-09-04
+
+### 🎨 Light Theme Replacement
+- **Full Light theme** replacing Matrix (green/cyber) theme — clean, lightweight design with indigo/sky/emerald accent palette
+- White/slate glass panels with subtle shadows and soft borders
+- Inter/system font stack for crisp readability
+- Dark mode preserved via `prefers-color-scheme` media query fallback
+
+### ⚡ Format Selection Overhaul
+- **Default format**: Changed from restrictive `bv[height<=1080][ext*=mp4]+ba` to unrestricted `bestvideo+bestaudio/best` — no more quality ceiling
+- **New preset names**: `highest`/`best`/`max`/`source` (unrestricted), `optimal`/`1080p` (1080p), `normal`/`720p` (720p), `low`/`480p`/`360p` (480p)
+- **Custom format strings**: Any yt-dlp format specifier accepted directly (contains `+` or `[`)
+- Default fallback: `highest` replaces previous `best` default in queue manager
+
+### 📋 Playlist Auto-Batching (API)
+- Auto-detect playlists: YouTube (`list=`, `/playlist`), TikTok collections, SoundCloud (`/sets/`, `/albums/`)
+- Scan playlist URLs via `ScanUrlWithPagination`, batch-add all entries (up to 200) in a single API call
+- Smart field mapping: title, thumbnail, playlist title, channel, uploader forwarded per-entry
+
+### 🔄 Progress Parsing Enhancements
+- **[Merger] stage**: Shows "Merging" speed + "Combining audio+video" ETA
+- **[VideoRemuxer] stage**: Shows "Finalizing" speed + "Remuxing container" ETA
+- More accurate progress display during post-processing
+
+---
+
 ## [1.0.26] - 2026-09-04
 
 ### 🐛 Fix Redundant Facebook Collection Doc ID and Cursor Extraction Efficiency
