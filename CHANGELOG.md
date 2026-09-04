@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.0.24] - 2026-09-04
+
+### 🎯 Cookie-Aware Facebook Share Link Resolution with HTML Meta Extraction
+- **Cookie-Passing Pipeline**: `resolveFbShareURL()` now accepts a `cookieHeader` parameter, passing cookies through to all resolution layers for authenticated redirects.
+- **New `extractProfileFromSharePageHTML()`**: Fetches the share page with cookies and extracts profile info from meta tags and JS data blocks, as an intermediate resolution step before HTTP redirect fallback.
+- **New `extractProfileFromHTML()`**: Parses HTML body for Facebook profile identifiers via 6 extraction strategies: OG URL meta tag, canonical URL, `initialData`/`initialCacheData` JS blocks, profile URLs in HTML, React state URIs (`uri`/`profileUri`/`canonical_url`), and OG title fallback.
+- **Enhanced `resolveShareCurlCffi()`**: Now accepts and parses cookies (Netscape format) into a cookie dict, passing them to curl_cffi session for authenticated browser-level redirect following.
+- **scan.go**: Both `ScanUrlWithPagination` and `StreamScanUrl` now pass cookies to `extractFbProfileFromShareURL()`.
+- **4-Layer Resolution**: curl_cffi with cookies → HTML meta extraction → HTTP GET with cookies + body parsing → Location header fallback.
+
+---
+
 ## [1.0.23] - 2026-09-04
 
 ### 🎯 Facebook Share Link Resolution — Auto-Redirect `/share/` URLs to Profiles
