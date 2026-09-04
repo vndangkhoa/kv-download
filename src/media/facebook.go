@@ -102,22 +102,33 @@ func IsFacebookShareURL(raw string) bool {
 
 // resolveFbShareURL follows the redirect of a Facebook share link to find the actual
 // profile/video/page URL. Returns the resolved URL or empty string on failure.
-func resolveFbShareURL(inputURL string) string {
+// It sends cookies from the request (passed via cookieHeader) for better results,
+// but also works without cookies since share links often resolve without auth.
+func resolveFbShareURL(inputURL, cookieHeader string) string {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	// Try curl_cffi first (handles JS redirects better)
-	result, err := resolveShareCurlCffi(ctx, inputURL)
+	// 1. Try curl_cffi first (handles JS redirects better, best results)
+	result, err := resolveShareCurlCffi(ctx, inputURL, cookieHeader)
 	if err == nil && result != "" {
 		return result
 	}
 
-	// Fallback: use Go's http client with redirect following disabled to catch the Location header
-	req, err := http.NewRequestWithContext(ctx, http.MethodHead, inputURL, nil)
+	// 2. Parse the share page HTML directly to extract profile info (works without cookies/redirects)
+	result = extractProfileFromSharePageHTML(ctx, inputURL, cookieHeader)
+	if result != "" {
+		return result
+	}
+
+	// 3. Fallback: use Go's http client with redirect following disabled to catch the Location header
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, inputURL, nil)
 	if err != nil {
 		return ""
 	}
 	req.Header.Set("User-Agent", "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1")
+	if cookieHeader != "" {
+		req.Header.Set("Cookie", cookieHeader)
+	}
 
 	client := &http.Client{
 		Timeout:   10 * time.Second,
@@ -132,55 +143,120 @@ func resolveFbShareURL(inputURL string) string {
 	}
 	defer resp.Body.Close()
 
+	// Check for redirect
+	var loc string
 	if resp.StatusCode >= 300 && resp.StatusCode < 400 {
-		loc := resp.Header.Get("Location")
+		loc = resp.Header.Get("Location")
 		if loc != "" {
 			return loc
 		}
 	}
 
-	return ""
+	// Even without redirect, try to extract profile info from the response body
+	if loc == "" {
+		loc = extractProfileFromHTML(resp.Body)
+	}
+	return loc
 }
 
-// resolveShareCurlCffi uses Python curl_cffi to follow Facebook share link redirects.
-// Facebook share links often use JS-based redirects that require a full browser.
-func resolveShareCurlCffi(ctx context.Context, shareURL string) (string, error) {
-	pyCode := `import sys
-try:
-    from curl_cffi import requests
-except ImportError:
-    sys.exit(2)
+// extractProfileFromSharePageHTML fetches the share page and extracts profile info
+// from meta tags and JS data embedded in the HTML. Works without needing a redirect.
+func extractProfileFromSharePageHTML(ctx context.Context, shareURL, cookieHeader string) string {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, shareURL, nil)
+	if err != nil {
+		return ""
+	}
+	req.Header.Set("User-Agent", "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1")
+	if cookieHeader != "" {
+		req.Header.Set("Cookie", cookieHeader)
+	}
 
-url = sys.argv[1]
-try:
-    session = requests.Session(impersonate="chrome124")
-    resp = session.get(url, headers={
-        "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1"
-    }, timeout=15)
-    # session.get follows redirects, final_url is the resolved URL
-    print(resp.url)
-    sys.exit(0)
-except Exception:
-    sys.exit(1)
-`
-	cmd := exec.CommandContext(ctx, "python3", "-c", pyCode, shareURL)
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err == nil && stdout.Len() > 0 {
-		resolved := strings.TrimSpace(stdout.String())
-		if strings.HasPrefix(resolved, "http") {
-			return resolved, nil
+	client := &http.Client{Timeout: 15 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return ""
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		return ""
+	}
+
+	// Read body (limit to avoid large pages)
+	bodyBytes, err := io.ReadAll(io.LimitReader(resp.Body, 500*1024))
+	if err != nil {
+		return ""
+	}
+	body := string(bodyBytes)
+
+	return extractProfileFromHTML(strings.NewReader(body))
+}
+
+// extractProfileFromHTML parses an HTML string for Facebook profile identifiers
+// embedded in meta tags, OG tags, and inline JS data blocks.
+func extractProfileFromHTML(r io.Reader) string {
+	body, err := io.ReadAll(r)
+	if err != nil {
+		return ""
+	}
+	html := string(body)
+
+	// 1. Try OG URL meta tag: <meta property="og:url" content="...">
+	ogUrlRe := regexp.MustCompile(`(?i)<meta\s+property=["']og:url["']\s+content=["']([^"']+)["']`)
+	if m := ogUrlRe.FindStringSubmatch(html); len(m) >= 2 {
+		return m[1]
+	}
+
+	// 2. Try canonical URL meta tag: <link rel="canonical" href="...">
+	canonicalRe := regexp.MustCompile(`(?i)<link\s+rel=["']canonical["']\s+href=["']([^"']+)["']`)
+	if m := canonicalRe.FindStringSubmatch(html); len(m) >= 2 {
+		return m[1]
+	}
+
+	// 3. Try JS initialData/initialCacheData blocks that contain profile URLs
+	// These are commonly found in Facebook share pages
+	jsUrlRe := regexp.MustCompile(`(?:initialData|initialCacheData)\s*=\s*\{([^}]+(?:\{[^}]*\}[^}]*)*)\}`)
+	if m := jsUrlRe.FindStringSubmatch(html); len(m) >= 2 {
+		// Search for profile URLs within the JS block
+		jsBlock := m[1]
+		profileRe := regexp.MustCompile(`https?://(?:m|www)\.facebook\.com/([a-zA-Z0-9_.~%-]+)(?:/[a-zA-Z0-9_.~%-]*)?(?:/|$|["'])`)
+		if pm := profileRe.FindStringSubmatch(jsBlock); len(pm) >= 2 {
+			return "https://www.facebook.com/" + pm[1]
 		}
 	}
-	return "", fmt.Errorf("curl_cffi resolve failed")
+
+	// 4. Try to find any Facebook profile URL in the HTML
+	profileRe := regexp.MustCompile(`https?://(?:m|www)\.facebook\.com/([a-zA-Z0-9_.~%-]+)(?:/reels|/videos|/posts|/profile\.php|/[a-z]+|/|["'&])`)
+	if m := profileRe.FindStringSubmatch(html); len(m) >= 2 {
+		return "https://www.facebook.com/" + m[1]
+	}
+
+	// 5. Look for profile URI in React state: 'uri':'/username'
+	uriRe := regexp.MustCompile(`['"](?:uri|profileUri|canonical_url)['"]\s*:\s*['"]/(.+?)[/'"']`)
+	if m := uriRe.FindStringSubmatch(html); len(m) >= 2 {
+		uri := m[1]
+		// Only extract if it looks like a profile (not a post/video)
+		if !strings.Contains(uri, "/video/") && !strings.Contains(uri, "/posts/") &&
+			!strings.Contains(uri, "/reel/") && !strings.Contains(uri, "/share/") {
+			return "https://www.facebook.com/" + uri
+		}
+	}
+
+	// 6. Try to find profile name in OG metadata: <meta property="og:title" content="John Doe">
+	ogTitleRe := regexp.MustCompile(`(?i)<meta\s+property=["']og:title["']\s+content=["']([^"']+)["']`)
+	if m := ogTitleRe.FindStringSubmatch(html); len(m) >= 2 {
+		// The title usually contains the profile name, use it as a hint
+		return m[1]
+	}
+
+	return ""
 }
 
 // extractFbProfileFromShareURL tries to extract the actual profile handle from a
 // resolved Facebook share link. It returns the profile handle and the normalized
 // profile URL for scraping.
-func extractFbProfileFromShareURL(inputURL string) (profileHandle, normalizedURL string) {
-	resolved := resolveFbShareURL(inputURL)
+func extractFbProfileFromShareURL(inputURL, cookieHeader string) (profileHandle, normalizedURL string) {
+	resolved := resolveFbShareURL(inputURL, cookieHeader)
 	if resolved == "" {
 		return "Facebook", ""
 	}
@@ -236,6 +312,57 @@ func extractFbProfileFromShareURL(inputURL string) (profileHandle, normalizedURL
 	}
 
 	return "Facebook", ""
+}
+
+// resolveShareCurlCffi uses Python curl_cffi to follow Facebook share link redirects.
+// Facebook share links often use JS-based redirects that require a full browser.
+func resolveShareCurlCffi(ctx context.Context, shareURL, cookieHeader string) (string, error) {
+	pyCode := `import sys, json, re, urllib.parse
+try:
+    from curl_cffi import requests
+except ImportError:
+    sys.exit(2)
+
+url = sys.argv[1]
+cookies_str = sys.argv[2] if len(sys.argv) > 2 else ""
+
+# Parse cookies string into a dict
+cookies = {}
+if cookies_str:
+    for line in cookies_str.split("\n"):
+        line = line.strip()
+        if line and not line.startswith("#"):
+            parts = line.split("\t")
+            if len(parts) >= 7:
+                name = parts[5]
+                value = parts[6]
+                if name and value:
+                    cookies[name] = value
+
+headers = {
+    "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1",
+}
+
+session = requests.Session(impersonate="chrome124")
+try:
+    resp = session.get(url, headers=headers, cookies=cookies, timeout=15)
+    # session.get follows redirects, final_url is the resolved URL
+    print(resp.url)
+    sys.exit(0)
+except Exception:
+    sys.exit(1)
+`
+	cmd := exec.CommandContext(ctx, "python3", "-c", pyCode, shareURL, cookieHeader)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err == nil && stdout.Len() > 0 {
+		resolved := strings.TrimSpace(stdout.String())
+		if strings.HasPrefix(resolved, "http") {
+			return resolved, nil
+		}
+	}
+	return "", fmt.Errorf("curl_cffi resolve failed")
 }
 
 // extractFbProfile returns the human-readable profile/page/group handle used for

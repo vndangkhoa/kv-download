@@ -90,7 +90,7 @@ func ScanUrlWithPagination(inputUrl string, cookies string, start int, limit int
 
 	if IsFacebookShareURL(url) {
 		// Share links need to be resolved to the actual profile URL first
-		profileHandle, normalizedURL := extractFbProfileFromShareURL(url)
+		profileHandle, normalizedURL := extractFbProfileFromShareURL(url, cookies)
 		if profileHandle != "Facebook" && normalizedURL != "" {
 			log.Info().Msgf("Resolved Facebook share link: %s -> profile=%s, URL=%s", url, profileHandle, normalizedURL)
 			return ScrapeFacebookVideosFromNormalized(normalizedURL, cookies, profileHandle, start, limit)
@@ -482,7 +482,7 @@ func StreamScanUrl(ctx context.Context, inputUrl string, cookies string, onEntry
 	}
 
 	if IsFacebookShareURL(cleanURL) {
-		profileHandle, normalizedURL := extractFbProfileFromShareURL(cleanURL)
+		profileHandle, normalizedURL := extractFbProfileFromShareURL(cleanURL, cookies)
 		if profileHandle != "Facebook" && normalizedURL != "" {
 			log.Info().Msgf("Resolved Facebook share link for stream: %s -> profile=%s, URL=%s", cleanURL, profileHandle, normalizedURL)
 			return StreamFacebookVideosFromNormalized(ctx, normalizedURL, cookies, profileHandle, onEntry, onMeta)
