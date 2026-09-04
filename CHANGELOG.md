@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.0.26] - 2026-09-04
+
+### 🐛 Fix Redundant Facebook Collection Doc ID and Cursor Extraction Efficiency
+- **Removed Duplicate Collection Doc ID**: Removed redundant doc_id `28401661769429507` from the GraphQL collection IDs list (only `28401661769429506` needed).
+- **Break After Cursor Extraction**: Added `break` after successful cursor extraction to prevent unnecessary additional GraphQL pagination calls on the same page.
+- **Added Test**: `TestStreamFacebookBaoNgocShareLink` live test for share link streaming.
+
+---
+
 ## [1.0.25] - 2026-09-04
 
 ### 🎯 Improved Facebook Share Link Resolution — Desktop UA, Redirect Loop Prevention, Better Collection ID
