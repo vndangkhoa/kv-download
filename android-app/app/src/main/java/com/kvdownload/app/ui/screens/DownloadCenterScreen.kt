@@ -1,5 +1,6 @@
 package com.kvdownload.app.ui.screens
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -9,6 +10,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -16,9 +18,14 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Cancel
 import androidx.compose.material.icons.filled.CheckCircle
@@ -41,8 +48,6 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
@@ -81,6 +86,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
+import com.kvdownload.app.api.AV01Resolver
 import com.kvdownload.app.api.DownloadTask
 import com.kvdownload.app.api.EnqueueItemInput
 import com.kvdownload.app.api.PhoneTransferState
@@ -89,8 +95,18 @@ import com.kvdownload.app.api.RetrofitClient
 import com.kvdownload.app.api.SavedPhoneFile
 import com.kvdownload.app.api.ScanEntry
 import com.kvdownload.app.api.TaskGroup
+import com.kvdownload.app.player.MediaKind
+import com.kvdownload.app.player.MediaPlayRequest
+import com.kvdownload.app.storage.HlsSegmentDownloader
 import com.kvdownload.app.storage.PhoneDownloadManager
-import com.kvdownload.app.ui.components.PlaybackRequest
+import com.kvdownload.app.ui.adaptive.LocalWindowState
+import com.kvdownload.app.ui.components.AstryxCard
+import com.kvdownload.app.ui.components.AstryxGradientButton
+import com.kvdownload.app.ui.components.AstryxMediaThumbnail
+import com.kvdownload.app.ui.components.AstryxStatPill
+import com.kvdownload.app.ui.components.AstryxStatusBadge
+import com.kvdownload.app.ui.components.AstryxTone
+import com.kvdownload.app.ui.theme.LocalAstryxPalette
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -101,11 +117,13 @@ fun DownloadCenterScreen(
     onSharedUrlConsumed: () -> Unit,
     phoneDownloadManager: PhoneDownloadManager,
     onRefreshQueue: () -> Unit,
-    onPlayMedia: (PlaybackRequest) -> Unit,
+    onPlayMedia: (MediaPlayRequest) -> Unit,
     onShowMessage: (String) -> Unit
 ) {
     val scope = rememberCoroutineScope()
     val clipboardManager = LocalClipboardManager.current
+    val windowState = LocalWindowState.current
+    val palette = LocalAstryxPalette.current
 
     val savedFiles by phoneDownloadManager.savedFiles.collectAsState()
     val phoneTransfers by phoneDownloadManager.transfers.collectAsState()
@@ -130,7 +148,6 @@ fun DownloadCenterScreen(
     var scanSelectedUrls by remember { mutableStateOf<Set<String>>(emptySet()) }
     var scanError by remember { mutableStateOf<String?>(null) }
 
-    // Expanded group map and delete confirm dialog
     val expandedGroups = remember { mutableStateMapOf<String, Boolean>() }
     var pendingGroupDelete by remember { mutableStateOf<TaskGroup?>(null) }
 
@@ -145,6 +162,12 @@ fun DownloadCenterScreen(
         urlText.lines()
             .map { it.trim() }
             .filter { it.startsWith("http://") || it.startsWith("https://") }
+    }
+
+    val directHlsOrAv01Url = remember(parsedUrls) {
+        parsedUrls.firstOrNull { u ->
+            AV01Resolver.isAV01Url(u) || HlsSegmentDownloader.looksLikeHlsUrl(u)
+        }
     }
 
     val filteredTasks = remember(tasks, statusFilter, searchQuery, sortBy) {
@@ -187,7 +210,7 @@ fun DownloadCenterScreen(
                 if (!res.error.isNullOrBlank()) {
                     scanError = res.error
                 } else {
-                    scanTitle = res.title ?: res.playlistTitle ?: "Playlist / Channel"
+                    scanTitle = res.title ?: res.playlistTitle ?: "Channel / Playlist"
                     scanChannel = res.channel ?: res.uploader ?: ""
                     val list = res.entries.orEmpty().ifEmpty {
                         val u = res.webpage_url ?: targetUrl
@@ -212,135 +235,242 @@ fun DownloadCenterScreen(
         }
     }
 
-    LazyColumn(
-        modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(14.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
-        // Composer Card
-        item {
-            Card(
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
-                shape = RoundedCornerShape(14.dp)
-            ) {
-                Column(
+    fun submitToServerQueue() {
+        if (parsedUrls.isEmpty() || isSubmitting) return
+        isSubmitting = true
+        scope.launch {
+            try {
+                val resp = RetrofitClient.getApi().addQueue(
+                    QueueAddRequest(
+                        urls = parsedUrls,
+                        format = selectedFormat,
+                        groupType = if (parsedUrls.size > 1) "batch" else null,
+                        groupTitle = if (parsedUrls.size > 1) "Mobile Batch (${parsedUrls.size} URLs)" else null
+                    )
+                )
+                if (resp.success) {
+                    urlText = ""
+                    onRefreshQueue()
+                    onShowMessage("Enqueued ${parsedUrls.size} URL(s)")
+                } else {
+                    onShowMessage(resp.error ?: "Failed to enqueue")
+                }
+            } catch (e: Exception) {
+                onShowMessage(e.message ?: "Request failed")
+            } finally {
+                isSubmitting = false
+            }
+        }
+    }
+
+    @Composable
+    fun ComposerAndFiltersBlock(includeStats: Boolean = true) {
+        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            if (includeStats) {
+                Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(14.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Text("Add Media or Channel Links", style = MaterialTheme.typography.titleMedium)
-
-                    OutlinedTextField(
-                        value = urlText,
-                        onValueChange = { urlText = it },
-                        modifier = Modifier.fillMaxWidth(),
-                        minLines = 2,
-                        maxLines = 5,
-                        placeholder = {
-                            Text("Paste YouTube channel/playlist, TikTok, SoundCloud, or video URLs (one per line)")
-                        }
+                    AstryxStatPill("Queue", "${tasks.size}", AstryxTone.Accent)
+                    AstryxStatPill(
+                        "Active",
+                        "${tasks.count { it.status == "downloading" || it.status == "queued" }}",
+                        AstryxTone.Info
                     )
+                    AstryxStatPill("Done", "${tasks.count { it.status == "completed" }}", AstryxTone.Success)
+                    AstryxStatPill("On Phone", "${savedFiles.size}", AstryxTone.Success)
+                }
+            }
 
+            AstryxCard(emphasized = parsedUrls.isNotEmpty()) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column {
+                        Text(
+                            "Add Media, AV01, or Channel Links",
+                            style = MaterialTheme.typography.titleMedium,
+                            color = palette.textPrimary
+                        )
+                        Text(
+                            "Supports playlists, .m3u8 HLS streams & AV01 videos",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = palette.textSecondary
+                        )
+                    }
+                    if (directHlsOrAv01Url != null) {
+                        AstryxStatusBadge(
+                            text = if (AV01Resolver.isAV01Url(directHlsOrAv01Url)) "AV01 HLS" else "M3U8 HLS",
+                            tone = AstryxTone.Accent
+                        )
+                    }
+                }
+
+                OutlinedTextField(
+                    value = urlText,
+                    onValueChange = { urlText = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    minLines = 2,
+                    maxLines = 5,
+                    placeholder = {
+                        Text("Paste URLs (one per line) — YouTube, TikTok, Facebook, AV01, .m3u8...")
+                    }
+                )
+
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    OutlinedButton(
+                        onClick = {
+                            clipboardManager.getText()?.text?.let { clip ->
+                                val clean = clip.trim()
+                                urlText = if (urlText.isBlank()) clean else "$urlText\n$clean"
+                            }
+                        }
+                    ) {
+                        Icon(Icons.Default.ContentPaste, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Text("Paste", modifier = Modifier.padding(start = 6.dp))
+                    }
+
+                    Box {
+                        OutlinedButton(onClick = { showFormatMenu = true }) {
+                            Text(formatLabel(selectedFormat))
+                        }
+                        DropdownMenu(
+                            expanded = showFormatMenu,
+                            onDismissRequest = { showFormatMenu = false }
+                        ) {
+                            listOf(
+                                "highest" to "Highest (8K/4K)",
+                                "1080p" to "1080p MP4",
+                                "720p" to "720p MP4",
+                                "480p" to "480p MP4",
+                                "audio" to "Audio (MP3)"
+                            ).forEach { (value, label) ->
+                                DropdownMenuItem(
+                                    text = { Text(label) },
+                                    onClick = {
+                                        selectedFormat = value
+                                        showFormatMenu = false
+                                    }
+                                )
+                            }
+                        }
+                    }
+
+                    if (parsedUrls.size == 1) {
+                        TextButton(onClick = { inspectUrl(parsedUrls.first()) }) {
+                            Icon(Icons.Default.PlaylistAddCheck, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Text("Pick Items", modifier = Modifier.padding(start = 4.dp))
+                        }
+                    }
+                }
+
+                // Instant Phone HLS / AV01 Stream Actions when detected
+                if (directHlsOrAv01Url != null) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        OutlinedButton(
+                            onClick = {
+                                onPlayMedia(
+                                    MediaPlayRequest(
+                                        id = "direct:${directHlsOrAv01Url.hashCode()}",
+                                        title = if (AV01Resolver.isAV01Url(directHlsOrAv01Url)) "AV01 Video Stream" else "HLS M3U8 Stream",
+                                        subtitle = "Direct Phone Playback",
+                                        primaryUrl = directHlsOrAv01Url,
+                                        fallbackUrl = RetrofitClient.browserStreamUrl(directHlsOrAv01Url, AV01Resolver.REFERER),
+                                        kind = MediaKind.VIDEO,
+                                        isHls = true,
+                                        referer = if (AV01Resolver.isAV01Url(directHlsOrAv01Url)) AV01Resolver.REFERER else null,
+                                        onSaveToPhone = {
+                                            phoneDownloadManager.saveHlsOrAV01ToPhone(
+                                                url = directHlsOrAv01Url,
+                                                formatPref = selectedFormat
+                                            )
+                                            onShowMessage("Downloading M3U8 segments to Movies/KV Download...")
+                                        }
+                                    )
+                                )
+                            },
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Text("Preview Stream", modifier = Modifier.padding(start = 4.dp), maxLines = 1)
+                        }
+
+                        OutlinedButton(
+                            onClick = {
+                                phoneDownloadManager.saveHlsOrAV01ToPhone(
+                                    url = directHlsOrAv01Url,
+                                    formatPref = selectedFormat
+                                )
+                                onShowMessage("Downloading M3U8 stream to phone storage...")
+                            },
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(Icons.Default.PhoneAndroid, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Text("M3U8 To Phone", modifier = Modifier.padding(start = 4.dp), maxLines = 1)
+                        }
+                    }
+                }
+
+                AstryxGradientButton(
+                    text = if (parsedUrls.size > 1) "Download Group (${parsedUrls.size} links)" else "Queue on Server",
+                    icon = Icons.Default.Download,
+                    enabled = parsedUrls.isNotEmpty() && !isSubmitting,
+                    loading = isSubmitting,
+                    onClick = { submitToServerQueue() },
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+
+            // Active phone HLS / transfer progress cards
+            val activeTransfers = phoneTransfers.values.filter { !it.isCompleted || it.error != null }.take(4)
+            if (activeTransfers.isNotEmpty()) {
+                AstryxCard(contentPadding = PaddingValues(12.dp)) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            OutlinedButton(
-                                onClick = {
-                                    clipboardManager.getText()?.text?.let { clip ->
-                                        val clean = clip.trim()
-                                        urlText = if (urlText.isBlank()) clean else "$urlText\n$clean"
-                                    }
-                                }
-                            ) {
-                                Icon(Icons.Default.ContentPaste, contentDescription = null, modifier = Modifier.size(16.dp))
-                                Text("Paste", modifier = Modifier.padding(start = 6.dp))
-                            }
-
-                            Box {
-                                OutlinedButton(onClick = { showFormatMenu = true }) {
-                                    Text(formatLabel(selectedFormat))
-                                }
-                                DropdownMenu(
-                                    expanded = showFormatMenu,
-                                    onDismissRequest = { showFormatMenu = false }
-                                ) {
-                                    listOf(
-                                        "highest" to "Highest (8K/4K)",
-                                        "1080p" to "1080p MP4",
-                                        "720p" to "720p MP4",
-                                        "audio" to "Audio (MP3)"
-                                    ).forEach { (value, label) ->
-                                        DropdownMenuItem(
-                                            text = { Text(label) },
-                                            onClick = {
-                                                selectedFormat = value
-                                                showFormatMenu = false
-                                            }
-                                        )
-                                    }
-                                }
-                            }
-                        }
-
-                        if (parsedUrls.size == 1) {
-                            TextButton(onClick = { inspectUrl(parsedUrls.first()) }) {
-                                Icon(Icons.Default.PlaylistAddCheck, contentDescription = null, modifier = Modifier.size(18.dp))
-                                Text("Pick Items", modifier = Modifier.padding(start = 4.dp))
-                            }
+                        Text("Phone Transfers", style = MaterialTheme.typography.titleSmall, color = palette.textPrimary)
+                        TextButton(onClick = { phoneDownloadManager.clearCompletedTransferBadges() }) {
+                            Text("Clear")
                         }
                     }
-
-                    Button(
-                        onClick = {
-                            if (parsedUrls.isEmpty() || isSubmitting) return@Button
-                            isSubmitting = true
-                            scope.launch {
-                                try {
-                                    val resp = RetrofitClient.getApi().addQueue(
-                                        QueueAddRequest(
-                                            urls = parsedUrls,
-                                            format = selectedFormat,
-                                            groupType = if (parsedUrls.size > 1) "batch" else null,
-                                            groupTitle = if (parsedUrls.size > 1) "Mobile Batch (${parsedUrls.size} URLs)" else null
-                                        )
-                                    )
-                                    if (resp.success) {
-                                        urlText = ""
-                                        onRefreshQueue()
-                                        onShowMessage("Enqueued ${parsedUrls.size} URL(s)")
-                                    } else {
-                                        onShowMessage(resp.error ?: "Failed to enqueue")
-                                    }
-                                } catch (e: Exception) {
-                                    onShowMessage(e.message ?: "Request failed")
-                                } finally {
-                                    isSubmitting = false
-                                }
+                    activeTransfers.forEach { tr ->
+                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text(tr.title, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            if (tr.error != null) {
+                                Text(tr.error, style = MaterialTheme.typography.labelSmall, color = palette.error, maxLines = 2)
+                            } else {
+                                LinearProgressIndicator(
+                                    progress = { tr.progress },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    color = palette.success
+                                )
+                                Text(
+                                    text = tr.statusText ?: "${(tr.progress * 100).toInt()}%",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = palette.success
+                                )
                             }
-                        },
-                        enabled = parsedUrls.isNotEmpty() && !isSubmitting,
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        if (isSubmitting) {
-                            CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
-                        } else {
-                            Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(18.dp))
                         }
-                        Text(
-                            text = if (parsedUrls.size > 1) "Download Group (${parsedUrls.size} links)" else "Start Download",
-                            modifier = Modifier.padding(start = 8.dp)
-                        )
                     }
                 }
             }
-        }
 
-        // Filter & Grouping Controls
-        item {
+            // Filter & Grouping Toolbar
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedTextField(
                     value = searchQuery,
@@ -362,8 +492,7 @@ fun DownloadCenterScreen(
                     modifier = Modifier
                         .fillMaxWidth()
                         .horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     listOf(
                         "all" to "All (${tasks.size})",
@@ -380,8 +509,10 @@ fun DownloadCenterScreen(
                 }
 
                 Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     SingleChoiceSegmentedButtonRow {
@@ -396,129 +527,198 @@ fun DownloadCenterScreen(
                             onClick = { groupedMode = false },
                             shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2),
                             icon = { Icon(Icons.Default.List, contentDescription = null, modifier = Modifier.size(16.dp)) }
-                        ) { Text("All") }
+                        ) { Text("Flat") }
                     }
 
-                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Box {
-                            AssistChip(
-                                onClick = { showSortMenu = true },
-                                label = { Text("Sort: $sortBy") }
-                            )
-                            DropdownMenu(expanded = showSortMenu, onDismissRequest = { showSortMenu = false }) {
-                                listOf("newest", "oldest", "status", "title").forEach { s ->
-                                    DropdownMenuItem(
-                                        text = { Text(s.replaceFirstChar { it.uppercase() }) },
-                                        onClick = {
-                                            sortBy = s
-                                            showSortMenu = false
-                                        }
-                                    )
-                                }
+                    Box {
+                        AssistChip(
+                            onClick = { showSortMenu = true },
+                            label = { Text("Sort: $sortBy") }
+                        )
+                        DropdownMenu(expanded = showSortMenu, onDismissRequest = { showSortMenu = false }) {
+                            listOf("newest", "oldest", "status", "title").forEach { s ->
+                                DropdownMenuItem(
+                                    text = { Text(s.replaceFirstChar { it.uppercase() }) },
+                                    onClick = {
+                                        sortBy = s
+                                        showSortMenu = false
+                                    }
+                                )
                             }
                         }
+                    }
 
-                        if (tasks.any { it.status == "completed" }) {
-                            TextButton(
-                                onClick = {
-                                    scope.launch {
-                                        try {
-                                            RetrofitClient.getApi().clearCompleted()
-                                            onRefreshQueue()
-                                        } catch (_: Exception) {}
-                                    }
+                    if (tasks.any { it.status == "completed" }) {
+                        TextButton(
+                            onClick = {
+                                scope.launch {
+                                    try {
+                                        RetrofitClient.getApi().clearCompleted()
+                                        onRefreshQueue()
+                                    } catch (_: Exception) {}
                                 }
-                            ) { Text("Clear Done") }
-                        }
+                            }
+                        ) { Text("Clear Done") }
                     }
                 }
-            }
-        }
-
-        if (filteredTasks.isEmpty()) {
-            item {
-                Card(
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
-                    shape = RoundedCornerShape(14.dp)
-                ) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(28.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Icon(
-                            Icons.Default.Download,
-                            contentDescription = null,
-                            modifier = Modifier.size(36.dp),
-                            tint = MaterialTheme.colorScheme.primary
-                        )
-                        Text("No downloads match", style = MaterialTheme.typography.titleMedium)
-                        Text(
-                            "Paste media or channel links above, or use the In-App Browser tab to sniff videos.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
-            }
-        } else if (groupedMode) {
-            items(groups, key = { it.groupId }) { group ->
-                val isExpanded = expandedGroups[group.groupId] ?: (group.downloadingCount > 0 || group.tasks.size <= 3)
-                TaskGroupCardView(
-                    group = group,
-                    isExpanded = isExpanded,
-                    onToggleExpand = { expandedGroups[group.groupId] = !isExpanded },
-                    savedFiles = savedFiles,
-                    phoneTransfers = phoneTransfers,
-                    phoneDownloadManager = phoneDownloadManager,
-                    onRetryGroup = {
-                        scope.launch {
-                            RetrofitClient.getApi().retryGroup(group.groupId)
-                            onRefreshQueue()
-                        }
-                    },
-                    onCancelGroup = {
-                        scope.launch {
-                            RetrofitClient.getApi().cancelGroup(group.groupId)
-                            onRefreshQueue()
-                        }
-                    },
-                    onRequestDeleteGroup = { pendingGroupDelete = group },
-                    onRefreshQueue = onRefreshQueue,
-                    onPlayMedia = onPlayMedia,
-                    onShowMessage = onShowMessage
-                )
-            }
-
-            items(singles, key = { it.id }) { task ->
-                TaskCardView(
-                    task = task,
-                    savedRecord = savedFiles.firstOrNull { it.serverTaskId == task.id },
-                    transfer = phoneTransfers["task:${task.id}"],
-                    phoneDownloadManager = phoneDownloadManager,
-                    onRefreshQueue = onRefreshQueue,
-                    onPlayMedia = onPlayMedia,
-                    onShowMessage = onShowMessage
-                )
-            }
-        } else {
-            items(filteredTasks, key = { it.id }) { task ->
-                TaskCardView(
-                    task = task,
-                    savedRecord = savedFiles.firstOrNull { it.serverTaskId == task.id },
-                    transfer = phoneTransfers["task:${task.id}"],
-                    phoneDownloadManager = phoneDownloadManager,
-                    onRefreshQueue = onRefreshQueue,
-                    onPlayMedia = onPlayMedia,
-                    onShowMessage = onShowMessage
-                )
             }
         }
     }
 
-    // Group Deletion Confirm Dialog
+    if (windowState.isTwoPane) {
+        // Tablet / Unfolded Foldable / Landscape 2-Pane Split
+        Row(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(14.dp),
+            horizontalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
+            Column(
+                modifier = Modifier
+                    .width(380.dp)
+                    .fillMaxHeight()
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                ComposerAndFiltersBlock(includeStats = true)
+            }
+
+            LazyVerticalGrid(
+                columns = GridCells.Fixed(windowState.queueGridColumns.coerceAtLeast(1)),
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxHeight(),
+                contentPadding = PaddingValues(bottom = 24.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                if (filteredTasks.isEmpty()) {
+                    item(span = { GridItemSpan(maxLineSpan) }) {
+                        EmptyQueueCard()
+                    }
+                } else if (groupedMode) {
+                    items(groups, key = { it.groupId }, span = { GridItemSpan(maxLineSpan) }) { group ->
+                        val isExpanded = expandedGroups[group.groupId] ?: (group.downloadingCount > 0 || group.tasks.size <= 3)
+                        TaskGroupCardView(
+                            group = group,
+                            isExpanded = isExpanded,
+                            onToggleExpand = { expandedGroups[group.groupId] = !isExpanded },
+                            savedFiles = savedFiles,
+                            phoneTransfers = phoneTransfers,
+                            phoneDownloadManager = phoneDownloadManager,
+                            onRetryGroup = {
+                                scope.launch {
+                                    RetrofitClient.getApi().retryGroup(group.groupId)
+                                    onRefreshQueue()
+                                }
+                            },
+                            onCancelGroup = {
+                                scope.launch {
+                                    RetrofitClient.getApi().cancelGroup(group.groupId)
+                                    onRefreshQueue()
+                                }
+                            },
+                            onRequestDeleteGroup = { pendingGroupDelete = group },
+                            onRefreshQueue = onRefreshQueue,
+                            onPlayMedia = onPlayMedia,
+                            onShowMessage = onShowMessage
+                        )
+                    }
+                    items(singles, key = { it.id }) { task ->
+                        TaskCardView(
+                            task = task,
+                            savedRecord = savedFiles.firstOrNull { it.serverTaskId == task.id },
+                            transfer = phoneTransfers["task:${task.id}"],
+                            phoneDownloadManager = phoneDownloadManager,
+                            onRefreshQueue = onRefreshQueue,
+                            onPlayMedia = onPlayMedia,
+                            onShowMessage = onShowMessage
+                        )
+                    }
+                } else {
+                    items(filteredTasks, key = { it.id }) { task ->
+                        TaskCardView(
+                            task = task,
+                            savedRecord = savedFiles.firstOrNull { it.serverTaskId == task.id },
+                            transfer = phoneTransfers["task:${task.id}"],
+                            phoneDownloadManager = phoneDownloadManager,
+                            onRefreshQueue = onRefreshQueue,
+                            onPlayMedia = onPlayMedia,
+                            onShowMessage = onShowMessage
+                        )
+                    }
+                }
+            }
+        }
+    } else {
+        // Compact Portrait Phone Layout
+        LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(14.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            item {
+                ComposerAndFiltersBlock(includeStats = true)
+            }
+
+            if (filteredTasks.isEmpty()) {
+                item { EmptyQueueCard() }
+            } else if (groupedMode) {
+                items(groups, key = { it.groupId }) { group ->
+                    val isExpanded = expandedGroups[group.groupId] ?: (group.downloadingCount > 0 || group.tasks.size <= 3)
+                    TaskGroupCardView(
+                        group = group,
+                        isExpanded = isExpanded,
+                        onToggleExpand = { expandedGroups[group.groupId] = !isExpanded },
+                        savedFiles = savedFiles,
+                        phoneTransfers = phoneTransfers,
+                        phoneDownloadManager = phoneDownloadManager,
+                        onRetryGroup = {
+                            scope.launch {
+                                RetrofitClient.getApi().retryGroup(group.groupId)
+                                onRefreshQueue()
+                            }
+                        },
+                        onCancelGroup = {
+                            scope.launch {
+                                RetrofitClient.getApi().cancelGroup(group.groupId)
+                                onRefreshQueue()
+                            }
+                        },
+                        onRequestDeleteGroup = { pendingGroupDelete = group },
+                        onRefreshQueue = onRefreshQueue,
+                        onPlayMedia = onPlayMedia,
+                        onShowMessage = onShowMessage
+                    )
+                }
+
+                items(singles, key = { it.id }) { task ->
+                    TaskCardView(
+                        task = task,
+                        savedRecord = savedFiles.firstOrNull { it.serverTaskId == task.id },
+                        transfer = phoneTransfers["task:${task.id}"],
+                        phoneDownloadManager = phoneDownloadManager,
+                        onRefreshQueue = onRefreshQueue,
+                        onPlayMedia = onPlayMedia,
+                        onShowMessage = onShowMessage
+                    )
+                }
+            } else {
+                items(filteredTasks, key = { it.id }) { task ->
+                    TaskCardView(
+                        task = task,
+                        savedRecord = savedFiles.firstOrNull { it.serverTaskId == task.id },
+                        transfer = phoneTransfers["task:${task.id}"],
+                        phoneDownloadManager = phoneDownloadManager,
+                        onRefreshQueue = onRefreshQueue,
+                        onPlayMedia = onPlayMedia,
+                        onShowMessage = onShowMessage
+                    )
+                }
+            }
+        }
+    }
+
     pendingGroupDelete?.let { grp ->
         AlertDialog(
             onDismissRequest = { pendingGroupDelete = null },
@@ -556,7 +756,6 @@ fun DownloadCenterScreen(
         )
     }
 
-    // Playlist / Channel Item Picker Bottom Sheet
     if (showScanSheet) {
         ModalBottomSheet(onDismissRequest = { showScanSheet = false }) {
             Column(
@@ -574,7 +773,7 @@ fun DownloadCenterScreen(
                     Column(modifier = Modifier.weight(1f)) {
                         Text(scanTitle, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         if (scanChannel.isNotBlank()) {
-                            Text(scanChannel, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text(scanChannel, style = MaterialTheme.typography.bodySmall, color = palette.textSecondary)
                         }
                     }
                     TextButton(
@@ -601,7 +800,7 @@ fun DownloadCenterScreen(
                         }
                     }
                     scanError != null -> {
-                        Text(scanError ?: "Scan failed", color = MaterialTheme.colorScheme.error)
+                        Text(scanError ?: "Scan failed", color = palette.error)
                     }
                     else -> {
                         LazyColumn(
@@ -643,17 +842,20 @@ fun DownloadCenterScreen(
                                     Column(modifier = Modifier.weight(1f)) {
                                         Text(entry.title, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
                                         entry.resolvedDuration()?.let { d ->
-                                            Text(d, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                            Text(d, style = MaterialTheme.typography.labelSmall, color = palette.textSecondary)
                                         }
                                     }
                                 }
                             }
                         }
 
-                        Button(
+                        AstryxGradientButton(
+                            text = "Download Selected (${scanSelectedUrls.size})",
+                            icon = Icons.Default.Download,
+                            enabled = scanSelectedUrls.isNotEmpty(),
                             onClick = {
                                 val chosen = scanEntries.filter { scanSelectedUrls.contains(it.resolvedUrl()) }
-                                if (chosen.isEmpty()) return@Button
+                                if (chosen.isEmpty()) return@AstryxGradientButton
                                 showScanSheet = false
                                 scope.launch {
                                     try {
@@ -687,14 +889,38 @@ fun DownloadCenterScreen(
                                     }
                                 }
                             },
-                            enabled = scanSelectedUrls.isNotEmpty(),
                             modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Text("Download Selected (${scanSelectedUrls.size})")
-                        }
+                        )
                     }
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun EmptyQueueCard() {
+    val palette = LocalAstryxPalette.current
+    AstryxCard {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Icon(
+                Icons.Default.Download,
+                contentDescription = null,
+                modifier = Modifier.size(36.dp),
+                tint = palette.accent
+            )
+            Text("No downloads match", style = MaterialTheme.typography.titleMedium, color = palette.textPrimary)
+            Text(
+                "Paste links above or open the Browser tab to sniff and capture M3U8 streams.",
+                style = MaterialTheme.typography.bodySmall,
+                color = palette.textSecondary
+            )
         }
     }
 }
@@ -711,140 +937,137 @@ private fun TaskGroupCardView(
     onCancelGroup: () -> Unit,
     onRequestDeleteGroup: () -> Unit,
     onRefreshQueue: () -> Unit,
-    onPlayMedia: (PlaybackRequest) -> Unit,
+    onPlayMedia: (MediaPlayRequest) -> Unit,
     onShowMessage: (String) -> Unit
 ) {
-    Card(
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
-        shape = RoundedCornerShape(14.dp)
-    ) {
-        Column(
+    val palette = LocalAstryxPalette.current
+    AstryxCard(emphasized = group.downloadingCount > 0) {
+        Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
+                .clickable(onClick = onToggleExpand),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            Row(
+            val thumb = group.tasks.firstOrNull()?.let { RetrofitClient.taskThumbnailUrl(it) }
+            AsyncImage(
+                model = thumb,
+                contentDescription = null,
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable(onClick = onToggleExpand),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                val thumb = group.tasks.firstOrNull()?.let { RetrofitClient.taskThumbnailUrl(it) }
-                AsyncImage(
-                    model = thumb,
-                    contentDescription = null,
-                    modifier = Modifier
-                        .size(64.dp, 46.dp)
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(MaterialTheme.colorScheme.surfaceContainerHigh),
-                    contentScale = ContentScale.Crop
+                    .size(72.dp, 46.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(palette.muted),
+                contentScale = ContentScale.Crop
+            )
+
+            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(
+                    text = group.title,
+                    style = MaterialTheme.typography.titleSmall,
+                    color = palette.textPrimary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
-
-                Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    Text(
-                        text = group.title,
-                        style = MaterialTheme.typography.titleSmall,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                    Text(
-                        text = "${group.platform} · ${group.tasks.size} items · ${group.completedCount} done" +
-                            if (group.failedCount > 0) " · ${group.failedCount} failed" else "",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                Row(
+                    modifier = Modifier.horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    AstryxStatusBadge(group.platform, AstryxTone.Accent)
+                    AstryxStatusBadge("${group.completedCount}/${group.tasks.size} DONE", AstryxTone.Success)
+                    if (group.failedCount > 0) {
+                        AstryxStatusBadge("${group.failedCount} FAILED", AstryxTone.Error)
+                    }
                 }
+            }
 
+            Icon(
+                imageVector = if (isExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                contentDescription = null,
+                tint = palette.textSecondary
+            )
+        }
+
+        if (group.completedCount < group.tasks.size) {
+            LinearProgressIndicator(
+                progress = { (group.overallPercent / 100f).coerceIn(0f, 1f) },
+                modifier = Modifier.fillMaxWidth(),
+                color = palette.accent
+            )
+        }
+
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            if (group.completedCount > 0) {
+                AssistChip(
+                    onClick = {
+                        phoneDownloadManager.saveGroupToPhone(group.tasks)
+                        onShowMessage("Saving completed items in \"${group.title}\" to phone storage")
+                    },
+                    leadingIcon = { Icon(Icons.Default.PhoneAndroid, contentDescription = null, modifier = Modifier.size(16.dp)) },
+                    label = { Text("Save All (${group.completedCount})") }
+                )
+                AssistChip(
+                    onClick = {
+                        phoneDownloadManager.saveZipArchiveToPhone(
+                            zipUrl = RetrofitClient.groupZipUrl(group.groupId),
+                            archiveLabel = group.title,
+                            channelOrGroup = group.title
+                        )
+                        onShowMessage("Downloading ZIP archive to Downloads/KV Download")
+                    },
+                    leadingIcon = { Icon(Icons.Default.FolderZip, contentDescription = null, modifier = Modifier.size(16.dp)) },
+                    label = { Text("Save ZIP") }
+                )
+            }
+            if (group.failedCount > 0 || group.cancelledCount > 0) {
+                AssistChip(
+                    onClick = onRetryGroup,
+                    leadingIcon = { Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp)) },
+                    label = { Text("Retry Failed") }
+                )
+            }
+            if (group.downloadingCount > 0 || group.queuedCount > 0) {
+                AssistChip(
+                    onClick = onCancelGroup,
+                    leadingIcon = { Icon(Icons.Default.Cancel, contentDescription = null, modifier = Modifier.size(16.dp)) },
+                    label = { Text("Cancel Active") }
+                )
+            }
+            IconButton(onClick = onRequestDeleteGroup) {
                 Icon(
-                    imageVector = if (isExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
-                    contentDescription = null
+                    Icons.Default.DeleteOutline,
+                    contentDescription = "Delete group",
+                    tint = palette.error
                 )
             }
+        }
 
-            if (group.completedCount < group.tasks.size) {
-                LinearProgressIndicator(
-                    progress = { (group.overallPercent / 100f).coerceIn(0f, 1f) },
-                    modifier = Modifier.fillMaxWidth()
-                )
-            }
-
-            // Group phone/server action buttons
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                if (group.completedCount > 0) {
-                    AssistChip(
-                        onClick = {
-                            phoneDownloadManager.saveGroupToPhone(group.tasks)
-                            onShowMessage("Saving completed items in \"${group.title}\" to phone storage")
-                        },
-                        leadingIcon = { Icon(Icons.Default.PhoneAndroid, contentDescription = null, modifier = Modifier.size(16.dp)) },
-                        label = { Text("Save All to Phone (${group.completedCount})") }
-                    )
-                    AssistChip(
-                        onClick = {
-                            phoneDownloadManager.saveZipArchiveToPhone(
-                                zipUrl = RetrofitClient.groupZipUrl(group.groupId),
-                                archiveLabel = group.title,
-                                channelOrGroup = group.title
-                            )
-                            onShowMessage("Downloading ZIP archive to Downloads/KV Download")
-                        },
-                        leadingIcon = { Icon(Icons.Default.FolderZip, contentDescription = null, modifier = Modifier.size(16.dp)) },
-                        label = { Text("Save ZIP") }
+        if (isExpanded) {
+            HorizontalDivider(color = palette.borderSubtle)
+            val slice = group.tasks.take(25)
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                slice.forEach { task ->
+                    TaskCardView(
+                        task = task,
+                        savedRecord = savedFiles.firstOrNull { it.serverTaskId == task.id },
+                        transfer = phoneTransfers["task:${task.id}"],
+                        phoneDownloadManager = phoneDownloadManager,
+                        onRefreshQueue = onRefreshQueue,
+                        onPlayMedia = onPlayMedia,
+                        onShowMessage = onShowMessage
                     )
                 }
-                if (group.failedCount > 0 || group.cancelledCount > 0) {
-                    AssistChip(
-                        onClick = onRetryGroup,
-                        leadingIcon = { Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp)) },
-                        label = { Text("Retry Failed") }
+                if (group.tasks.size > slice.size) {
+                    Text(
+                        text = "Showing ${slice.size} of ${group.tasks.size} items in this group",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = palette.textSecondary
                     )
-                }
-                if (group.downloadingCount > 0 || group.queuedCount > 0) {
-                    AssistChip(
-                        onClick = onCancelGroup,
-                        leadingIcon = { Icon(Icons.Default.Cancel, contentDescription = null, modifier = Modifier.size(16.dp)) },
-                        label = { Text("Cancel Active") }
-                    )
-                }
-                IconButton(onClick = onRequestDeleteGroup) {
-                    Icon(
-                        Icons.Default.DeleteOutline,
-                        contentDescription = "Delete group",
-                        tint = MaterialTheme.colorScheme.error
-                    )
-                }
-            }
-
-            if (isExpanded) {
-                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-                val slice = group.tasks.take(25)
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    slice.forEach { task ->
-                        TaskCardView(
-                            task = task,
-                            savedRecord = savedFiles.firstOrNull { it.serverTaskId == task.id },
-                            transfer = phoneTransfers["task:${task.id}"],
-                            phoneDownloadManager = phoneDownloadManager,
-                            onRefreshQueue = onRefreshQueue,
-                            onPlayMedia = onPlayMedia,
-                            onShowMessage = onShowMessage
-                        )
-                    }
-                    if (group.tasks.size > slice.size) {
-                        Text(
-                            text = "Showing ${slice.size} of ${group.tasks.size} items in this group",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
                 }
             }
         }
@@ -858,73 +1081,108 @@ private fun TaskCardView(
     transfer: PhoneTransferState?,
     phoneDownloadManager: PhoneDownloadManager,
     onRefreshQueue: () -> Unit,
-    onPlayMedia: (PlaybackRequest) -> Unit,
+    onPlayMedia: (MediaPlayRequest) -> Unit,
     onShowMessage: (String) -> Unit
 ) {
     val scope = rememberCoroutineScope()
+    val palette = LocalAstryxPalette.current
     val isCompleted = task.status == "completed"
     val isDownloading = task.status == "downloading"
     val isRetryable = task.status == "failed" || task.status == "cancelled"
 
+    val lowerName = (task.mediaName ?: "").lowercase()
+    val mediaKind = when {
+        task.format?.contains("audio", ignoreCase = true) == true ||
+            lowerName.endsWith(".mp3") || lowerName.endsWith(".m4a") ||
+            lowerName.endsWith(".flac") || lowerName.endsWith(".wav") -> MediaKind.AUDIO
+        lowerName.endsWith(".jpg") || lowerName.endsWith(".jpeg") ||
+            lowerName.endsWith(".png") || lowerName.endsWith(".webp") -> MediaKind.IMAGE
+        else -> MediaKind.VIDEO
+    }
+    val typeString = when (mediaKind) {
+        MediaKind.AUDIO -> "audio"
+        MediaKind.IMAGE -> "photo"
+        MediaKind.VIDEO -> "video"
+    }
+
+    fun launchPlayback() {
+        val serverInline = RetrofitClient.downloadTaskUrl(task.id, inline = true)
+        onPlayMedia(
+            MediaPlayRequest(
+                id = "task:${task.id}",
+                title = task.displayTitle(),
+                subtitle = task.displayChannel(),
+                thumbnailUrl = RetrofitClient.taskThumbnailUrl(task),
+                primaryUrl = savedRecord?.contentUri ?: serverInline,
+                fallbackUrl = "$serverInline&compat=1",
+                kind = mediaKind,
+                isLocalUri = savedRecord != null,
+                onSaveToPhone = {
+                    phoneDownloadManager.saveTaskToPhone(task)
+                    onShowMessage("Saving to phone storage...")
+                }
+            )
+        )
+    }
+
     Surface(
         shape = RoundedCornerShape(12.dp),
-        color = MaterialTheme.colorScheme.surfaceContainerLow,
-        tonalElevation = 1.dp
+        color = palette.muted,
+        border = BorderStroke(1.dp, palette.borderSubtle)
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(10.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp)
+            verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                AsyncImage(
-                    model = RetrofitClient.taskThumbnailUrl(task),
-                    contentDescription = null,
-                    modifier = Modifier
-                        .size(72.dp, 46.dp)
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(MaterialTheme.colorScheme.surfaceContainerHigh),
-                    contentScale = ContentScale.Crop
-                )
+            AstryxMediaThumbnail(
+                imageUrl = RetrofitClient.taskThumbnailUrl(task),
+                mediaType = typeString,
+                badgeText = task.platform ?: task.format?.uppercase(),
+                durationText = task.duration ?: task.humanSize,
+                showPlayOverlay = isCompleted,
+                onClick = if (isCompleted) ::launchPlayback else null
+            )
 
-                Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    Text(
-                        text = task.displayTitle(),
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontWeight = FontWeight.SemiBold,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                    Text(
-                        text = listOfNotNull(
-                            task.displayChannel(),
-                            task.format?.uppercase(),
-                            task.humanSize,
-                            task.status.uppercase()
-                        ).joinToString(" · "),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
+            Text(
+                text = task.displayTitle(),
+                style = MaterialTheme.typography.titleSmall,
+                color = palette.textPrimary,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                AstryxStatusBadge(
+                    text = task.status.uppercase(),
+                    tone = when (task.status) {
+                        "completed" -> AstryxTone.Success
+                        "downloading" -> AstryxTone.Accent
+                        "queued" -> AstryxTone.Info
+                        else -> AstryxTone.Error
+                    }
+                )
+                AstryxStatusBadge(task.displayChannel(), AstryxTone.Neutral)
+                task.humanSize?.let { AstryxStatusBadge(it, AstryxTone.Neutral) }
             }
 
             if (!isCompleted && task.errorMessage.isNullOrBlank()) {
                 LinearProgressIndicator(
-                    progress = { ((task.percent) / 100.0).toFloat().coerceIn(0f, 1f) },
-                    modifier = Modifier.fillMaxWidth()
+                    progress = { (task.percent / 100.0).toFloat().coerceIn(0f, 1f) },
+                    modifier = Modifier.fillMaxWidth(),
+                    color = palette.accent
                 )
                 if (isDownloading) {
                     Text(
                         text = "${task.percent.toInt()}% · ${task.speed ?: "..."} ${task.eta?.let { "· ETA $it" } ?: ""}",
                         style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.primary
+                        color = palette.accentText
                     )
                 }
             }
@@ -933,7 +1191,7 @@ private fun TaskCardView(
                 Text(
                     text = task.errorMessage,
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.error,
+                    color = palette.error,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis
                 )
@@ -943,12 +1201,12 @@ private fun TaskCardView(
                 LinearProgressIndicator(
                     progress = { transfer.progress },
                     modifier = Modifier.fillMaxWidth(),
-                    color = MaterialTheme.colorScheme.tertiary
+                    color = palette.success
                 )
                 Text(
-                    text = "Saving to phone storage ${(transfer.progress * 100).toInt()}%",
+                    text = transfer.statusText ?: "Saving to phone storage ${(transfer.progress * 100).toInt()}%",
                     style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.tertiary
+                    color = palette.success
                 )
             }
 
@@ -960,23 +1218,11 @@ private fun TaskCardView(
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     if (isCompleted) {
                         Button(
-                            onClick = {
-                                onPlayMedia(
-                                    PlaybackRequest(
-                                        title = task.displayTitle(),
-                                        subtitle = task.displayChannel(),
-                                        streamUrl = RetrofitClient.downloadTaskUrl(task.id, inline = true),
-                                        onSaveToPhone = {
-                                            phoneDownloadManager.saveTaskToPhone(task)
-                                            onShowMessage("Saving to phone storage...")
-                                        }
-                                    )
-                                )
-                            },
-                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
+                            onClick = ::launchPlayback,
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
                         ) {
                             Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(16.dp))
-                            Text("Play", modifier = Modifier.padding(start = 4.dp))
+                            Text(if (mediaKind == MediaKind.IMAGE) "View" else "Play", modifier = Modifier.padding(start = 4.dp))
                         }
 
                         if (savedRecord != null) {
@@ -984,7 +1230,7 @@ private fun TaskCardView(
                                 onClick = { phoneDownloadManager.openOnDevice(savedRecord) },
                                 contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
                             ) {
-                                Icon(Icons.Default.CheckCircle, contentDescription = null, modifier = Modifier.size(15.dp), tint = MaterialTheme.colorScheme.tertiary)
+                                Icon(Icons.Default.CheckCircle, contentDescription = null, modifier = Modifier.size(15.dp), tint = palette.success)
                                 Spacer(Modifier.width(4.dp))
                                 Icon(Icons.Default.OpenInNew, contentDescription = null, modifier = Modifier.size(14.dp))
                                 Text("Saved", modifier = Modifier.padding(start = 4.dp))
@@ -998,7 +1244,7 @@ private fun TaskCardView(
                                 contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
                             ) {
                                 Icon(Icons.Default.SaveAlt, contentDescription = null, modifier = Modifier.size(16.dp))
-                                Text("Save to Phone", modifier = Modifier.padding(start = 4.dp))
+                                Text("To Phone", modifier = Modifier.padding(start = 4.dp))
                             }
                         }
                     } else if (isRetryable) {
@@ -1038,7 +1284,7 @@ private fun TaskCardView(
                         }
                     }
                 ) {
-                    Icon(Icons.Default.Close, contentDescription = "Remove task")
+                    Icon(Icons.Default.Close, contentDescription = "Remove task", tint = palette.textSecondary)
                 }
             }
         }
@@ -1048,6 +1294,7 @@ private fun TaskCardView(
 private fun formatLabel(format: String): String = when (format) {
     "1080p" -> "1080p"
     "720p" -> "720p"
+    "480p" -> "480p"
     "audio" -> "MP3"
     else -> "Highest"
 }

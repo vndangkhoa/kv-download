@@ -196,6 +196,34 @@ func BrowserSniffHandler(w http.ResponseWriter, r *http.Request) {
 		return true
 	}
 
+	// 0. Check native AV01 resolver first (works even when av01.media HTML domain is ISP-blocked)
+	if _, _, ok := ParseAV01VideoURL(targetUrl); ok {
+		avCtx, avCancel := context.WithTimeout(r.Context(), 15*time.Second)
+		resolved, avErr := ResolveAV01Video(avCtx, targetUrl)
+		avCancel()
+		if avErr != nil {
+			log.Warn().Msgf("[AV01] Native sniff resolve failed for %s: %v", targetUrl, avErr)
+		} else if resolved != nil {
+			result.PageTitle = resolved.Title
+			for _, v := range resolved.Variants {
+				addItem(SniffedMediaItem{
+					Type:       "video",
+					Format:     v.Label + " M3U8 HLS",
+					Title:      fmt.Sprintf("%s (%s)", resolved.Title, v.Label),
+					URL:        v.URL,
+					Thumbnail:  resolved.Thumbnail,
+					Source:     "av01_extractor",
+					Resolution: v.Label,
+					Channel:    "AV01",
+					IsStream:   true,
+				})
+			}
+			result.TotalCount = len(result.Items)
+			_ = json.NewEncoder(w).Encode(result)
+			return
+		}
+	}
+
 	// 1. Check with Anpan Multi-source Engines (Archive, Booru, Cloud, Pixiv, Imgur)
 	ctx, cancel := context.WithTimeout(r.Context(), 12*time.Second)
 	defer cancel()
@@ -647,6 +675,15 @@ func BrowserProxyHandler(w http.ResponseWriter, r *http.Request) {
   }
   function report(url, type, format, title, thumb, isStream) {
     if (!url || typeof url !== 'string') return;
+    if (url.indexOf('data:application/vnd.apple.mpegurl;base64,') === 0 || url.indexOf('data:audio/mpegurl;base64,') === 0) {
+      try {
+        var b64 = url.split(',')[1] || '';
+        var decoded = atob(b64);
+        var matches = decoded.match(/https?:\/\/[^\s"'<>]+/g) || [];
+        matches.forEach(function(m) { report(m, 'video', 'M3U8 HLS', title, thumb, true); });
+      } catch(e) {}
+      return;
+    }
     if (url.startsWith('blob:') || url.startsWith('data:')) return;
     var key = normUrl(url);
     if (detected.has(key)) return;
@@ -831,8 +868,8 @@ func BrowserProxyHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func isDirectMediaUrl(raw string) bool {
-	lower := strings.ToLower(strings.Split(raw, "?")[0])
-	for _, ext := range []string{".mp4", ".webm", ".mkv", ".mov", ".avi", ".flv", ".m3u8", ".mpd", ".mp3", ".m4a", ".aac", ".wav", ".flac", ".ogg", ".oga", ".jpg", ".jpeg", ".png", ".webp", ".gif", ".avif"} {
+	lower := strings.ToLower(strings.Split(strings.Split(raw, "?")[0], "#")[0])
+	for _, ext := range []string{".mp4", ".webm", ".mkv", ".mov", ".avi", ".flv", ".m3u8", ".mpd", ".m4s", ".ts", ".mp3", ".m4a", ".aac", ".wav", ".flac", ".ogg", ".oga", ".jpg", ".jpeg", ".png", ".webp", ".gif", ".avif"} {
 		if strings.HasSuffix(lower, ext) {
 			return true
 		}
@@ -971,6 +1008,21 @@ func BrowserStreamHandler(w http.ResponseWriter, r *http.Request) {
 	if !strings.HasPrefix(targetUrl, "http://") && !strings.HasPrefix(targetUrl, "https://") {
 		targetUrl = "https://" + targetUrl
 	}
+	customReferer := strings.TrimSpace(r.URL.Query().Get("referer"))
+	if _, _, ok := ParseAV01VideoURL(targetUrl); ok && !strings.Contains(strings.ToLower(targetUrl), "iw01.xyz") {
+		avCtx, avCancel := context.WithTimeout(r.Context(), 15*time.Second)
+		resolved, avErr := ResolveAV01Video(avCtx, targetUrl)
+		avCancel()
+		if avErr == nil && resolved != nil && len(resolved.Variants) > 0 {
+			chosen := SelectAV01Variant(resolved.Variants, r.URL.Query().Get("format"))
+			if chosen.URL != "" {
+				targetUrl = chosen.URL
+				if customReferer == "" {
+					customReferer = resolved.Referer
+				}
+			}
+		}
+	}
 	cookies := strings.TrimSpace(r.URL.Query().Get("cookies"))
 	if cookies == "" {
 		cookies = strings.TrimSpace(r.Header.Get("X-Cookies"))
@@ -1007,7 +1059,17 @@ func BrowserStreamHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
 		req.Header.Set("Accept", "*/*")
-		req.Header.Set("Referer", targetUrl)
+		effReferer := customReferer
+		if effReferer == "" && strings.Contains(strings.ToLower(targetUrl), "iw01.xyz") {
+			effReferer = av01Referer
+		}
+		if effReferer == "" {
+			effReferer = targetUrl
+		}
+		req.Header.Set("Referer", effReferer)
+		if effOrigin := originFromURL(effReferer); effOrigin != "" {
+			req.Header.Set("Origin", effOrigin)
+		}
 		if rh := r.Header.Get("Range"); rh != "" {
 			req.Header.Set("Range", rh)
 		}
@@ -1033,18 +1095,24 @@ func BrowserStreamHandler(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		// HLS m3u8 rewriting: proxy segment URLs to bypass CORS and handle relative paths
 		ct := w.Header().Get("Content-Type")
-		lowerTarget := strings.ToLower(targetUrl)
-		isM3u8 := strings.Contains(strings.ToLower(ct), "mpegurl") || strings.Contains(ct, "application/x-mpegURL") || strings.HasSuffix(lowerTarget, ".m3u8")
-		if isM3u8 && resp.StatusCode == http.StatusOK && r.Method != http.MethodHead {
+		cleanTargetPath := strings.ToLower(strings.Split(strings.Split(targetUrl, "?")[0], "#")[0])
+		isM3u8 := strings.Contains(strings.ToLower(ct), "mpegurl") || strings.Contains(ct, "application/x-mpegURL") || strings.HasSuffix(cleanTargetPath, ".m3u8")
+		if (isM3u8 || strings.Contains(ct, "text/plain")) && resp.StatusCode == http.StatusOK && r.Method != http.MethodHead {
 			bodyBytes, err := io.ReadAll(io.LimitReader(resp.Body, 5*1024*1024))
 			if err == nil {
-				rewritten := rewriteM3U8Content(string(bodyBytes), targetUrl)
-				w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
-				w.Header().Set("Content-Length", fmt.Sprintf("%d", len(rewritten)))
-				w.Header().Del("Content-Range")
-				w.Header().Del("Accept-Ranges")
-				w.WriteHeader(http.StatusOK)
-				_, _ = w.Write([]byte(rewritten))
+				bodyStr := string(bodyBytes)
+				if isM3u8 || strings.HasPrefix(strings.TrimSpace(bodyStr), "#EXTM3U") {
+					rewritten := rewriteM3U8Content(bodyStr, targetUrl, effReferer)
+					w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
+					w.Header().Set("Content-Length", fmt.Sprintf("%d", len(rewritten)))
+					w.Header().Del("Content-Range")
+					w.Header().Del("Accept-Ranges")
+					w.WriteHeader(http.StatusOK)
+					_, _ = w.Write([]byte(rewritten))
+					return
+				}
+				w.WriteHeader(resp.StatusCode)
+				_, _ = w.Write(bodyBytes)
 				return
 			}
 		}
@@ -1211,34 +1279,59 @@ func BrowserStreamHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func rewriteM3U8Content(content string, baseUrl string) string {
+var m3u8TagURIRe = regexp.MustCompile(`URI="([^"]+)"`)
+
+func rewriteM3U8Content(content string, baseUrl string, referer string) string {
 	baseParsed, err := url.Parse(baseUrl)
 	if err != nil {
 		return content
 	}
-	baseDir := baseParsed.Scheme + "://" + baseParsed.Host
-	if idx := strings.LastIndex(baseParsed.Path, "/"); idx != -1 {
-		baseDir += baseParsed.Path[:idx+1]
-	} else {
-		baseDir += "/"
-	}
-	lines := strings.Split(content, "\n")
-	for i, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
-			continue
+	baseToken := baseParsed.Query().Get("access_token")
+	proxyWrap := func(rawRef string) string {
+		ref := strings.TrimSpace(rawRef)
+		if ref == "" {
+			return ref
 		}
-		absUrl := trimmed
-		if !strings.HasPrefix(trimmed, "http://") && !strings.HasPrefix(trimmed, "https://") {
-			if strings.HasPrefix(trimmed, "/") {
-				absUrl = baseParsed.Scheme + "://" + baseParsed.Host + trimmed
-			} else {
-				absUrl = baseDir + trimmed
+		absUrl := ref
+		if !strings.HasPrefix(ref, "http://") && !strings.HasPrefix(ref, "https://") {
+			if relParsed, rErr := baseParsed.Parse(ref); rErr == nil {
+				absUrl = relParsed.String()
 			}
 		}
-		// Proxy via our endpoint to handle CORS & range
-		proxied := "/api/browser/proxy-media?url=" + url.QueryEscape(absUrl)
-		lines[i] = proxied
+		if baseToken != "" && !strings.Contains(absUrl, "access_token=") && !strings.HasPrefix(ref, "http://") && !strings.HasPrefix(ref, "https://") && strings.Contains(strings.ToLower(absUrl), "iw01.xyz") {
+			sep := "?"
+			if strings.Contains(absUrl, "?") {
+				sep = "&"
+			}
+			absUrl += sep + "access_token=" + url.QueryEscape(baseToken)
+		}
+		proxied := "/api/browser/proxy-media?asset=1"
+		if referer != "" {
+			proxied += "&referer=" + url.QueryEscape(referer)
+		}
+		proxied += "&url=" + url.QueryEscape(absUrl)
+		return proxied
+	}
+
+	lines := strings.Split(strings.ReplaceAll(content, "\r\n", "\n"), "\n")
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		if strings.HasPrefix(trimmed, "#") {
+			if m3u8TagURIRe.MatchString(trimmed) {
+				lines[i] = m3u8TagURIRe.ReplaceAllStringFunc(trimmed, func(match string) string {
+					sub := m3u8TagURIRe.FindStringSubmatch(match)
+					if len(sub) != 2 {
+						return match
+					}
+					return `URI="` + proxyWrap(sub[1]) + `"`
+				})
+			}
+			continue
+		}
+		lines[i] = proxyWrap(trimmed)
 	}
 	return strings.Join(lines, "\n")
 }

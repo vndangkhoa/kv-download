@@ -61,6 +61,7 @@ type DownloadTask struct {
 	Platform      string     `json:"platform,omitempty"`
 	Duration      string     `json:"duration,omitempty"`
 	InfoJSONPath  string     `json:"infoJsonPath,omitempty"`
+	Referer       string     `json:"referer,omitempty"`
 	CreatedAt     time.Time  `json:"createdAt"`
 	CompletedAt   *time.Time `json:"completedAt,omitempty"`
 
@@ -130,6 +131,8 @@ func detectPlatformName(rawURL string) string {
 		return "Bilibili"
 	case strings.Contains(u, "vimeo.com"):
 		return "Vimeo"
+	case strings.Contains(u, "av01.media") || strings.Contains(u, "av01.tv") || strings.Contains(u, "iw01.xyz"):
+		return "AV01"
 	case strings.Contains(u, ".m3u8") || strings.Contains(u, "/m3u8"):
 		return "HLS Stream"
 	default:
@@ -283,6 +286,39 @@ func (q *QueueManager) resolveTaskMetadataAsync(taskID string) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
 	defer cancel()
+
+	if _, _, ok := ParseAV01VideoURL(targetURL); ok {
+		if av, err := ResolveAV01Video(ctx, targetURL); err == nil && av != nil {
+			q.mu.Lock()
+			if task, exists := q.tasks[taskID]; exists && task != nil {
+				changed := false
+				if av.Title != "" && (isUrlLike(task.Title) || task.Title == shortUrl(task.URL)) {
+					task.Title = av.Title
+					changed = true
+				}
+				if task.Channel == "" {
+					task.Channel = "AV01"
+					changed = true
+				}
+				if task.Platform == "" || task.Platform == "HLS Stream" {
+					task.Platform = "AV01"
+					changed = true
+				}
+				if task.Thumbnail == "" && av.Thumbnail != "" {
+					task.Thumbnail = av.Thumbnail
+					changed = true
+				}
+				if changed {
+					q.saveStateLocked()
+					q.mu.Unlock()
+					q.broadcastTaskUpdate(task)
+					return
+				}
+			}
+			q.mu.Unlock()
+			return
+		}
+	}
 
 	args := []string{"--dump-json", "--no-playlist", "--no-warnings", "--no-check-certificates", "--skip-download"}
 	if cookies != "" {
@@ -671,6 +707,71 @@ func (q *QueueManager) processTask(ctx context.Context, task *DownloadTask) {
 
 		isAudio := isAudioFormat(task.Format)
 
+		targetURL := strings.TrimSpace(task.URL)
+		effReferer := strings.TrimSpace(task.Referer)
+		avTitle := ""
+		if _, _, ok := ParseAV01VideoURL(targetURL); ok {
+			avCtx, avCancel := context.WithTimeout(ctx, 20*time.Second)
+			av, avErr := ResolveAV01Video(avCtx, targetURL)
+			avCancel()
+			if avErr == nil && av != nil && len(av.Variants) > 0 {
+				chosen := SelectAV01Variant(av.Variants, task.Format)
+				if chosen.URL != "" {
+					targetURL = chosen.URL
+					effReferer = av.Referer
+					avTitle = av.Title
+					q.mu.Lock()
+					changed := false
+					if av.Title != "" && (task.Title == "" || isUrlLike(task.Title) || task.Title == shortUrl(task.URL) || strings.Contains(task.Title, "master.m3u8")) {
+						task.Title = av.Title
+						changed = true
+					}
+					if task.Channel == "" {
+						task.Channel = "AV01"
+						changed = true
+					}
+					if task.Platform == "" || task.Platform == "HLS Stream" {
+						task.Platform = "AV01"
+						changed = true
+					}
+					if task.Thumbnail == "" && av.Thumbnail != "" {
+						task.Thumbnail = av.Thumbnail
+						changed = true
+					}
+					if changed {
+						q.saveStateLocked()
+					}
+					q.mu.Unlock()
+					if changed {
+						q.broadcastTaskUpdate(task)
+					}
+				}
+			}
+		} else if IsFacebookShareURL(targetURL) {
+			if resolved := resolveFbShareURL(targetURL, task.Cookies); resolved != "" && !IsFacebookShareURL(resolved) {
+				if canon := fbCanonicalVideoUrl(resolved); canon != "" {
+					resolved = canon
+				}
+				targetURL = resolved
+			}
+		} else if matched, _ := regexp.MatchString(`^\d{6,}$`, targetURL); matched {
+			targetURL = "https://www.facebook.com/watch/?v=" + targetURL
+		}
+
+		if effReferer == "" && strings.Contains(strings.ToLower(targetURL), "iw01.xyz") {
+			effReferer = av01Referer
+		}
+		isStreamURL := isHLSOrDashURL(targetURL)
+
+		outTmpl := outputTemplate
+		if avTitle != "" {
+			safeStem := sanitizeCaptionFilename(avTitle)
+			if safeStem == "" {
+				safeStem = task.ID
+			}
+			outTmpl = targetDir + safeStem + ".%(ext)s"
+		}
+
 		args := []string{
 			"--newline",
 			"--progress-template", "%(progress._percent_str)s|%(progress._speed_str)s|%(progress._eta_str)s|%(progress.downloaded_bytes)s|%(progress.total_bytes)s",
@@ -678,7 +779,7 @@ func (q *QueueManager) processTask(ctx context.Context, task *DownloadTask) {
 			"--write-info-json",
 			"--write-thumbnail",
 			"--convert-thumbnails", "jpg",
-			"--output", outputTemplate,
+			"--output", outTmpl,
 			"--no-check-certificates",
 			"--extractor-args", "instagram:image_persist=1;threads:app_version=30.0.0",
 		}
@@ -689,10 +790,22 @@ func (q *QueueManager) processTask(ctx context.Context, task *DownloadTask) {
 			args = append(args, DefaultFormatSortArgs()...)
 		}
 
-		// Attempt 1: try aria2c if available. Attempt 2+: use native yt-dlp downloader to avoid CDN 403s
-		if attempt == 1 && anpan.HasAria2c() && !isAudio && !strings.Contains(task.URL, "tiktok.com") {
+		// Attempt 1: try aria2c if available (skip aria2c for HLS/DASH streams where fragment handling breaks).
+		if attempt == 1 && !isStreamURL && anpan.HasAria2c() && !isAudio && !strings.Contains(task.URL, "tiktok.com") {
 			if ariaArgs := anpan.BuildYtDlpAria2Args(16); ariaArgs != nil {
 				args = append(args, ariaArgs...)
+			}
+		}
+		if isStreamURL {
+			args = append(args, "--concurrent-fragments", "8")
+			if attempt == 1 {
+				args = append(args, "--hls-prefer-native")
+			}
+		}
+		if effReferer != "" {
+			args = append(args, "--referer", effReferer)
+			if effOrigin := originFromURL(effReferer); effOrigin != "" {
+				args = append(args, "--add-header", "Origin:"+effOrigin)
 			}
 		}
 
@@ -710,6 +823,9 @@ func (q *QueueManager) processTask(ctx context.Context, task *DownloadTask) {
 			default:
 				args = append(args, "--extract-audio", "--audio-format", "mp3", "--audio-quality", "0")
 			}
+		} else if isStreamURL && avTitle != "" {
+			// Variant playlist already selected for av01.media
+			args = append(args, "--format", "bv*+ba/b/best")
 		} else {
 			args = append(args, "--format", BuildYtDlpFormatSelector(task.Format))
 		}
@@ -741,18 +857,6 @@ func (q *QueueManager) processTask(ctx context.Context, task *DownloadTask) {
 
 		for arg, value := range getEnvVars() {
 			args = append(args, arg, value)
-		}
-
-		targetURL := strings.TrimSpace(task.URL)
-		if IsFacebookShareURL(targetURL) {
-			if resolved := resolveFbShareURL(targetURL, task.Cookies); resolved != "" && !IsFacebookShareURL(resolved) {
-				if canon := fbCanonicalVideoUrl(resolved); canon != "" {
-					resolved = canon
-				}
-				targetURL = resolved
-			}
-		} else if matched, _ := regexp.MatchString(`^\d{6,}$`, targetURL); matched {
-			targetURL = "https://www.facebook.com/watch/?v=" + targetURL
 		}
 
 		// Fast start: on attempt 1, use cached info-json to skip redundant extractor network requests.
@@ -865,6 +969,39 @@ func (q *QueueManager) processTask(ctx context.Context, task *DownloadTask) {
 		}
 
 		log.Warn().Msgf("Download attempt %d/%d failed for task %s (%s): %s", attempt, maxAttempts, task.ID, task.URL, errMsg)
+		if attempt == maxAttempts && isStreamURL && ctx.Err() == nil {
+			ext := ".mp4"
+			if isAudio {
+				ext = ".mp3"
+			}
+			stem := sanitizeCaptionFilename(task.Title)
+			if stem == "" {
+				stem = task.ID
+			}
+			ffmpegOut := filepath.Join(targetDir, stem+ext)
+			log.Info().Msgf("[HLS-Fallback] Attempting ffmpeg remux for %s -> %s", targetURL, ffmpegOut)
+			if ffErr := downloadHLSWithFFmpeg(ctx, targetURL, effReferer, ffmpegOut, isAudio); ffErr == nil {
+				ch := task.Channel
+				if ch == "" {
+					ch = task.Uploader
+				}
+				if ch == "" {
+					ch = task.PlaylistTitle
+				}
+				grpTitle := task.GroupTitle
+				if grpTitle == "" {
+					grpTitle = task.PlaylistTitle
+				}
+				_ = organizeDownloadedTaskFilesWithGroup(dirID, ch, grpTitle, task.Platform, task.Title)
+				medias, _ := getAllFilesForId(dirID)
+				if len(medias) > 0 {
+					q.completeTask(task, medias[0], dirID)
+					return
+				}
+			} else {
+				lastErr = ffErr.Error()
+			}
+		}
 		time.Sleep(500 * time.Millisecond)
 	}
 
@@ -1346,6 +1483,7 @@ func QueueAddHandler(w http.ResponseWriter, r *http.Request) {
 		Channel      string `json:"channel"`
 		Duration     string `json:"duration,omitempty"`
 		InfoJSONPath string `json:"infoJsonPath,omitempty"`
+		Referer      string `json:"referer,omitempty"`
 	}
 
 	var body struct {
@@ -1360,6 +1498,7 @@ func QueueAddHandler(w http.ResponseWriter, r *http.Request) {
 		GroupID       string           `json:"groupId"`
 		GroupTitle    string           `json:"groupTitle"`
 		GroupType     string           `json:"groupType"`
+		Referer       string           `json:"referer,omitempty"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -1405,6 +1544,11 @@ func QueueAddHandler(w http.ResponseWriter, r *http.Request) {
 				task := GlobalQueue.AddTaskWithGroup(u, body.Format, body.Cookies, body.RateLimit, it.Title, it.Thumbnail, body.PlaylistTitle, ch, up, gid, gTitle, gType, it.Duration)
 				if it.InfoJSONPath != "" {
 					task.InfoJSONPath = it.InfoJSONPath
+				}
+				if it.Referer != "" {
+					task.Referer = it.Referer
+				} else if body.Referer != "" {
+					task.Referer = body.Referer
 				}
 				addedTasks = append(addedTasks, task)
 			}
@@ -1507,6 +1651,9 @@ func QueueAddHandler(w http.ResponseWriter, r *http.Request) {
 			}
 
 			task := GlobalQueue.AddTaskWithGroup(u, body.Format, body.Cookies, body.RateLimit, "", "", body.PlaylistTitle, body.Channel, "", batchGID, batchTitle, batchType, "")
+			if body.Referer != "" {
+				task.Referer = body.Referer
+			}
 			addedTasks = append(addedTasks, task)
 		}
 	}

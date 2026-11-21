@@ -6,6 +6,10 @@ import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.Immutable
+import androidx.compose.runtime.staticCompositionLocalOf
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
@@ -20,6 +24,7 @@ object AstryxTokens {
     val DarkMuted = Color(0xFF1A1D2B)
     val DarkPopover = Color(0xFF1C2030)
     val DarkAccent = Color(0xFF8B5CF6)
+    val DarkAccentDeep = Color(0xFF6D28D9)
     val DarkTextAccent = Color(0xFFC4B5FD)
     val DarkTextPrimary = Color(0xFFF1F5F9)
     val DarkTextSecondary = Color(0xFF94A3B8)
@@ -31,12 +36,14 @@ object AstryxTokens {
     val LightSurface = Color(0xFFFFFFFF)
     val LightCard = Color(0xFFFFFFFF)
     val LightMuted = Color(0xFFF1F4F9)
+    val LightPopover = Color(0xFFE9EEF7)
     val LightAccent = Color(0xFF6D28D9)
+    val LightAccentDeep = Color(0xFF5B21B6)
     val LightTextAccent = Color(0xFF5B21B6)
     val LightTextPrimary = Color(0xFF0F172A)
     val LightTextSecondary = Color(0xFF475569)
-    val LightBorder = Color(0x1A0F172A)
-    val LightBorderStrong = Color(0x380F172A)
+    val LightBorder = Color(0x160F172A)
+    val LightBorderStrong = Color(0x330F172A)
 
     // Semantic statuses
     val SuccessLight = Color(0xFF059669)
@@ -48,6 +55,79 @@ object AstryxTokens {
     val ErrorLight = Color(0xFFDC2626)
     val ErrorDark = Color(0xFFEF4444)
 }
+
+@Immutable
+data class AstryxPalette(
+    val isDark: Boolean,
+    val body: Color,
+    val surface: Color,
+    val card: Color,
+    val elevated: Color,
+    val muted: Color,
+    val borderSubtle: Color,
+    val borderStrong: Color,
+    val accent: Color,
+    val accentDeep: Color,
+    val accentContainer: Color,
+    val accentText: Color,
+    val textPrimary: Color,
+    val textSecondary: Color,
+    val success: Color,
+    val info: Color,
+    val warning: Color,
+    val error: Color,
+    val accentGradient: Brush
+)
+
+private val DarkAstryxPalette = AstryxPalette(
+    isDark = true,
+    body = AstryxTokens.DarkBody,
+    surface = AstryxTokens.DarkSurface,
+    card = AstryxTokens.DarkCard,
+    elevated = AstryxTokens.DarkPopover,
+    muted = AstryxTokens.DarkMuted,
+    borderSubtle = AstryxTokens.DarkBorder,
+    borderStrong = AstryxTokens.DarkBorderStrong,
+    accent = AstryxTokens.DarkAccent,
+    accentDeep = AstryxTokens.DarkAccentDeep,
+    accentContainer = Color(0xFF2D1F52),
+    accentText = AstryxTokens.DarkTextAccent,
+    textPrimary = AstryxTokens.DarkTextPrimary,
+    textSecondary = AstryxTokens.DarkTextSecondary,
+    success = AstryxTokens.SuccessDark,
+    info = AstryxTokens.InfoDark,
+    warning = AstryxTokens.WarningDark,
+    error = AstryxTokens.ErrorDark,
+    accentGradient = Brush.horizontalGradient(
+        listOf(AstryxTokens.DarkAccent, AstryxTokens.DarkAccentDeep)
+    )
+)
+
+private val LightAstryxPalette = AstryxPalette(
+    isDark = false,
+    body = AstryxTokens.LightBody,
+    surface = AstryxTokens.LightSurface,
+    card = AstryxTokens.LightCard,
+    elevated = AstryxTokens.LightPopover,
+    muted = AstryxTokens.LightMuted,
+    borderSubtle = AstryxTokens.LightBorder,
+    borderStrong = AstryxTokens.LightBorderStrong,
+    accent = AstryxTokens.LightAccent,
+    accentDeep = AstryxTokens.LightAccentDeep,
+    accentContainer = Color(0xFFEDE9FE),
+    accentText = AstryxTokens.LightTextAccent,
+    textPrimary = AstryxTokens.LightTextPrimary,
+    textSecondary = AstryxTokens.LightTextSecondary,
+    success = AstryxTokens.SuccessLight,
+    info = AstryxTokens.InfoLight,
+    warning = AstryxTokens.WarningLight,
+    error = AstryxTokens.ErrorLight,
+    accentGradient = Brush.horizontalGradient(
+        listOf(Color(0xFF7C3AED), AstryxTokens.LightAccentDeep)
+    )
+)
+
+val LocalAstryxPalette = staticCompositionLocalOf { DarkAstryxPalette }
 
 private val DarkColorScheme = darkColorScheme(
     primary = AstryxTokens.DarkAccent,
@@ -108,7 +188,8 @@ private val AstryxTypography = Typography(
         fontFamily = FontFamily.SansSerif,
         fontWeight = FontWeight.Bold,
         fontSize = 20.sp,
-        lineHeight = 26.sp
+        lineHeight = 26.sp,
+        letterSpacing = (-0.2).sp
     ),
     titleMedium = TextStyle(
         fontFamily = FontFamily.SansSerif,
@@ -158,10 +239,13 @@ fun KVDownloadTheme(
         "light" -> false
         else -> isSystemInDarkTheme()
     }
+    val palette = if (darkTheme) DarkAstryxPalette else LightAstryxPalette
 
-    MaterialTheme(
-        colorScheme = if (darkTheme) DarkColorScheme else LightColorScheme,
-        typography = AstryxTypography,
-        content = content
-    )
+    CompositionLocalProvider(LocalAstryxPalette provides palette) {
+        MaterialTheme(
+            colorScheme = if (darkTheme) DarkColorScheme else LightColorScheme,
+            typography = AstryxTypography,
+            content = content
+        )
+    }
 }

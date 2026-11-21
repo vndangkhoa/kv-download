@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -e
 
-VERSION="1.0.41"
+VERSION="1.0.42"
 PKG_NAME="kv-download"
 BUILD_DIR="$(pwd)/build_spk"
 DIST_DIR="$(pwd)/dist"

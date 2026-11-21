@@ -117,6 +117,45 @@ func ScanUrlWithPagination(inputUrl string, cookies string, start int, limit int
 		return ScrapeFacebookVideos(url, cookies, start, limit)
 	}
 
+	if _, _, ok := ParseAV01VideoURL(url); ok {
+		avCtx, avCancel := context.WithTimeout(context.Background(), 15*time.Second)
+		av, avErr := ResolveAV01Video(avCtx, url)
+		avCancel()
+		if avErr == nil && av != nil {
+			choices := make([]FormatChoice, 0, len(av.Variants))
+			for _, v := range av.Variants {
+				choices = append(choices, FormatChoice{
+					Label:      fmt.Sprintf("%s · M3U8 HLS", v.Label),
+					Resolution: v.Label,
+					Height:     v.Height,
+					FormatID:   strings.TrimSuffix(v.Label, "p"),
+					Kind:       "video",
+				})
+			}
+			return &ScanInfo{
+				Title:      av.Title,
+				Count:      1,
+				TotalCount: 1,
+				IsPlaylist: false,
+				Thumbnail:  av.Thumbnail,
+				Channel:    "AV01",
+				Uploader:   "AV01",
+				Formats:    choices,
+				Entries: []ScanEntry{
+					{
+						Id:        av.VideoID,
+						Title:     av.Title,
+						Url:       url,
+						Thumbnail: av.Thumbnail,
+						Channel:   "AV01",
+						Uploader:  "AV01",
+						Formats:   choices,
+					},
+				},
+			}, "", nil
+		}
+	}
+
 	log.Info().Msgf("Scanning %s (batch: %d:%d, hasCustomCookies: %t)", url, start, start+limit-1, cookies != "")
 
 	// 1. Check with Anpan router for galleries, art posts, cloud files & digital libraries
@@ -557,6 +596,32 @@ func StreamScanUrl(ctx context.Context, inputUrl string, cookies string, onEntry
 
 	if IsFacebookProfileURL(cleanURL) {
 		return StreamFacebookVideos(ctx, cleanURL, cookies, onEntry, onMeta)
+	}
+
+	if _, _, ok := ParseAV01VideoURL(cleanURL); ok {
+		if av, err := ResolveAV01Video(ctx, cleanURL); err == nil && av != nil {
+			choices := make([]FormatChoice, 0, len(av.Variants))
+			for _, v := range av.Variants {
+				choices = append(choices, FormatChoice{
+					Label:      fmt.Sprintf("%s · M3U8 HLS", v.Label),
+					Resolution: v.Label,
+					Height:     v.Height,
+					FormatID:   strings.TrimSuffix(v.Label, "p"),
+					Kind:       "video",
+				})
+			}
+			onMeta(av.Title, "AV01", "AV01", av.Thumbnail, 1)
+			onEntry(ScanEntry{
+				Id:        av.VideoID,
+				Title:     av.Title,
+				Url:       cleanURL,
+				Thumbnail: av.Thumbnail,
+				Channel:   "AV01",
+				Uploader:  "AV01",
+				Formats:   choices,
+			}, 1)
+			return nil
+		}
 	}
 
 	args := []string{

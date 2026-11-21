@@ -1,17 +1,24 @@
 package com.kvdownload.app.ui.screens
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -22,6 +29,7 @@ import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.DriveFileMove
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.FolderZip
+import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.OpenInNew
@@ -33,8 +41,6 @@ import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -50,8 +56,10 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -63,28 +71,36 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import coil.compose.AsyncImage
 import com.kvdownload.app.api.GalleryFolder
 import com.kvdownload.app.api.GalleryItem
 import com.kvdownload.app.api.PhoneTransferState
 import com.kvdownload.app.api.RetrofitClient
 import com.kvdownload.app.api.SavedPhoneFile
+import com.kvdownload.app.player.MediaKind
+import com.kvdownload.app.player.MediaPlayRequest
 import com.kvdownload.app.storage.PhoneDownloadManager
-import com.kvdownload.app.ui.components.PlaybackRequest
+import com.kvdownload.app.ui.adaptive.LocalWindowState
+import com.kvdownload.app.ui.components.AstryxCard
+import com.kvdownload.app.ui.components.AstryxMediaThumbnail
+import com.kvdownload.app.ui.components.AstryxStatusBadge
+import com.kvdownload.app.ui.components.AstryxTone
+import com.kvdownload.app.ui.theme.LocalAstryxPalette
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MediaGalleryScreen(
     phoneDownloadManager: PhoneDownloadManager,
-    onPlayMedia: (PlaybackRequest) -> Unit,
+    onPlayMedia: (MediaPlayRequest) -> Unit,
     onShowMessage: (String) -> Unit
 ) {
     val scope = rememberCoroutineScope()
+    val windowState = LocalWindowState.current
+    val palette = LocalAstryxPalette.current
     val savedFiles by phoneDownloadManager.savedFiles.collectAsState()
     val phoneTransfers by phoneDownloadManager.transfers.collectAsState()
 
@@ -152,7 +168,11 @@ fun MediaGalleryScreen(
     val filteredPhoneFiles = remember(savedFiles, categoryFilter, searchQuery, sortBy) {
         val q = searchQuery.trim().lowercase()
         val list = savedFiles.filter { f ->
-            val matchCat = categoryFilter == "all" || f.category == categoryFilter
+            val matchCat = when (categoryFilter) {
+                "all" -> true
+                "photo" -> f.category == "photo" || f.category == "image"
+                else -> f.category == categoryFilter
+            }
             val matchSearch = q.isBlank() ||
                 f.title.lowercase().contains(q) ||
                 f.fileName.lowercase().contains(q) ||
@@ -172,225 +192,320 @@ fun MediaGalleryScreen(
         }
     }
 
-    LazyColumn(
-        modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(14.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp)
-    ) {
-        // Source Switcher & Toolbar
-        item {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
-                    SegmentedButton(
-                        selected = sourceTab == "server",
-                        onClick = { sourceTab = "server" },
-                        shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2),
-                        icon = { Icon(Icons.Default.Folder, contentDescription = null, modifier = Modifier.size(16.dp)) }
-                    ) { Text("Server (${serverItems.size})") }
-                    SegmentedButton(
-                        selected = sourceTab == "phone",
-                        onClick = { sourceTab = "phone" },
-                        shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2),
-                        icon = { Icon(Icons.Default.PhoneAndroid, contentDescription = null, modifier = Modifier.size(16.dp)) }
-                    ) { Text("On Phone (${savedFiles.size})") }
+    fun playServerItem(item: GalleryItem) {
+        val saved = phoneDownloadManager.findSavedForGallery(item.path)
+        val kind = when (item.type) {
+            "photo", "image" -> MediaKind.IMAGE
+            "audio" -> MediaKind.AUDIO
+            else -> MediaKind.VIDEO
+        }
+        val serverInline = RetrofitClient.downloadGalleryUrl(item.path, inline = true)
+        onPlayMedia(
+            MediaPlayRequest(
+                id = "gallery:${item.path}",
+                title = item.displayTitle(),
+                subtitle = item.channel ?: item.platform ?: item.humanSize,
+                thumbnailUrl = RetrofitClient.galleryThumbnailUrl(item),
+                primaryUrl = saved?.contentUri ?: serverInline,
+                fallbackUrl = "$serverInline&compat=1",
+                kind = kind,
+                isLocalUri = saved != null,
+                onSaveToPhone = {
+                    phoneDownloadManager.saveGalleryItemToPhone(item)
+                    onShowMessage("Saving to phone storage...")
                 }
+            )
+        )
+    }
 
-                OutlinedTextField(
-                    value = searchQuery,
-                    onValueChange = { searchQuery = it },
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true,
-                    leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
-                    trailingIcon = {
-                        if (searchQuery.isNotEmpty()) {
-                            IconButton(onClick = { searchQuery = "" }) {
-                                Icon(Icons.Default.Close, contentDescription = "Clear")
-                            }
-                        }
-                    },
-                    placeholder = { Text("Search title, channel, or folder...") }
-                )
+    fun playPhoneFile(file: SavedPhoneFile) {
+        val kind = when {
+            file.category == "photo" || file.category == "image" || file.mimeType.startsWith("image/") -> MediaKind.IMAGE
+            file.category == "audio" || file.mimeType.startsWith("audio/") -> MediaKind.AUDIO
+            else -> MediaKind.VIDEO
+        }
+        onPlayMedia(
+            MediaPlayRequest(
+                id = "phone:${file.id}",
+                title = file.title,
+                subtitle = file.relativePath,
+                thumbnailUrl = if (kind == MediaKind.IMAGE || kind == MediaKind.VIDEO) file.contentUri else null,
+                primaryUrl = file.contentUri,
+                kind = kind,
+                isLocalUri = true
+            )
+        )
+    }
 
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    listOf(
-                        "all" to "All",
-                        "video" to "Videos",
-                        "audio" to "Audio",
-                        "photo" to "Photos"
-                    ).forEach { (key, label) ->
-                        FilterChip(
-                            selected = categoryFilter == key,
-                            onClick = { categoryFilter = key },
-                            label = { Text(label) }
-                        )
-                    }
+    val showLeftFolderSidebar = windowState.isTwoPane && sourceTab == "server" && serverFolders.isNotEmpty()
+
+    Row(modifier = Modifier.fillMaxSize()) {
+        if (showLeftFolderSidebar) {
+            LazyColumn(
+                modifier = Modifier
+                    .width(230.dp)
+                    .fillMaxHeight()
+                    .background(palette.surface),
+                contentPadding = PaddingValues(12.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                item {
+                    Text(
+                        text = "Folders (${serverFolders.size})",
+                        style = MaterialTheme.typography.titleSmall,
+                        color = palette.textPrimary,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp)
+                    )
                 }
-
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Box {
-                        AssistChip(
-                            onClick = { showSortMenu = true },
-                            label = { Text("Sort: ${sortLabel(sortBy)}") }
-                        )
-                        DropdownMenu(expanded = showSortMenu, onDismissRequest = { showSortMenu = false }) {
-                            listOf(
-                                "newest",
-                                "oldest",
-                                "size_desc",
-                                "size_asc",
-                                "name_asc",
-                                "name_desc",
-                                "channel_asc"
-                            ).forEach { mode ->
-                                DropdownMenuItem(
-                                    text = { Text(sortLabel(mode)) },
-                                    onClick = {
-                                        sortBy = mode
-                                        showSortMenu = false
-                                    }
-                                )
-                            }
+                item {
+                    FolderSidebarRow(
+                        label = "All Media",
+                        count = serverItems.size,
+                        selected = selectedFolder.isBlank(),
+                        onClick = { selectedFolder = "" }
+                    )
+                }
+                items(serverFolders, key = { it.name }) { folder ->
+                    FolderSidebarRow(
+                        label = folder.name,
+                        count = folder.fileCount,
+                        selected = selectedFolder == folder.name,
+                        onClick = {
+                            selectedFolder = if (selectedFolder == folder.name) "" else folder.name
                         }
+                    )
+                }
+            }
+            VerticalDivider(color = palette.borderSubtle)
+        }
+
+        LazyVerticalGrid(
+            columns = GridCells.Fixed(windowState.galleryColumns.coerceAtLeast(1)),
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxHeight(),
+            contentPadding = PaddingValues(14.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            // Source Switcher & Filters
+            item(span = { GridItemSpan(maxLineSpan) }) {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                        SegmentedButton(
+                            selected = sourceTab == "server",
+                            onClick = { sourceTab = "server" },
+                            shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2),
+                            icon = { Icon(Icons.Default.Folder, contentDescription = null, modifier = Modifier.size(16.dp)) }
+                        ) { Text("Server (${serverItems.size})") }
+                        SegmentedButton(
+                            selected = sourceTab == "phone",
+                            onClick = { sourceTab = "phone" },
+                            shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2),
+                            icon = { Icon(Icons.Default.PhoneAndroid, contentDescription = null, modifier = Modifier.size(16.dp)) }
+                        ) { Text("On Phone (${savedFiles.size})") }
                     }
 
-                    FilterChip(
-                        selected = groupByFolder,
-                        onClick = { groupByFolder = !groupByFolder },
-                        leadingIcon = {
-                            Icon(
-                                if (groupByFolder) Icons.Default.Layers else Icons.Default.List,
-                                contentDescription = null,
-                                modifier = Modifier.size(16.dp)
-                            )
+                    OutlinedTextField(
+                        value = searchQuery,
+                        onValueChange = { searchQuery = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+                        trailingIcon = {
+                            if (searchQuery.isNotEmpty()) {
+                                IconButton(onClick = { searchQuery = "" }) {
+                                    Icon(Icons.Default.Close, contentDescription = "Clear")
+                                }
+                            }
                         },
-                        label = { Text(if (groupByFolder) "By Folder" else "Flat") }
+                        placeholder = { Text("Search title, channel, or folder...") }
                     )
 
-                    if (sourceTab == "server") {
-                        AssistChip(
-                            onClick = {
-                                scope.launch {
-                                    try {
-                                        val res = RetrofitClient.getApi().organizeLibrary()
-                                        onShowMessage("Organized (${res.movedFiles} files moved, ${res.organizeMode})")
-                                        loadServerGallery()
-                                    } catch (e: Exception) {
-                                        onShowMessage(e.message ?: "Organize failed")
-                                    }
-                                }
-                            },
-                            leadingIcon = { Icon(Icons.Default.DriveFileMove, contentDescription = null, modifier = Modifier.size(16.dp)) },
-                            label = { Text("Auto-Organize") }
-                        )
-
-                        if (selectedFolder.isNotBlank()) {
-                            AssistChip(
-                                onClick = {
-                                    phoneDownloadManager.saveZipArchiveToPhone(
-                                        zipUrl = RetrofitClient.folderZipUrl(selectedFolder),
-                                        archiveLabel = selectedFolder,
-                                        channelOrGroup = selectedFolder
-                                    )
-                                    onShowMessage("Saving ZIP for \"$selectedFolder\" to Downloads/KV Download")
-                                },
-                                leadingIcon = { Icon(Icons.Default.FolderZip, contentDescription = null, modifier = Modifier.size(16.dp)) },
-                                label = { Text("Save Folder ZIP") }
-                            )
-                        }
-                    }
-                }
-
-                if (sourceTab == "server" && serverFolders.isNotEmpty()) {
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
                             .horizontalScroll(rememberScrollState()),
                         horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                        FilterChip(
-                            selected = selectedFolder.isBlank(),
-                            onClick = { selectedFolder = "" },
-                            label = { Text("All Folders") }
-                        )
-                        serverFolders.forEach { folder ->
+                        listOf(
+                            "all" to "All",
+                            "video" to "Videos",
+                            "audio" to "Audio",
+                            "photo" to "Photos"
+                        ).forEach { (key, label) ->
                             FilterChip(
-                                selected = selectedFolder == folder.name,
-                                onClick = {
-                                    selectedFolder = if (selectedFolder == folder.name) "" else folder.name
-                                },
-                                label = { Text("${folder.name} (${folder.fileCount})") }
+                                selected = categoryFilter == key,
+                                onClick = { categoryFilter = key },
+                                label = { Text(label) }
                             )
+                        }
+                    }
+
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box {
+                            AssistChip(
+                                onClick = { showSortMenu = true },
+                                label = { Text("Sort: ${sortLabel(sortBy)}") }
+                            )
+                            DropdownMenu(expanded = showSortMenu, onDismissRequest = { showSortMenu = false }) {
+                                listOf(
+                                    "newest",
+                                    "oldest",
+                                    "size_desc",
+                                    "size_asc",
+                                    "name_asc",
+                                    "name_desc",
+                                    "channel_asc"
+                                ).forEach { mode ->
+                                    DropdownMenuItem(
+                                        text = { Text(sortLabel(mode)) },
+                                        onClick = {
+                                            sortBy = mode
+                                            showSortMenu = false
+                                        }
+                                    )
+                                }
+                            }
+                        }
+
+                        FilterChip(
+                            selected = groupByFolder,
+                            onClick = { groupByFolder = !groupByFolder },
+                            leadingIcon = {
+                                Icon(
+                                    if (groupByFolder) Icons.Default.Layers else Icons.Default.List,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            },
+                            label = { Text(if (groupByFolder) "By Folder" else "Flat") }
+                        )
+
+                        if (sourceTab == "server") {
+                            AssistChip(
+                                onClick = {
+                                    scope.launch {
+                                        try {
+                                            val res = RetrofitClient.getApi().organizeLibrary()
+                                            onShowMessage("Organized (${res.movedFiles} files moved, ${res.organizeMode})")
+                                            loadServerGallery()
+                                        } catch (e: Exception) {
+                                            onShowMessage(e.message ?: "Organize failed")
+                                        }
+                                    }
+                                },
+                                leadingIcon = { Icon(Icons.Default.DriveFileMove, contentDescription = null, modifier = Modifier.size(16.dp)) },
+                                label = { Text("Auto-Organize") }
+                            )
+
+                            if (selectedFolder.isNotBlank()) {
+                                AssistChip(
+                                    onClick = {
+                                        phoneDownloadManager.saveZipArchiveToPhone(
+                                            zipUrl = RetrofitClient.folderZipUrl(selectedFolder),
+                                            archiveLabel = selectedFolder,
+                                            channelOrGroup = selectedFolder
+                                        )
+                                        onShowMessage("Saving ZIP for \"$selectedFolder\" to Downloads/KV Download")
+                                    },
+                                    leadingIcon = { Icon(Icons.Default.FolderZip, contentDescription = null, modifier = Modifier.size(16.dp)) },
+                                    label = { Text("Save Folder ZIP") }
+                                )
+                            }
+                        }
+                    }
+
+                    if (!showLeftFolderSidebar && sourceTab == "server" && serverFolders.isNotEmpty()) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            FilterChip(
+                                selected = selectedFolder.isBlank(),
+                                onClick = { selectedFolder = "" },
+                                label = { Text("All Folders") }
+                            )
+                            serverFolders.forEach { folder ->
+                                FilterChip(
+                                    selected = selectedFolder == folder.name,
+                                    onClick = {
+                                        selectedFolder = if (selectedFolder == folder.name) "" else folder.name
+                                    },
+                                    label = { Text("${folder.name} (${folder.fileCount})") }
+                                )
+                            }
                         }
                     }
                 }
             }
-        }
 
-        if (sourceTab == "server") {
-            if (isLoading) {
-                item {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(32.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        CircularProgressIndicator()
+            if (sourceTab == "server") {
+                if (isLoading) {
+                    item(span = { GridItemSpan(maxLineSpan) }) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(32.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            CircularProgressIndicator(color = palette.accent)
+                        }
                     }
-                }
-            } else if (filteredServerItems.isEmpty()) {
-                item {
-                    EmptyGalleryCard("No server media found", "Completed server downloads appear here.")
-                }
-            } else if (groupByFolder && selectedFolder.isBlank()) {
-                val sections = filteredServerItems.groupBy { it.channel ?: it.group ?: "General" }
-                    .toSortedMap(String.CASE_INSENSITIVE_ORDER)
-                sections.forEach { (folderTitle, sectionItems) ->
-                    item(key = "hdr:$folderTitle") {
-                        FolderSectionHeader(
-                            title = folderTitle,
-                            count = sectionItems.size,
-                            onSaveZip = if (folderTitle != "General") {
-                                {
-                                    phoneDownloadManager.saveZipArchiveToPhone(
-                                        zipUrl = RetrofitClient.folderZipUrl(folderTitle),
-                                        archiveLabel = folderTitle,
-                                        channelOrGroup = folderTitle
-                                    )
-                                    onShowMessage("Saving ZIP of \"$folderTitle\" to phone storage")
-                                }
-                            } else null
-                        )
+                } else if (filteredServerItems.isEmpty()) {
+                    item(span = { GridItemSpan(maxLineSpan) }) {
+                        EmptyGalleryCard("No server media found", "Completed server downloads appear here.")
                     }
-                    items(sectionItems, key = { it.path }) { item ->
+                } else if (groupByFolder && selectedFolder.isBlank()) {
+                    val sections = filteredServerItems.groupBy { it.channel ?: it.group ?: "General" }
+                        .toSortedMap(String.CASE_INSENSITIVE_ORDER)
+                    sections.forEach { (folderTitle, sectionItems) ->
+                        item(key = "hdr:$folderTitle", span = { GridItemSpan(maxLineSpan) }) {
+                            FolderSectionHeader(
+                                title = folderTitle,
+                                count = sectionItems.size,
+                                onSaveZip = if (folderTitle != "General") {
+                                    {
+                                        phoneDownloadManager.saveZipArchiveToPhone(
+                                            zipUrl = RetrofitClient.folderZipUrl(folderTitle),
+                                            archiveLabel = folderTitle,
+                                            channelOrGroup = folderTitle
+                                        )
+                                        onShowMessage("Saving ZIP of \"$folderTitle\" to phone storage")
+                                    }
+                                } else null
+                            )
+                        }
+                        items(sectionItems, key = { it.path }) { item ->
+                            ServerGalleryItemCard(
+                                item = item,
+                                savedOnPhone = phoneDownloadManager.findSavedForGallery(item.path),
+                                transfer = phoneTransfers["gallery:${item.path}"],
+                                onPlay = { playServerItem(item) },
+                                onSaveToPhone = {
+                                    phoneDownloadManager.saveGalleryItemToPhone(item)
+                                    onShowMessage("Downloading \"${item.displayTitle()}\" to phone storage")
+                                },
+                                onOpenSaved = { saved -> phoneDownloadManager.openOnDevice(saved) },
+                                onDelete = { pendingDeleteServer = item }
+                            )
+                        }
+                    }
+                } else {
+                    items(filteredServerItems, key = { it.path }) { item ->
                         ServerGalleryItemCard(
                             item = item,
                             savedOnPhone = phoneDownloadManager.findSavedForGallery(item.path),
                             transfer = phoneTransfers["gallery:${item.path}"],
-                            onPlay = {
-                                onPlayMedia(
-                                    PlaybackRequest(
-                                        title = item.displayTitle(),
-                                        subtitle = item.channel ?: item.platform,
-                                        streamUrl = RetrofitClient.downloadGalleryUrl(item.path, inline = true),
-                                        onSaveToPhone = {
-                                            phoneDownloadManager.saveGalleryItemToPhone(item)
-                                            onShowMessage("Saving to phone storage...")
-                                        }
-                                    )
-                                )
-                            },
+                            onPlay = { playServerItem(item) },
                             onSaveToPhone = {
                                 phoneDownloadManager.saveGalleryItemToPhone(item)
                                 onShowMessage("Downloading \"${item.displayTitle()}\" to phone storage")
@@ -401,86 +516,55 @@ fun MediaGalleryScreen(
                     }
                 }
             } else {
-                items(filteredServerItems, key = { it.path }) { item ->
-                    ServerGalleryItemCard(
-                        item = item,
-                        savedOnPhone = phoneDownloadManager.findSavedForGallery(item.path),
-                        transfer = phoneTransfers["gallery:${item.path}"],
-                        onPlay = {
-                            onPlayMedia(
-                                PlaybackRequest(
-                                    title = item.displayTitle(),
-                                    subtitle = item.channel ?: item.platform,
-                                    streamUrl = RetrofitClient.downloadGalleryUrl(item.path, inline = true),
-                                    onSaveToPhone = {
-                                        phoneDownloadManager.saveGalleryItemToPhone(item)
-                                        onShowMessage("Saving to phone storage...")
-                                    }
-                                )
-                            )
-                        },
-                        onSaveToPhone = {
-                            phoneDownloadManager.saveGalleryItemToPhone(item)
-                            onShowMessage("Downloading \"${item.displayTitle()}\" to phone storage")
-                        },
-                        onOpenSaved = { saved -> phoneDownloadManager.openOnDevice(saved) },
-                        onDelete = { pendingDeleteServer = item }
-                    )
-                }
-            }
-        } else {
-            // On This Phone Storage Tab
-            if (filteredPhoneFiles.isEmpty()) {
-                item {
-                    EmptyGalleryCard(
-                        "No files saved on this phone yet",
-                        "Tap 'Save to Phone' on any completed task, gallery file, or browser stream to save directly into Movies / Music / Pictures / Downloads."
-                    )
-                }
-            } else if (groupByFolder) {
-                val sections = filteredPhoneFiles.groupBy { it.channel?.ifBlank { null } ?: it.group?.ifBlank { null } ?: "General" }
-                    .toSortedMap(String.CASE_INSENSITIVE_ORDER)
-                sections.forEach { (folderTitle, sectionFiles) ->
-                    item(key = "ph_hdr:$folderTitle") {
-                        FolderSectionHeader(title = folderTitle, count = sectionFiles.size, onSaveZip = null)
+                // Active transfers banner on Phone tab so M3U8 segment downloads are visible right here
+                val activePhone = phoneTransfers.values.filter { !it.isCompleted && it.error == null }
+                if (activePhone.isNotEmpty()) {
+                    item(span = { GridItemSpan(maxLineSpan) }) {
+                        AstryxCard(emphasized = true) {
+                            Text("Saving to Phone (${activePhone.size})", style = MaterialTheme.typography.titleSmall, color = palette.textPrimary)
+                            activePhone.forEach { tr ->
+                                Text(tr.title, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                LinearProgressIndicator(progress = { tr.progress }, modifier = Modifier.fillMaxWidth(), color = palette.success)
+                                Text(tr.statusText ?: "${(tr.progress * 100).toInt()}%", style = MaterialTheme.typography.labelSmall, color = palette.success)
+                            }
+                        }
                     }
-                    items(sectionFiles, key = { it.id }) { file ->
+                }
+
+                if (filteredPhoneFiles.isEmpty()) {
+                    item(span = { GridItemSpan(maxLineSpan) }) {
+                        EmptyGalleryCard(
+                            "No files saved on this phone yet",
+                            "Tap 'To Phone' or 'Save M3U8' on any item to save directly into Movies / Music / Pictures / Downloads."
+                        )
+                    }
+                } else if (groupByFolder) {
+                    val sections = filteredPhoneFiles.groupBy { it.channel?.ifBlank { null } ?: it.group?.ifBlank { null } ?: "General" }
+                        .toSortedMap(String.CASE_INSENSITIVE_ORDER)
+                    sections.forEach { (folderTitle, sectionFiles) ->
+                        item(key = "ph_hdr:$folderTitle", span = { GridItemSpan(maxLineSpan) }) {
+                            FolderSectionHeader(title = folderTitle, count = sectionFiles.size, onSaveZip = null)
+                        }
+                        items(sectionFiles, key = { it.id }) { file ->
+                            PhoneSavedItemCard(
+                                file = file,
+                                onPlay = { playPhoneFile(file) },
+                                onOpen = { phoneDownloadManager.openOnDevice(file) },
+                                onShare = { phoneDownloadManager.shareFile(file) },
+                                onDelete = { pendingDeletePhone = file }
+                            )
+                        }
+                    }
+                } else {
+                    items(filteredPhoneFiles, key = { it.id }) { file ->
                         PhoneSavedItemCard(
                             file = file,
-                            onPlay = {
-                                onPlayMedia(
-                                    PlaybackRequest(
-                                        title = file.title,
-                                        subtitle = file.relativePath,
-                                        streamUrl = file.contentUri,
-                                        isLocalUri = true
-                                    )
-                                )
-                            },
+                            onPlay = { playPhoneFile(file) },
                             onOpen = { phoneDownloadManager.openOnDevice(file) },
                             onShare = { phoneDownloadManager.shareFile(file) },
                             onDelete = { pendingDeletePhone = file }
                         )
                     }
-                }
-            } else {
-                items(filteredPhoneFiles, key = { it.id }) { file ->
-                    PhoneSavedItemCard(
-                        file = file,
-                        onPlay = {
-                            onPlayMedia(
-                                PlaybackRequest(
-                                    title = file.title,
-                                    subtitle = file.relativePath,
-                                    streamUrl = file.contentUri,
-                                    isLocalUri = true
-                                )
-                            )
-                        },
-                        onOpen = { phoneDownloadManager.openOnDevice(file) },
-                        onShare = { phoneDownloadManager.shareFile(file) },
-                        onDelete = { pendingDeletePhone = file }
-                    )
                 }
             }
         }
@@ -506,7 +590,7 @@ fun MediaGalleryScreen(
                             }
                         }
                     }
-                ) { Text("Delete", color = MaterialTheme.colorScheme.error) }
+                ) { Text("Delete", color = palette.error) }
             },
             dismissButton = {
                 TextButton(onClick = { pendingDeleteServer = null }) { Text("Cancel") }
@@ -527,7 +611,7 @@ fun MediaGalleryScreen(
                         phoneDownloadManager.deleteSavedPhoneFile(target)
                         onShowMessage("Deleted file from phone storage")
                     }
-                ) { Text("Delete", color = MaterialTheme.colorScheme.error) }
+                ) { Text("Delete", color = palette.error) }
             },
             dismissButton = {
                 TextButton(onClick = { pendingDeletePhone = null }) { Text("Cancel") }
@@ -537,11 +621,61 @@ fun MediaGalleryScreen(
 }
 
 @Composable
+private fun FolderSidebarRow(
+    label: String,
+    count: Int,
+    selected: Boolean,
+    onClick: () -> Unit
+) {
+    val palette = LocalAstryxPalette.current
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick),
+        shape = RoundedCornerShape(10.dp),
+        color = if (selected) palette.accentContainer else Color.Transparent
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 9.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.weight(1f)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Folder,
+                    contentDescription = null,
+                    tint = if (selected) palette.accentText else palette.textSecondary,
+                    modifier = Modifier.size(16.dp)
+                )
+                Text(
+                    text = label,
+                    style = MaterialTheme.typography.bodySmall,
+                    fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                    color = if (selected) palette.accentText else palette.textPrimary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            Text(
+                text = "$count",
+                style = MaterialTheme.typography.labelSmall,
+                color = if (selected) palette.accentText else palette.textSecondary
+            )
+        }
+    }
+}
+
+@Composable
 private fun FolderSectionHeader(
     title: String,
     count: Int,
     onSaveZip: (() -> Unit)?
 ) {
+    val palette = LocalAstryxPalette.current
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -552,9 +686,9 @@ private fun FolderSectionHeader(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                Icon(Icons.Default.Folder, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
-                Text(title, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text("($count)", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Icon(Icons.Default.Folder, contentDescription = null, tint = palette.accent, modifier = Modifier.size(18.dp))
+                Text(title, style = MaterialTheme.typography.titleSmall, color = palette.textPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text("($count)", style = MaterialTheme.typography.bodySmall, color = palette.textSecondary)
             }
             if (onSaveZip != null) {
                 TextButton(onClick = onSaveZip) {
@@ -563,7 +697,7 @@ private fun FolderSectionHeader(
                 }
             }
         }
-        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+        HorizontalDivider(color = palette.borderSubtle)
     }
 }
 
@@ -577,91 +711,81 @@ private fun ServerGalleryItemCard(
     onOpenSaved: (SavedPhoneFile) -> Unit,
     onDelete: () -> Unit
 ) {
-    Card(
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
-        shape = RoundedCornerShape(12.dp)
-    ) {
-        Column(
+    val palette = LocalAstryxPalette.current
+    val isPhoto = item.type == "photo" || item.type == "image"
+
+    AstryxCard(contentPadding = PaddingValues(10.dp)) {
+        AstryxMediaThumbnail(
+            imageUrl = RetrofitClient.galleryThumbnailUrl(item),
+            mediaType = item.type,
+            badgeText = item.channel ?: item.platform,
+            durationText = item.duration ?: item.humanSize,
+            showPlayOverlay = true,
+            onClick = onPlay
+        )
+
+        Text(
+            text = item.displayTitle(),
+            style = MaterialTheme.typography.titleSmall,
+            color = palette.textPrimary,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis
+        )
+
+        Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(10.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
+                .horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                AsyncImage(
-                    model = RetrofitClient.galleryThumbnailUrl(item),
-                    contentDescription = null,
-                    modifier = Modifier
-                        .size(84.dp, 54.dp)
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(MaterialTheme.colorScheme.surfaceContainerHigh),
-                    contentScale = ContentScale.Crop
-                )
+            AstryxStatusBadge(item.type.uppercase(), AstryxTone.Accent)
+            if (item.humanSize.isNotBlank()) AstryxStatusBadge(item.humanSize, AstryxTone.Neutral)
+            item.platform?.takeIf { it.isNotBlank() }?.let { AstryxStatusBadge(it, AstryxTone.Info) }
+        }
 
-                Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    Text(
-                        text = item.displayTitle(),
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontWeight = FontWeight.SemiBold,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis
+        if (transfer != null && !transfer.isCompleted && transfer.error == null) {
+            LinearProgressIndicator(progress = { transfer.progress }, modifier = Modifier.fillMaxWidth(), color = palette.success)
+        }
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Button(
+                    onClick = onPlay,
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
+                ) {
+                    Icon(
+                        imageVector = if (isPhoto) Icons.Default.Image else Icons.Default.PlayArrow,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp)
                     )
-                    Text(
-                        text = listOfNotNull(item.channel, item.platform, item.humanSize, item.duration)
-                            .filter { it.isNotBlank() }
-                            .joinToString(" · "),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
+                    Text(if (isPhoto) "View" else "Play", modifier = Modifier.padding(start = 4.dp))
                 }
-            }
 
-            if (transfer != null && !transfer.isCompleted && transfer.error == null) {
-                LinearProgressIndicator(progress = { transfer.progress }, modifier = Modifier.fillMaxWidth())
-            }
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Button(
-                        onClick = onPlay,
+                if (savedOnPhone != null) {
+                    OutlinedButton(
+                        onClick = { onOpenSaved(savedOnPhone) },
                         contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
                     ) {
-                        Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(16.dp))
-                        Text("Play", modifier = Modifier.padding(start = 4.dp))
+                        Icon(Icons.Default.CheckCircle, contentDescription = null, modifier = Modifier.size(15.dp), tint = palette.success)
+                        Text("On Phone", modifier = Modifier.padding(start = 4.dp))
                     }
-
-                    if (savedOnPhone != null) {
-                        OutlinedButton(
-                            onClick = { onOpenSaved(savedOnPhone) },
-                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
-                        ) {
-                            Icon(Icons.Default.CheckCircle, contentDescription = null, modifier = Modifier.size(15.dp), tint = MaterialTheme.colorScheme.tertiary)
-                            Text("On Phone", modifier = Modifier.padding(start = 4.dp))
-                        }
-                    } else {
-                        OutlinedButton(
-                            onClick = onSaveToPhone,
-                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
-                        ) {
-                            Icon(Icons.Default.SaveAlt, contentDescription = null, modifier = Modifier.size(16.dp))
-                            Text("Save to Phone", modifier = Modifier.padding(start = 4.dp))
-                        }
+                } else {
+                    OutlinedButton(
+                        onClick = onSaveToPhone,
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
+                    ) {
+                        Icon(Icons.Default.SaveAlt, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Text("To Phone", modifier = Modifier.padding(start = 4.dp))
                     }
                 }
+            }
 
-                IconButton(onClick = onDelete) {
-                    Icon(Icons.Default.DeleteOutline, contentDescription = "Delete", tint = MaterialTheme.colorScheme.error)
-                }
+            IconButton(onClick = onDelete) {
+                Icon(Icons.Default.DeleteOutline, contentDescription = "Delete", tint = palette.error)
             }
         }
     }
@@ -675,54 +799,69 @@ private fun PhoneSavedItemCard(
     onShare: () -> Unit,
     onDelete: () -> Unit
 ) {
-    Card(
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
-        shape = RoundedCornerShape(12.dp)
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp)
-        ) {
-            Text(file.title, style = MaterialTheme.typography.titleSmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
-            Text(
-                text = "${file.relativePath} · ${PhoneDownloadManager.formatFileSize(file.sizeBytes)}",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis
-            )
+    val palette = LocalAstryxPalette.current
+    val isPhoto = file.category == "photo" || file.category == "image" || file.mimeType.startsWith("image/")
+    val isPlayable = file.category == "video" || file.category == "audio" || isPhoto
 
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    if (file.category == "video" || file.category == "audio") {
-                        Button(
-                            onClick = onPlay,
-                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
-                        ) {
-                            Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(16.dp))
-                            Text("Play", modifier = Modifier.padding(start = 4.dp))
-                        }
-                    }
-                    OutlinedButton(
-                        onClick = onOpen,
-                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
+    AstryxCard(contentPadding = PaddingValues(10.dp)) {
+        if (isPlayable) {
+            AstryxMediaThumbnail(
+                imageUrl = if (isPhoto || file.category == "video") file.contentUri else null,
+                mediaType = file.category,
+                badgeText = file.channel ?: "ON PHONE",
+                durationText = PhoneDownloadManager.formatFileSize(file.sizeBytes),
+                showPlayOverlay = true,
+                onClick = onPlay
+            )
+        }
+
+        Text(
+            text = file.title,
+            style = MaterialTheme.typography.titleSmall,
+            color = palette.textPrimary,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis
+        )
+        Text(
+            text = "${file.relativePath} · ${PhoneDownloadManager.formatFileSize(file.sizeBytes)}",
+            style = MaterialTheme.typography.labelSmall,
+            color = palette.textSecondary,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis
+        )
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                if (isPlayable) {
+                    Button(
+                        onClick = onPlay,
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
                     ) {
-                        Icon(Icons.Default.OpenInNew, contentDescription = null, modifier = Modifier.size(16.dp))
-                        Text("Open", modifier = Modifier.padding(start = 4.dp))
-                    }
-                    IconButton(onClick = onShare) {
-                        Icon(Icons.Default.Share, contentDescription = "Share")
+                        Icon(
+                            imageVector = if (isPhoto) Icons.Default.Image else Icons.Default.PlayArrow,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Text(if (isPhoto) "View" else "Play", modifier = Modifier.padding(start = 4.dp))
                     }
                 }
-                IconButton(onClick = onDelete) {
-                    Icon(Icons.Default.DeleteOutline, contentDescription = "Delete", tint = MaterialTheme.colorScheme.error)
+                OutlinedButton(
+                    onClick = onOpen,
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
+                ) {
+                    Icon(Icons.Default.OpenInNew, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Text("Open", modifier = Modifier.padding(start = 4.dp))
                 }
+                IconButton(onClick = onShare) {
+                    Icon(Icons.Default.Share, contentDescription = "Share")
+                }
+            }
+            IconButton(onClick = onDelete) {
+                Icon(Icons.Default.DeleteOutline, contentDescription = "Delete", tint = palette.error)
             }
         }
     }
@@ -730,19 +869,10 @@ private fun PhoneSavedItemCard(
 
 @Composable
 private fun EmptyGalleryCard(title: String, body: String) {
-    Card(
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
-        shape = RoundedCornerShape(14.dp)
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(24.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp)
-        ) {
-            Text(title, style = MaterialTheme.typography.titleMedium)
-            Text(body, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
+    val palette = LocalAstryxPalette.current
+    AstryxCard(contentPadding = PaddingValues(20.dp)) {
+        Text(title, style = MaterialTheme.typography.titleMedium, color = palette.textPrimary)
+        Text(body, style = MaterialTheme.typography.bodySmall, color = palette.textSecondary)
     }
 }
 

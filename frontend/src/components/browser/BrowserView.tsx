@@ -720,6 +720,7 @@ export function BrowserView({ onOpenAlbumModal, onQueued }: BrowserViewProps) {
                               playStream(item.url, item.title, {
                                 thumbnail: item.thumbnail,
                                 isAudio: item.type === 'audio',
+                                isHls: Boolean(item.isStream || /\.m3u8(\?|$)/i.test(item.url)),
                                 channel: item.channel || getHostLabel(activeUrl),
                               })
                             }

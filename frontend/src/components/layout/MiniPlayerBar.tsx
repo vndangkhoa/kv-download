@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useEffect, useState, useRef } from 'react';
+import Hls from 'hls.js';
 import { usePlayer } from '@/context/PlayerContext';
 import {
   Play,
@@ -15,10 +16,13 @@ import {
   Music,
   Film,
   Download,
+  RefreshCw,
 } from 'lucide-react';
 import { IconButton } from '@astryxdesign/core/IconButton';
 import { Button } from '@astryxdesign/core/Button';
 import { formatTime, cn } from '@/lib/utils';
+
+const PLAYBACK_RATES = [1, 1.25, 1.5, 2] as const;
 
 export function MiniPlayerBar() {
   const {
@@ -30,6 +34,7 @@ export function MiniPlayerBar() {
     isExpanded,
     setIsExpanded,
     togglePlay,
+    syncPlaying,
     seek,
     skip,
     setVolume,
@@ -40,17 +45,103 @@ export function MiniPlayerBar() {
   } = usePlayer();
 
   const [isHoveredProgress, setIsHoveredProgress] = useState(false);
+  const [useCompatFallback, setUseCompatFallback] = useState(false);
+  const [playbackError, setPlaybackError] = useState<string | null>(null);
+  const [playbackRate, setPlaybackRate] = useState<number>(1);
   const previousVolumeRef = useRef(1);
+  const hlsInstanceRef = useRef<Hls | null>(null);
 
+  // Reset compat state when switching media items
+  useEffect(() => {
+    setUseCompatFallback(false);
+    setPlaybackError(null);
+    setPlaybackRate(1);
+  }, [currentMedia?.id, currentMedia?.streamUrl]);
+
+  // Apply volume & speed independently without reloading stream src
   useEffect(() => {
     if (!currentMedia) return;
     const el = currentMedia.isAudio ? audioRef.current : videoRef.current;
-    if (el && currentMedia.streamUrl) {
-      el.src = currentMedia.streamUrl;
+    if (el) {
       el.volume = volume;
-      el.play().catch((err) => console.warn('Autoplay prevented or delayed:', err));
+      el.playbackRate = playbackRate;
     }
-  }, [currentMedia, audioRef, videoRef, volume]);
+  }, [volume, playbackRate, currentMedia, audioRef, videoRef]);
+
+  // Attach direct source or hls.js pipeline only when media/compat state changes
+  useEffect(() => {
+    if (hlsInstanceRef.current) {
+      hlsInstanceRef.current.destroy();
+      hlsInstanceRef.current = null;
+    }
+    if (!currentMedia) return;
+    const el = currentMedia.isAudio ? audioRef.current : videoRef.current;
+    if (!el || !currentMedia.streamUrl) return;
+
+    const effectiveSrc =
+      useCompatFallback && !currentMedia.streamUrl.includes('compat=1')
+        ? `${currentMedia.streamUrl}${currentMedia.streamUrl.includes('?') ? '&' : '?'}compat=1`
+        : currentMedia.streamUrl;
+
+    setPlaybackError(null);
+
+    if (currentMedia.isHls && !currentMedia.isAudio) {
+      const videoEl = el as HTMLVideoElement;
+      if (videoEl.canPlayType('application/vnd.apple.mpegurl')) {
+        videoEl.src = effectiveSrc;
+        videoEl.play().catch((err) => console.warn('HLS autoplay delayed:', err));
+      } else if (Hls.isSupported()) {
+        const hls = new Hls({
+          enableWorker: true,
+          lowLatencyMode: false,
+        });
+        hlsInstanceRef.current = hls;
+        hls.loadSource(effectiveSrc);
+        hls.attachMedia(videoEl);
+        hls.on(Hls.Events.MANIFEST_PARSED, () => {
+          videoEl.play().catch((err) => console.warn('HLS autoplay delayed:', err));
+        });
+        hls.on(Hls.Events.ERROR, (_event, data) => {
+          if (data.fatal) {
+            if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
+              hls.startLoad();
+            } else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
+              hls.recoverMediaError();
+            } else {
+              setPlaybackError('Unable to decode this HLS stream in the current browser.');
+              hls.destroy();
+            }
+          }
+        });
+      } else {
+        setPlaybackError('HLS playback is not supported in this browser.');
+      }
+      return () => {
+        if (hlsInstanceRef.current) {
+          hlsInstanceRef.current.destroy();
+          hlsInstanceRef.current = null;
+        }
+      };
+    }
+
+    el.src = effectiveSrc;
+    el.play().catch((err) => console.warn('Autoplay prevented or delayed:', err));
+
+    return () => {
+      if (hlsInstanceRef.current) {
+        hlsInstanceRef.current.destroy();
+        hlsInstanceRef.current = null;
+      }
+    };
+  }, [
+    currentMedia?.id,
+    currentMedia?.streamUrl,
+    currentMedia?.isAudio,
+    currentMedia?.isHls,
+    useCompatFallback,
+    audioRef,
+    videoRef,
+  ]);
 
   if (!currentMedia) return null;
 
@@ -63,8 +154,36 @@ export function MiniPlayerBar() {
     }
   };
 
+  const handleCycleSpeed = () => {
+    const idx = PLAYBACK_RATES.indexOf(playbackRate as (typeof PLAYBACK_RATES)[number]);
+    const next = PLAYBACK_RATES[(idx + 1) % PLAYBACK_RATES.length];
+    setPlaybackRate(next);
+  };
+
+  const handleVideoFullscreen = () => {
+    const v = videoRef.current;
+    if (!v) return;
+    if (document.fullscreenElement) {
+      document.exitFullscreen().catch(() => {});
+    } else if (v.requestFullscreen) {
+      v.requestFullscreen().catch(() => {});
+    }
+  };
+
   const handleSeekChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     seek(parseFloat(e.target.value));
+  };
+
+  const handleMediaError = () => {
+    if (
+      !useCompatFallback &&
+      !currentMedia.isAudio &&
+      currentMedia.streamUrl.startsWith('/download')
+    ) {
+      setUseCompatFallback(true);
+      return;
+    }
+    setPlaybackError('Browser could not decode this video format directly. Try Save File or Chrome/Edge.');
   };
 
   const progressPercent = duration > 0 ? Math.min(100, (currentTime / duration) * 100) : 0;
@@ -74,11 +193,21 @@ export function MiniPlayerBar() {
       <audio
         ref={audioRef}
         preload="metadata"
+        onLoadedMetadata={(e) => {
+          const t = e.currentTarget;
+          onTimeUpdate(t.currentTime, t.duration);
+        }}
+        onDurationChange={(e) => {
+          const t = e.currentTarget;
+          onTimeUpdate(t.currentTime, t.duration);
+        }}
         onTimeUpdate={(e) => {
           const t = e.currentTarget;
           onTimeUpdate(t.currentTime, t.duration);
         }}
-        onEnded={() => closePlayer()}
+        onPlay={() => syncPlaying(true)}
+        onPause={() => syncPlaying(false)}
+        onEnded={() => syncPlaying(false)}
         className="hidden"
       />
 
@@ -104,11 +233,20 @@ export function MiniPlayerBar() {
               <span className="text-xs text-[var(--color-text-secondary)] truncate">
                 {currentMedia.channel || 'Media Studio'}
                 {currentMedia.humanSize ? ` · ${currentMedia.humanSize}` : ''}
+                {useCompatFallback ? ' · H.264 Compat' : ''}
               </span>
             </div>
           </div>
 
           <div className="flex items-center gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={handleCycleSpeed}
+              className="px-2.5 py-1 rounded-lg text-xs font-mono font-semibold border border-[var(--color-border)] bg-[var(--color-background-muted)] text-[var(--color-text-primary)] hover:bg-[var(--color-overlay-hover)] transition-colors"
+              title="Playback speed"
+            >
+              {playbackRate}x
+            </button>
             <a
               href={currentMedia.downloadUrl}
               download
@@ -119,6 +257,15 @@ export function MiniPlayerBar() {
               <Download className="w-3.5 h-3.5" />
               Save File
             </a>
+            {!currentMedia.isAudio && (
+              <IconButton
+                label="Fullscreen video"
+                variant="secondary"
+                size="sm"
+                icon={<Maximize2 className="w-4 h-4" />}
+                onClick={handleVideoFullscreen}
+              />
+            )}
             <IconButton
               label="Minimize player"
               variant="secondary"
@@ -158,24 +305,61 @@ export function MiniPlayerBar() {
                 <p className="text-sm text-slate-300">{currentMedia.channel || 'Audio Track'}</p>
               </div>
             </div>
+          ) : playbackError ? (
+            <div className="flex flex-col items-center gap-3 text-center max-w-md p-6 rounded-2xl border border-white/15 bg-slate-950/90 text-white">
+              <Film className="w-10 h-10 text-violet-400" />
+              <p className="text-sm font-medium text-slate-200">{playbackError}</p>
+              <div className="flex items-center gap-2 pt-1">
+                <Button
+                  label="Retry"
+                  size="sm"
+                  variant="primary"
+                  icon={<RefreshCw className="w-3.5 h-3.5" />}
+                  onClick={() => {
+                    setPlaybackError(null);
+                    setUseCompatFallback((prev) => !prev);
+                  }}
+                />
+                <a
+                  href={currentMedia.downloadUrl}
+                  download
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border border-white/20 bg-white/10 text-white hover:bg-white/20"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  Save File
+                </a>
+              </div>
+            </div>
           ) : (
             <video
               ref={videoRef}
               controls
               playsInline
+              poster={currentMedia.thumbnail}
               className="max-h-full max-w-full rounded-lg outline-none"
+              onLoadedMetadata={(e) => {
+                const t = e.currentTarget;
+                t.playbackRate = playbackRate;
+                onTimeUpdate(t.currentTime, t.duration);
+              }}
+              onDurationChange={(e) => {
+                const t = e.currentTarget;
+                onTimeUpdate(t.currentTime, t.duration);
+              }}
               onTimeUpdate={(e) => {
                 const t = e.currentTarget;
                 onTimeUpdate(t.currentTime, t.duration);
               }}
-              onPlay={() => {}}
-              onPause={() => {}}
-              onEnded={() => {}}
+              onCanPlay={() => setPlaybackError(null)}
+              onPlay={() => syncPlaying(true)}
+              onPause={() => syncPlaying(false)}
+              onEnded={() => syncPlaying(false)}
+              onError={handleMediaError}
             />
           )}
         </div>
 
-        {/* Theater Controls (shown for audio or mobile/tablet unified control) */}
+        {/* Theater Controls */}
         <div className="px-4 py-4 sm:px-6 border-t border-[var(--color-border)] bg-[var(--color-background-surface)] space-y-3">
           <div className="max-w-3xl mx-auto flex items-center gap-3">
             <span className="text-xs font-mono tabular-nums text-[var(--color-text-secondary)] w-11 text-right shrink-0">

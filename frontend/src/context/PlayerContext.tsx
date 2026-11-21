@@ -13,6 +13,7 @@ export interface PlayerMedia {
   downloadUrl: string;
   thumbnail?: string;
   isAudio: boolean;
+  isHls?: boolean;
 }
 
 interface PlayerContextType {
@@ -30,11 +31,13 @@ interface PlayerContextType {
     opts?: {
       thumbnail?: string;
       isAudio?: boolean;
+      isHls?: boolean;
       channel?: string;
       downloadUrl?: string;
     }
   ) => void;
   togglePlay: () => void;
+  syncPlaying: (playing: boolean) => void;
   seek: (time: number) => void;
   skip: (seconds: number) => void;
   setVolume: (vol: number) => void;
@@ -165,6 +168,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       opts?: {
         thumbnail?: string;
         isAudio?: boolean;
+        isHls?: boolean;
         channel?: string;
         downloadUrl?: string;
       }
@@ -177,6 +181,11 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
         streamUrl.split('').reduce((acc, ch) => (acc * 31 + ch.charCodeAt(0)) | 0, 7)
       )}`;
       const isAudio = Boolean(opts?.isAudio);
+      const isHls = Boolean(
+        opts?.isHls ||
+          /\.m3u8(\?|$)/i.test(streamUrl) ||
+          /av01\.(media|tv)\/.*\/video\//i.test(streamUrl)
+      );
 
       const media: PlayerMedia = {
         id: safeId,
@@ -187,6 +196,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
         downloadUrl: opts?.downloadUrl || proxied,
         thumbnail: opts?.thumbnail,
         isAudio,
+        isHls,
       };
 
       setCurrentMedia(media);
@@ -200,6 +210,10 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     },
     [updateMediaSessionMetadata]
   );
+
+  const syncPlaying = useCallback((playing: boolean) => {
+    setIsPlaying(playing);
+  }, []);
 
   const togglePlay = useCallback(() => {
     const el = getActiveElement();
@@ -327,6 +341,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
         playMedia,
         playStream,
         togglePlay,
+        syncPlaying,
         seek,
         skip,
         setVolume,

@@ -308,15 +308,54 @@ func downloadMedia(url string, requestArgs map[string]string) (string, string, e
 	}
 
 	targetURL := url
-	if IsFacebookShareURL(targetURL) {
+	effReferer := requestArgs["--referer"]
+	isAV01 := false
+	if _, _, ok := ParseAV01VideoURL(targetURL); ok {
+		avCtx, avCancel := context.WithTimeout(context.Background(), 20*time.Second)
+		av, avErr := ResolveAV01Video(avCtx, targetURL)
+		avCancel()
+		if avErr == nil && av != nil && len(av.Variants) > 0 {
+			chosen := SelectAV01Variant(av.Variants, "")
+			if chosen.URL != "" {
+				targetURL = chosen.URL
+				effReferer = av.Referer
+				isAV01 = true
+				safeStem := sanitizeCaptionFilename(av.Title)
+				if safeStem != "" {
+					for i := 0; i < len(args)-1; i++ {
+						if args[i] == "--output" {
+							args[i+1] = getMediaDirectory(id) + safeStem + ".%(ext)s"
+						} else if args[i] == "--format" {
+							args[i+1] = "bv*+ba/b/best"
+						}
+					}
+				}
+			}
+		}
+	} else if IsFacebookShareURL(targetURL) {
 		if resolved := resolveFbShareURL(targetURL, fbCookieHeader("", targetURL)); resolved != "" && !IsFacebookShareURL(resolved) {
 			targetURL = resolved
 		}
 	}
+	if effReferer == "" && strings.Contains(strings.ToLower(targetURL), "iw01.xyz") {
+		effReferer = av01Referer
+	}
+	if effReferer != "" && requestArgs["--referer"] == "" {
+		args = append(args, "--referer", effReferer)
+		if effOrigin := originFromURL(effReferer); effOrigin != "" {
+			args = append(args, "--add-header", "Origin:"+effOrigin)
+		}
+	}
+	isStreamURL := isHLSOrDashURL(targetURL)
+	if isStreamURL {
+		args = append(args, "--concurrent-fragments", "8")
+	}
 
 	infoJSONPath := ""
-	if p, ok := GetCachedInfoJSON(targetURL); ok {
-		infoJSONPath = p
+	if !isAV01 {
+		if p, ok := GetCachedInfoJSON(targetURL); ok {
+			infoJSONPath = p
+		}
 	}
 
 	const maxAttempts = 3
@@ -325,6 +364,9 @@ func downloadMedia(url string, requestArgs map[string]string) (string, string, e
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		attemptArgs := make([]string, len(args))
 		copy(attemptArgs, args)
+		if isStreamURL && attempt == 1 {
+			attemptArgs = append(attemptArgs, "--hls-prefer-native")
+		}
 
 		usedInfoJSON := false
 		if attempt == 1 && infoJSONPath != "" {
@@ -344,6 +386,16 @@ func downloadMedia(url string, requestArgs map[string]string) (string, string, e
 			moveJsonFiles(id)
 			_ = organizeDownloadedFiles(id)
 			return id, "", nil
+		}
+
+		if attempt == maxAttempts && isStreamURL {
+			ffOut := filepath.Join(getMediaDirectory(id), id+".mp4")
+			if ffErr := downloadHLSWithFFmpeg(context.Background(), targetURL, effReferer, ffOut, false); ffErr == nil {
+				_ = organizeDownloadedFiles(id)
+				return id, "", nil
+			} else {
+				lastErr = ffErr.Error()
+			}
 		}
 
 		if usedInfoJSON {

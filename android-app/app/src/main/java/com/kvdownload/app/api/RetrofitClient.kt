@@ -56,31 +56,49 @@ object RetrofitClient {
         }
 
         private fun resolveViaDoH(hostname: String): List<InetAddress>? {
-            return try {
-                val req = Request.Builder()
-                    .url("https://1.1.1.1/dns-query?name=${Uri.encode(hostname)}&type=A")
-                    .header("Accept", "application/dns-json")
-                    .build()
-                dohBootstrapClient.newCall(req).execute().use { resp ->
-                    if (!resp.isSuccessful) return null
-                    val body = resp.body?.string() ?: return null
-                    val json = JSONObject(body)
-                    val answers = json.optJSONArray("Answer") ?: return null
-                    val out = mutableListOf<InetAddress>()
-                    for (i in 0 until answers.length()) {
-                        val ans = answers.getJSONObject(i)
-                        if (ans.optInt("type") == 1) {
-                            val ip = ans.optString("data")
-                            if (ip.isNotBlank()) {
-                                out.add(InetAddress.getByName(ip))
+            val endpoints = listOf(
+                "https://1.1.1.1/dns-query?name=${Uri.encode(hostname)}&type=A",
+                "https://dns.google/resolve?name=${Uri.encode(hostname)}&type=A"
+            )
+            for (endpoint in endpoints) {
+                try {
+                    val req = Request.Builder()
+                        .url(endpoint)
+                        .header("Accept", "application/dns-json")
+                        .build()
+                    val resolved = dohBootstrapClient.newCall(req).execute().use { resp ->
+                        if (!resp.isSuccessful) {
+                            null
+                        } else {
+                            val body = resp.body?.string()
+                            if (body.isNullOrBlank()) {
+                                null
+                            } else {
+                                val json = JSONObject(body)
+                                val answers = json.optJSONArray("Answer")
+                                if (answers == null) {
+                                    null
+                                } else {
+                                    val out = mutableListOf<InetAddress>()
+                                    for (i in 0 until answers.length()) {
+                                        val ans = answers.getJSONObject(i)
+                                        if (ans.optInt("type") == 1) {
+                                            val ip = ans.optString("data")
+                                            if (ip.isNotBlank()) {
+                                                out.add(InetAddress.getByName(ip))
+                                            }
+                                        }
+                                    }
+                                    out.ifEmpty { null }
+                                }
                             }
                         }
                     }
-                    out.ifEmpty { null }
+                    if (!resolved.isNullOrEmpty()) return resolved
+                } catch (_: Exception) {
                 }
-            } catch (_: Exception) {
-                null
             }
+            return null
         }
     }
 
@@ -186,9 +204,10 @@ object RetrofitClient {
     fun browserProxyUrl(targetUrl: String): String =
         "${getBaseUrl()}/api/browser/proxy?url=${Uri.encode(targetUrl)}"
 
-    fun browserStreamUrl(mediaUrl: String): String {
+    fun browserStreamUrl(mediaUrl: String, referer: String? = null): String {
         if (mediaUrl.startsWith(getBaseUrl())) return mediaUrl
-        return if (mediaUrl.startsWith("/")) "${getBaseUrl()}$mediaUrl"
-        else "${getBaseUrl()}/api/browser/stream?url=${Uri.encode(mediaUrl)}"
+        if (mediaUrl.startsWith("/")) return "${getBaseUrl()}$mediaUrl"
+        val base = "${getBaseUrl()}/api/browser/stream?url=${Uri.encode(mediaUrl)}"
+        return if (!referer.isNullOrBlank()) "$base&referer=${Uri.encode(referer)}" else base
     }
 }

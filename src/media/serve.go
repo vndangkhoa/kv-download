@@ -2,15 +2,30 @@ package media
 
 import (
 	"archive/zip"
+	"crypto/sha1"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/rs/zerolog/log"
+)
+
+type cachedCodecInfo struct {
+	Video string
+	Audio string
+}
+
+var (
+	codecProbeCache sync.Map // string -> cachedCodecInfo
+	compatFileLocks sync.Map // string -> *sync.Mutex
 )
 
 /**
@@ -109,8 +124,9 @@ func DownloadAllZip(w http.ResponseWriter, r *http.Request) {
 
 	log.Info().Msgf("Zipping %d files for download (%s.zip)", len(files), zipName)
 
+	asciiZip := asciiSafeFilename(zipName + ".zip")
 	w.Header().Set("Content-Type", "application/zip")
-	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s.zip"; filename*=UTF-8''%s.zip`, strings.ReplaceAll(zipName, `"`, ""), url.PathEscape(zipName)))
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"; filename*=UTF-8''%s.zip`, asciiZip, url.PathEscape(zipName)))
 
 	zw := zip.NewWriter(w)
 	defer zw.Close()
@@ -155,8 +171,17 @@ func streamFileToClientById(w http.ResponseWriter, r *http.Request, id string) {
 }
 
 func getMimeType(filename string) string {
-	ext := strings.ToLower(filepath.Ext(filename))
+	clean := strings.Split(strings.Split(filename, "?")[0], "#")[0]
+	ext := strings.ToLower(filepath.Ext(clean))
 	switch ext {
+	case ".m3u8":
+		return "application/vnd.apple.mpegurl"
+	case ".mpd":
+		return "application/dash+xml"
+	case ".m4s":
+		return "video/iso.segment"
+	case ".ts":
+		return "video/mp2t"
 	case ".mp4", ".m4v":
 		return "video/mp4"
 	case ".webm":
@@ -192,6 +217,166 @@ func getMimeType(filename string) string {
 	}
 }
 
+// asciiSafeFilename builds an RFC 6266 compliant ASCII fallback filename while preserving extension.
+func asciiSafeFilename(name string) string {
+	ext := filepath.Ext(name)
+	stem := strings.TrimSuffix(name, ext)
+	cleanExt := filterASCIIBytes(ext)
+	cleanStem := strings.TrimSpace(filterASCIIBytes(stem))
+	// Strip runs of underscores produced by replacing multi-byte emojis/accents
+	for strings.Contains(cleanStem, "__") {
+		cleanStem = strings.ReplaceAll(cleanStem, "__", "_")
+	}
+	cleanStem = strings.Trim(cleanStem, "_ ")
+	if cleanStem == "" {
+		cleanStem = "media"
+	}
+	return cleanStem + cleanExt
+}
+
+func filterASCIIBytes(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		if r >= 0x20 && r <= 0x7E && r != '"' && r != '\\' && r != ';' && r != '/' {
+			b.WriteRune(r)
+		} else if r > 0x7E {
+			b.WriteByte('_')
+		}
+	}
+	return b.String()
+}
+
+func compatCacheKey(filename string, fi os.FileInfo) string {
+	raw := fmt.Sprintf("%s|%d|%d", filename, fi.Size(), fi.ModTime().UnixNano())
+	sum := sha1.Sum([]byte(raw))
+	return hex.EncodeToString(sum[:])
+}
+
+func probeMediaCodecs(filename string, fi os.FileInfo) (videoCodec, audioCodec string) {
+	key := compatCacheKey(filename, fi)
+	if cached, ok := codecProbeCache.Load(key); ok {
+		info := cached.(cachedCodecInfo)
+		return info.Video, info.Audio
+	}
+
+	if _, err := exec.LookPath("ffprobe"); err != nil {
+		return "", ""
+	}
+	out, err := exec.Command(
+		"ffprobe",
+		"-v", "error",
+		"-show_entries", "stream=codec_type,codec_name",
+		"-of", "json",
+		filename,
+	).Output()
+	if err != nil {
+		return "", ""
+	}
+
+	var parsed struct {
+		Streams []struct {
+			CodecType string `json:"codec_type"`
+			CodecName string `json:"codec_name"`
+		} `json:"streams"`
+	}
+	if json.Unmarshal(out, &parsed) != nil {
+		return "", ""
+	}
+	for _, s := range parsed.Streams {
+		switch strings.ToLower(s.CodecType) {
+		case "video":
+			if videoCodec == "" {
+				videoCodec = strings.ToLower(strings.TrimSpace(s.CodecName))
+			}
+		case "audio":
+			if audioCodec == "" {
+				audioCodec = strings.ToLower(strings.TrimSpace(s.CodecName))
+			}
+		}
+	}
+	codecProbeCache.Store(key, cachedCodecInfo{Video: videoCodec, Audio: audioCodec})
+	return videoCodec, audioCodec
+}
+
+func needsBrowserCompatTranscode(ext, videoCodec, audioCodec string, forceCompat bool) bool {
+	if forceCompat {
+		return true
+	}
+	e := strings.ToLower(strings.TrimSpace(ext))
+	switch e {
+	case ".mkv", ".avi", ".mov", ".ts", ".mts", ".m2ts", ".flv", ".wmv":
+		return true
+	case ".mp4", ".m4v":
+		if videoCodec != "" && videoCodec != "h264" {
+			// Firefox/Safari reject VP9/HEVC/AV1/MPEG4 muxed inside MP4 with
+			// "No video with supported format and MIME type found."
+			return true
+		}
+		if audioCodec == "opus" || audioCodec == "vorbis" || audioCodec == "ac3" || audioCodec == "eac3" || audioCodec == "dts" {
+			return true
+		}
+	}
+	return false
+}
+
+func getCompatLock(key string) *sync.Mutex {
+	v, _ := compatFileLocks.LoadOrStore(key, &sync.Mutex{})
+	return v.(*sync.Mutex)
+}
+
+func ensureBrowserCompatibleMP4(filename string, fi os.FileInfo, videoCodec, audioCodec string) (string, error) {
+	if _, err := exec.LookPath("ffmpeg"); err != nil {
+		return "", fmt.Errorf("ffmpeg unavailable: %w", err)
+	}
+	key := compatCacheKey(filename, fi)
+	lock := getCompatLock(key)
+	lock.Lock()
+	defer lock.Unlock()
+
+	cacheDir := filepath.Join(getDownloadDir(), ".compat_cache")
+	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
+		return "", err
+	}
+	outPath := filepath.Join(cacheDir, key+".mp4")
+	if outInfo, err := os.Stat(outPath); err == nil && outInfo.Size() > 0 {
+		return outPath, nil
+	}
+
+	tmpPath := filepath.Join(cacheDir, key+".tmp.mp4")
+	_ = os.Remove(tmpPath)
+
+	args := []string{"-y", "-loglevel", "error", "-i", filename}
+	if videoCodec == "h264" {
+		args = append(args, "-c:v", "copy")
+	} else {
+		args = append(
+			args,
+			"-c:v", "libx264",
+			"-preset", "ultrafast",
+			"-crf", "23",
+			"-pix_fmt", "yuv420p",
+			"-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2",
+		)
+	}
+	if audioCodec == "" {
+		args = append(args, "-an")
+	} else {
+		args = append(args, "-c:a", "aac", "-b:a", "128k", "-ac", "2")
+	}
+	args = append(args, "-movflags", "+faststart", "-f", "mp4", tmpPath)
+
+	log.Info().Msgf("[CompatTranscode] Preparing H.264/AAC MP4 for %s (v=%s, a=%s)", filepath.Base(filename), videoCodec, audioCodec)
+	if outBytes, err := exec.Command("ffmpeg", args...).CombinedOutput(); err != nil {
+		_ = os.Remove(tmpPath)
+		return "", fmt.Errorf("ffmpeg compat failed (%v): %s", err, strings.TrimSpace(string(outBytes)))
+	}
+	if err := os.Rename(tmpPath, outPath); err != nil {
+		_ = os.Remove(tmpPath)
+		return "", err
+	}
+	return outPath, nil
+}
+
 func streamFileToClient(w http.ResponseWriter, r *http.Request, filename string) {
 	fi, err := os.Stat(filename)
 	if err != nil || fi.IsDir() {
@@ -200,19 +385,41 @@ func streamFileToClient(w http.ResponseWriter, r *http.Request, filename string)
 		return
 	}
 
-	f, err := os.Open(filename)
+	isInline := r.URL.Query().Get("inline") == "true"
+	forceCompat := r.URL.Query().Get("compat") == "1"
+
+	servePath := filename
+	serveInfo := fi
+	serveExt := filepath.Ext(filename)
+	fileContentType := getMimeType(filename)
+
+	if (isInline || forceCompat) && isVideoExt(serveExt) {
+		vCodec, aCodec := probeMediaCodecs(filename, fi)
+		if needsBrowserCompatTranscode(serveExt, vCodec, aCodec, forceCompat) {
+			if compatPath, cErr := ensureBrowserCompatibleMP4(filename, fi, vCodec, aCodec); cErr == nil {
+				if cFi, sErr := os.Stat(compatPath); sErr == nil && cFi.Size() > 0 {
+					servePath = compatPath
+					serveInfo = cFi
+					fileContentType = "video/mp4"
+				}
+			} else {
+				log.Warn().Msgf("[CompatTranscode] Falling back to raw file for %s: %v", filename, cErr)
+			}
+		}
+	}
+
+	f, err := os.Open(servePath)
 	if err != nil {
-		log.Error().Msgf("error opening file %s: %v", filename, err)
+		log.Error().Msgf("error opening file %s: %v", servePath, err)
 		http.Error(w, "Error opening file.", http.StatusInternalServerError)
 		return
 	}
 	defer f.Close()
 
-	fileContentType := getMimeType(filename)
 	baseName := filepath.Base(filename)
-
-	// Determine if this should be inline playback or attachment download
-	isInline := r.URL.Query().Get("inline") == "true"
+	if fileContentType == "" {
+		fileContentType = getMimeType(servePath)
+	}
 
 	var disposition string
 	if isInline {
@@ -221,13 +428,11 @@ func streamFileToClient(w http.ResponseWriter, r *http.Request, filename string)
 		disposition = "attachment"
 	}
 
-	// Clean ASCII fallback name for legacy clients + UTF-8 name for modern browsers
 	escapedName := url.PathEscape(baseName)
-	cleanName := strings.ReplaceAll(baseName, `"`, `\"`)
-	w.Header().Set("Content-Disposition", fmt.Sprintf(`%s; filename="%s"; filename*=UTF-8''%s`, disposition, cleanName, escapedName))
+	asciiName := asciiSafeFilename(baseName)
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`%s; filename="%s"; filename*=UTF-8''%s`, disposition, asciiName, escapedName))
 	w.Header().Set("Content-Type", fileContentType)
 	w.Header().Set("Accept-Ranges", "bytes")
 
-	// Use Go standard library ServeContent for optimal chunking, ranges, zero-copy and smooth seeking
-	http.ServeContent(w, r, baseName, fi.ModTime(), f)
+	http.ServeContent(w, r, baseName, serveInfo.ModTime(), f)
 }

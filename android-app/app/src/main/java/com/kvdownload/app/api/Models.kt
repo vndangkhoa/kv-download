@@ -60,6 +60,14 @@ data class QueueResponse(
     val tasks: List<DownloadTask> = emptyList()
 )
 
+data class StreamVariant(
+    val label: String,
+    val url: String,
+    val width: Int = 0,
+    val height: Int = 0,
+    val bandwidth: Long = 0L
+)
+
 data class EnqueueItemInput(
     val url: String,
     val title: String? = null,
@@ -67,7 +75,8 @@ data class EnqueueItemInput(
     val uploader: String? = null,
     val channel: String? = null,
     val duration: String? = null,
-    val infoJsonPath: String? = null
+    val infoJsonPath: String? = null,
+    val referer: String? = null
 )
 
 data class QueueAddRequest(
@@ -80,7 +89,8 @@ data class QueueAddRequest(
     val channel: String? = null,
     val groupId: String? = null,
     val groupTitle: String? = null,
-    val groupType: String? = null
+    val groupType: String? = null,
+    val referer: String? = null
 )
 
 data class QueueAddResponse(
@@ -214,7 +224,9 @@ data class SniffedMedia(
     val duration: String? = null,
     val resolution: String? = null,
     val channel: String? = null,
-    val isStream: Boolean? = null
+    val isStream: Boolean? = null,
+    val referer: String? = null,
+    val variants: List<StreamVariant>? = null
 )
 
 data class BrowserSniffResponse(
@@ -249,5 +261,6 @@ data class PhoneTransferState(
     val isCompleted: Boolean = false,
     val error: String? = null,
     val savedUri: String? = null,
-    val relativePath: String? = null
+    val relativePath: String? = null,
+    val statusText: String? = null
 )

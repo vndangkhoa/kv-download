@@ -323,7 +323,7 @@ func ScanGallery() (*GalleryResponse, error) {
 				continue
 			}
 			folderName := re.Name()
-			if isCategoryName(folderName) || folderName == "json" {
+			if isCategoryName(folderName) || folderName == "json" || strings.HasPrefix(folderName, ".") {
 				continue
 			}
 

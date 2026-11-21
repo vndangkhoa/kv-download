@@ -224,7 +224,7 @@ func migrateAllLegacy() {
 			continue
 		}
 		name := e.Name()
-		if isCategoryName(name) || name == "json" {
+		if isCategoryName(name) || name == "json" || strings.HasPrefix(name, ".") {
 			continue
 		}
 		if isHexHashDir(name) {
@@ -716,7 +716,7 @@ func TidyAndOrganizeLibrary() (int, error) {
 
 	_ = filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
-			if d != nil && d.IsDir() && d.Name() == "json" {
+			if d != nil && d.IsDir() && (d.Name() == "json" || strings.HasPrefix(d.Name(), ".")) {
 				return filepath.SkipDir
 			}
 			return nil
