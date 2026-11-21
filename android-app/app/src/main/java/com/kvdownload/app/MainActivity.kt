@@ -15,6 +15,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -34,6 +35,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.SystemUpdateAlt
 import androidx.compose.material.icons.filled.TravelExplore
 import androidx.compose.material.icons.filled.VideoLibrary
 import androidx.compose.material3.Badge
@@ -81,9 +83,12 @@ import com.kvdownload.app.player.MediaPlayRequest
 import com.kvdownload.app.storage.PhoneDownloadManager
 import com.kvdownload.app.ui.adaptive.LocalWindowState
 import com.kvdownload.app.ui.adaptive.ProvideWindowState
+import com.kvdownload.app.ui.components.AppUpdateDialog
 import com.kvdownload.app.ui.components.AstryxBrandMark
 import com.kvdownload.app.ui.components.AstryxStatusBadge
 import com.kvdownload.app.ui.components.AstryxTone
+import com.kvdownload.app.update.AppUpdateInfo
+import com.kvdownload.app.update.AppUpdateManager
 import com.kvdownload.app.ui.player.IntegratedPlayerOverlay
 import com.kvdownload.app.ui.player.PersistentMiniPlayer
 import com.kvdownload.app.ui.player.PhotoLightboxOverlay
@@ -237,6 +242,10 @@ private fun KVDownloadApp(
     var tasks by remember { mutableStateOf<List<DownloadTask>>(emptyList()) }
     var serverOnline by remember { mutableStateOf<Boolean?>(null) }
 
+    val appUpdateManager = remember { AppUpdateManager(context.applicationContext) }
+    var availableUpdate by remember { mutableStateOf<AppUpdateInfo?>(null) }
+    var dialogUpdateInfo by remember { mutableStateOf<AppUpdateInfo?>(null) }
+
     val transfers by phoneDownloadManager.transfers.collectAsState()
     val savedFiles by phoneDownloadManager.savedFiles.collectAsState()
 
@@ -283,6 +292,11 @@ private fun KVDownloadApp(
     }
 
     LaunchedEffect(serverUrl) {
+        launch {
+            appUpdateManager.checkForUpdate().onSuccess { info ->
+                availableUpdate = info
+            }
+        }
         while (isActive) {
             try {
                 val res = RetrofitClient.getApi().getQueue()
@@ -315,7 +329,7 @@ private fun KVDownloadApp(
                         lowerName.endsWith(".png") || lowerName.endsWith(".webp") -> MediaKind.IMAGE
                     else -> MediaKind.VIDEO
                 }
-                val serverStream = RetrofitClient.downloadTaskUrl(t.id, inline = true)
+                val serverStream = RetrofitClient.downloadTaskUrl(t.id, inline = true, mediaId = t.mediaId)
                 MediaPlayRequest(
                     id = "task:${t.id}",
                     title = t.displayTitle(),
@@ -373,6 +387,13 @@ private fun KVDownloadApp(
                     themeMode = themeMode,
                     onThemeModeChanged = onThemeModeChanged,
                     phoneDownloadManager = phoneDownloadManager,
+                    appUpdateManager = appUpdateManager,
+                    availableUpdate = availableUpdate,
+                    onUpdateChecked = { info -> availableUpdate = info },
+                    onOpenUpdateDialog = { info ->
+                        availableUpdate = info
+                        dialogUpdateInfo = info
+                    },
                     onShowMessage = { msg -> scope.launch { snackbarHostState.showSnackbar(msg) } }
                 )
             }
@@ -431,6 +452,8 @@ private fun KVDownloadApp(
                                             Badge(containerColor = palette.accent) {
                                                 Text("$badgeCount", color = Color.White)
                                             }
+                                        } else if (dest.key == "settings" && availableUpdate?.hasUpdate == true) {
+                                            Badge(containerColor = palette.warning)
                                         }
                                     }
                                 ) {
@@ -472,7 +495,11 @@ private fun KVDownloadApp(
                             },
                             serverOnline = serverOnline,
                             activeTransfers = activePhoneTransfersCount,
-                            showBrand = false
+                            showBrand = false,
+                            updateBadgeVersion = availableUpdate?.takeIf { it.hasUpdate }?.latestVersion,
+                            onUpdateBadgeClick = {
+                                availableUpdate?.let { dialogUpdateInfo = it }
+                            }
                         )
                     },
                     bottomBar = {
@@ -504,7 +531,11 @@ private fun KVDownloadApp(
                         },
                         serverOnline = serverOnline,
                         activeTransfers = activePhoneTransfersCount,
-                        showBrand = true
+                        showBrand = true,
+                        updateBadgeVersion = availableUpdate?.takeIf { it.hasUpdate }?.latestVersion,
+                        onUpdateBadgeClick = {
+                            availableUpdate?.let { dialogUpdateInfo = it }
+                        }
                     )
                 },
                 bottomBar = {
@@ -534,6 +565,8 @@ private fun KVDownloadApp(
                                                     Badge(containerColor = palette.accent) {
                                                         Text("$badgeCount", color = Color.White)
                                                     }
+                                                } else if (dest.key == "settings" && availableUpdate?.hasUpdate == true) {
+                                                    Badge(containerColor = palette.warning)
                                                 }
                                             }
                                         ) {
@@ -562,6 +595,15 @@ private fun KVDownloadApp(
         )
 
         PhotoLightboxOverlay(controller = playerController)
+
+        dialogUpdateInfo?.let { info ->
+            AppUpdateDialog(
+                updateInfo = info,
+                updateManager = appUpdateManager,
+                onDismiss = { dialogUpdateInfo = null },
+                onShowMessage = { msg -> scope.launch { snackbarHostState.showSnackbar(msg) } }
+            )
+        }
     }
 }
 
@@ -571,7 +613,9 @@ private fun AstryxAppHeader(
     subtitle: String,
     serverOnline: Boolean?,
     activeTransfers: Int,
-    showBrand: Boolean
+    showBrand: Boolean,
+    updateBadgeVersion: String? = null,
+    onUpdateBadgeClick: (() -> Unit)? = null
 ) {
     val palette = LocalAstryxPalette.current
     Surface(
@@ -615,38 +659,71 @@ private fun AstryxAppHeader(
 
                 Spacer(Modifier.width(8.dp))
 
-                Surface(
-                    shape = RoundedCornerShape(999.dp),
-                    color = palette.muted,
-                    border = BorderStroke(1.dp, palette.borderSubtle)
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .size(7.dp)
-                                .clip(CircleShape)
-                                .background(
-                                    when (serverOnline) {
-                                        true -> palette.success
-                                        false -> palette.error
-                                        null -> palette.warning
-                                    }
+                    if (!updateBadgeVersion.isNullOrBlank() && onUpdateBadgeClick != null) {
+                        Surface(
+                            shape = RoundedCornerShape(999.dp),
+                            color = palette.warning.copy(alpha = 0.16f),
+                            border = BorderStroke(1.dp, palette.warning.copy(alpha = 0.45f)),
+                            modifier = Modifier.clickable(onClick = onUpdateBadgeClick)
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.SystemUpdateAlt,
+                                    contentDescription = "Update available",
+                                    tint = palette.warning,
+                                    modifier = Modifier.size(13.dp)
                                 )
-                        )
-                        Text(
-                            text = when {
-                                activeTransfers > 0 -> "PHONE $activeTransfers"
-                                serverOnline == true -> "ONLINE"
-                                serverOnline == false -> "OFFLINE"
-                                else -> "SYNC"
-                            },
-                            style = MaterialTheme.typography.labelSmall,
-                            color = palette.textPrimary
-                        )
+                                Text(
+                                    text = "v$updateBadgeVersion",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = palette.warning,
+                                    maxLines = 1
+                                )
+                            }
+                        }
+                    }
+
+                    Surface(
+                        shape = RoundedCornerShape(999.dp),
+                        color = palette.muted,
+                        border = BorderStroke(1.dp, palette.borderSubtle)
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(7.dp)
+                                    .clip(CircleShape)
+                                    .background(
+                                        when (serverOnline) {
+                                            true -> palette.success
+                                            false -> palette.error
+                                            null -> palette.warning
+                                        }
+                                    )
+                            )
+                            Text(
+                                text = when {
+                                    activeTransfers > 0 -> "PHONE $activeTransfers"
+                                    serverOnline == true -> "ONLINE"
+                                    serverOnline == false -> "OFFLINE"
+                                    else -> "SYNC"
+                                },
+                                style = MaterialTheme.typography.labelSmall,
+                                color = palette.textPrimary
+                            )
+                        }
                     }
                 }
             }

@@ -1,6 +1,8 @@
 package media
 
 import (
+	"bytes"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -116,5 +118,97 @@ func TestServeMediaVP9InMP4CompatTranscode(t *testing.T) {
 		if strings.Contains(it.Path, ".compat_cache") {
 			t.Fatalf(".compat_cache leaked into ScanGallery: %s", it.Path)
 		}
+	}
+}
+
+func TestServeMediaByQueueTaskUUIDAndReorganizedModes(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("MR_DOWNLOAD_DIR", tmpDir)
+
+	origQueue := GlobalQueue
+	q := &QueueManager{
+		tasks: make(map[string]*DownloadTask),
+	}
+	GlobalQueue = q
+	defer func() { GlobalQueue = origQueue }()
+
+	payload := []byte("ftypisom-mock-video-bytes-for-queue-uuid-test")
+
+	// Case 1: category_channel mode (videos/nocc.2026/<file>)
+	catChannelDir := filepath.Join(tmpDir, "videos", "nocc.2026")
+	if err := os.MkdirAll(catChannelDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	fileName := "3 comments Anh muốn hiệp sau vẫn còn lực Thì xài Trà Ba Kích Tím Feelex nha 🫧💦 https s.sho.mp4"
+	if err := os.WriteFile(filepath.Join(catChannelDir, fileName), payload, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	taskUUID := "502f2593-0bce-4df0-9dc0-80e5019e64c1"
+	mediaID := "3faf55e3913cb4054bdbf3aba9f2487c/" + fileName
+	q.mu.Lock()
+	q.tasks[taskUUID] = &DownloadTask{
+		ID:        taskUUID,
+		Status:    StatusCompleted,
+		Title:     strings.TrimSuffix(fileName, ".mp4"),
+		MediaID:   mediaID,
+		MediaName: fileName,
+		Channel:   "nocc.2026",
+	}
+	q.mu.Unlock()
+
+	req := httptest.NewRequest(http.MethodGet, "/download?id="+url.QueryEscape(taskUUID)+"&inline=true", nil)
+	rec := httptest.NewRecorder()
+	ServeMedia(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("ServeMedia by taskUUID (category_channel) HTTP = %d, want 200 (body=%q)", rec.Code, rec.Body.String())
+	}
+	if !bytes.Equal(rec.Body.Bytes(), payload) {
+		t.Fatalf("ServeMedia payload mismatch")
+	}
+
+	// Case 2: channel_category mode (<Channel>/videos/<file>) where candidateFilePaths alone misses
+	tmpDir2 := t.TempDir()
+	t.Setenv("MR_DOWNLOAD_DIR", tmpDir2)
+	chanCatDir := filepath.Join(tmpDir2, "nocc.2026", "videos")
+	if err := os.MkdirAll(chanCatDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(chanCatDir, fileName), payload, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	req2 := httptest.NewRequest(http.MethodGet, "/download?id="+url.QueryEscape(taskUUID)+"&inline=true", nil)
+	rec2 := httptest.NewRecorder()
+	ServeMedia(rec2, req2)
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("ServeMedia by taskUUID (channel_category) HTTP = %d, want 200 (body=%q)", rec2.Code, rec2.Body.String())
+	}
+
+	// Case 3: mediaId query fallback after Clear Completed removes task from GlobalQueue
+	req3 := httptest.NewRequest(http.MethodGet, "/download?id="+url.QueryEscape("missing-cleared-task-id")+"&mediaId="+url.QueryEscape(mediaID)+"&inline=true", nil)
+	rec3 := httptest.NewRecorder()
+	ServeMedia(rec3, req3)
+	if rec3.Code != http.StatusOK {
+		t.Fatalf("ServeMedia mediaId fallback HTTP = %d, want 200 (body=%q)", rec3.Code, rec3.Body.String())
+	}
+
+	// Case 4: /api/app/version endpoint
+	t.Setenv("APP_VERSION", "1.0.43")
+	vReq := httptest.NewRequest(http.MethodGet, "/api/app/version", nil)
+	vRec := httptest.NewRecorder()
+	AppVersionHandler(vRec, vReq)
+	if vRec.Code != http.StatusOK {
+		t.Fatalf("AppVersionHandler HTTP = %d, want 200", vRec.Code)
+	}
+	var verInfo AppVersionInfo
+	if err := json.Unmarshal(vRec.Body.Bytes(), &verInfo); err != nil {
+		t.Fatalf("failed to unmarshal /api/app/version JSON: %v", err)
+	}
+	if verInfo.Version != "1.0.43" {
+		t.Fatalf("version = %q, want 1.0.43", verInfo.Version)
+	}
+	if !strings.Contains(verInfo.ApkURL, "kvdownload-v1.0.43.apk") {
+		t.Fatalf("unexpected apkUrl: %q", verInfo.ApkURL)
 	}
 }

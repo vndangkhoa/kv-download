@@ -87,6 +87,9 @@ interface KVDownloadApi {
     @POST("/api/ytdlp/update")
     suspend fun updateYtDlpChannel(@Query("channel") channel: String): UpdateYtdlpResponse
 
+    @GET("/api/app/version")
+    suspend fun getAppVersion(): AppVersionResponse
+
     @GET("/api/queue/workers")
     suspend fun getWorkers(): WorkersResponse
 

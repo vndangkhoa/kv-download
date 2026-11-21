@@ -1106,7 +1106,7 @@ private fun TaskCardView(
     }
 
     fun launchPlayback() {
-        val serverInline = RetrofitClient.downloadTaskUrl(task.id, inline = true)
+        val serverInline = RetrofitClient.downloadTaskUrl(task.id, inline = true, mediaId = task.mediaId)
         onPlayMedia(
             MediaPlayRequest(
                 id = "task:${task.id}",

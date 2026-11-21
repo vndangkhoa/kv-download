@@ -44,6 +44,7 @@ func main() {
 	router.Get("/api/youtube/search", media.YouTubeSearchHandler)
 	router.Get("/api/ytdlp/version", media.YtDlpVersionHandler)
 	router.Post("/api/ytdlp/update", media.YtDlpUpdateHandler)
+	router.Get("/api/app/version", media.AppVersionHandler)
 	router.Get("/api/events", media.EventsHandler)
 	router.Get("/api/queue", media.QueueListHandler)
 	router.Post("/api/queue/add", media.QueueAddHandler)

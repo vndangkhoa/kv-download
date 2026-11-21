@@ -60,7 +60,21 @@ func ServeMedia(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	streamFileToClientById(w, r, id)
+	mediaIDFallback := strings.TrimSpace(r.URL.Query().Get("mediaId"))
+	filename, err := getFileFromId(id)
+	if err != nil && mediaIDFallback != "" && isValidId(mediaIDFallback) {
+		if fbPath, fbErr := getFileFromId(mediaIDFallback); fbErr == nil {
+			filename = fbPath
+			err = nil
+		}
+	}
+	if err != nil {
+		log.Error().Msgf("error getting file from id %s: %v", id, err)
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+
+	streamFileToClient(w, r, filename)
 }
 
 func DownloadAllZip(w http.ResponseWriter, r *http.Request) {
@@ -324,6 +338,50 @@ func getCompatLock(key string) *sync.Mutex {
 	return v.(*sync.Mutex)
 }
 
+func isNativeMobilePlayerUA(ua string) bool {
+	lower := strings.ToLower(ua)
+	return strings.Contains(lower, "exoplayer") ||
+		strings.Contains(lower, "media3") ||
+		strings.Contains(lower, "okhttp/") ||
+		strings.Contains(lower, "dalvik/")
+}
+
+func hasCachedBrowserCompatibleMP4(filename string, fi os.FileInfo) (string, bool) {
+	key := compatCacheKey(filename, fi)
+	outPath := filepath.Join(getDownloadDir(), ".compat_cache", key+".mp4")
+	if outInfo, err := os.Stat(outPath); err == nil && outInfo.Size() > 0 {
+		return outPath, true
+	}
+	return "", false
+}
+
+func buildCompatFFmpegArgs(filename, videoCodec, audioCodec string, fragmented bool, outputTarget string) []string {
+	args := []string{"-y", "-loglevel", "error", "-i", filename}
+	if videoCodec == "h264" {
+		args = append(args, "-c:v", "copy")
+	} else {
+		args = append(
+			args,
+			"-c:v", "libx264",
+			"-preset", "ultrafast",
+			"-crf", "26",
+			"-pix_fmt", "yuv420p",
+			"-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2",
+		)
+	}
+	if audioCodec == "" {
+		args = append(args, "-an")
+	} else {
+		args = append(args, "-c:a", "aac", "-b:a", "128k", "-ac", "2")
+	}
+	if fragmented {
+		args = append(args, "-movflags", "frag_keyframe+empty_moov+default_base_moof", "-f", "mp4", outputTarget)
+	} else {
+		args = append(args, "-movflags", "+faststart", "-f", "mp4", outputTarget)
+	}
+	return args
+}
+
 func ensureBrowserCompatibleMP4(filename string, fi os.FileInfo, videoCodec, audioCodec string) (string, error) {
 	if _, err := exec.LookPath("ffmpeg"); err != nil {
 		return "", fmt.Errorf("ffmpeg unavailable: %w", err)
@@ -345,26 +403,7 @@ func ensureBrowserCompatibleMP4(filename string, fi os.FileInfo, videoCodec, aud
 	tmpPath := filepath.Join(cacheDir, key+".tmp.mp4")
 	_ = os.Remove(tmpPath)
 
-	args := []string{"-y", "-loglevel", "error", "-i", filename}
-	if videoCodec == "h264" {
-		args = append(args, "-c:v", "copy")
-	} else {
-		args = append(
-			args,
-			"-c:v", "libx264",
-			"-preset", "ultrafast",
-			"-crf", "23",
-			"-pix_fmt", "yuv420p",
-			"-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2",
-		)
-	}
-	if audioCodec == "" {
-		args = append(args, "-an")
-	} else {
-		args = append(args, "-c:a", "aac", "-b:a", "128k", "-ac", "2")
-	}
-	args = append(args, "-movflags", "+faststart", "-f", "mp4", tmpPath)
-
+	args := buildCompatFFmpegArgs(filename, videoCodec, audioCodec, false, tmpPath)
 	log.Info().Msgf("[CompatTranscode] Preparing H.264/AAC MP4 for %s (v=%s, a=%s)", filepath.Base(filename), videoCodec, audioCodec)
 	if outBytes, err := exec.Command("ffmpeg", args...).CombinedOutput(); err != nil {
 		_ = os.Remove(tmpPath)
@@ -377,7 +416,44 @@ func ensureBrowserCompatibleMP4(filename string, fi os.FileInfo, videoCodec, aud
 	return outPath, nil
 }
 
+func streamFragmentedCompatMP4(w http.ResponseWriter, r *http.Request, filename, baseName, videoCodec, audioCodec string, isInline bool) error {
+	if _, err := exec.LookPath("ffmpeg"); err != nil {
+		return fmt.Errorf("ffmpeg unavailable: %w", err)
+	}
+	args := buildCompatFFmpegArgs(filename, videoCodec, audioCodec, true, "pipe:1")
+	cmd := exec.CommandContext(r.Context(), "ffmpeg", args...)
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return err
+	}
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+
+	setMediaDispositionHeaders(w, baseName, "video/mp4", isInline)
+	w.WriteHeader(http.StatusOK)
+	_, copyErr := io.Copy(w, stdout)
+	waitErr := cmd.Wait()
+	if copyErr != nil {
+		return copyErr
+	}
+	return waitErr
+}
+
+func setMediaDispositionHeaders(w http.ResponseWriter, baseName, contentType string, isInline bool) {
+	disposition := "attachment"
+	if isInline {
+		disposition = "inline"
+	}
+	escapedName := url.PathEscape(baseName)
+	asciiName := asciiSafeFilename(baseName)
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`%s; filename="%s"; filename*=UTF-8''%s`, disposition, asciiName, escapedName))
+	w.Header().Set("Content-Type", contentType)
+}
+
 func streamFileToClient(w http.ResponseWriter, r *http.Request, filename string) {
+	const maxSyncCompatBytes = 80 * 1024 * 1024
+
 	fi, err := os.Stat(filename)
 	if err != nil || fi.IsDir() {
 		log.Error().Msgf("error finding file %s: %v", filename, err)
@@ -387,23 +463,52 @@ func streamFileToClient(w http.ResponseWriter, r *http.Request, filename string)
 
 	isInline := r.URL.Query().Get("inline") == "true"
 	forceCompat := r.URL.Query().Get("compat") == "1"
+	skipCompatForNativePlayer := isNativeMobilePlayerUA(r.UserAgent()) && !forceCompat
 
 	servePath := filename
 	serveInfo := fi
 	serveExt := filepath.Ext(filename)
 	fileContentType := getMimeType(filename)
 
-	if (isInline || forceCompat) && isVideoExt(serveExt) {
+	if (isInline || forceCompat) && isVideoExt(serveExt) && !skipCompatForNativePlayer {
 		vCodec, aCodec := probeMediaCodecs(filename, fi)
 		if needsBrowserCompatTranscode(serveExt, vCodec, aCodec, forceCompat) {
-			if compatPath, cErr := ensureBrowserCompatibleMP4(filename, fi, vCodec, aCodec); cErr == nil {
-				if cFi, sErr := os.Stat(compatPath); sErr == nil && cFi.Size() > 0 {
-					servePath = compatPath
+			if cachedPath, ok := hasCachedBrowserCompatibleMP4(filename, fi); ok {
+				if cFi, sErr := os.Stat(cachedPath); sErr == nil && cFi.Size() > 0 {
+					servePath = cachedPath
 					serveInfo = cFi
 					fileContentType = "video/mp4"
 				}
-			} else {
-				log.Warn().Msgf("[CompatTranscode] Falling back to raw file for %s: %v", filename, cErr)
+			} else if fi.Size() <= maxSyncCompatBytes && r.Method != http.MethodHead {
+				if compatPath, cErr := ensureBrowserCompatibleMP4(filename, fi, vCodec, aCodec); cErr == nil {
+					if cFi, sErr := os.Stat(compatPath); sErr == nil && cFi.Size() > 0 {
+						servePath = compatPath
+						serveInfo = cFi
+						fileContentType = "video/mp4"
+					}
+				} else {
+					log.Warn().Msgf("[CompatTranscode] Falling back to raw file for %s: %v", filename, cErr)
+				}
+			} else if fi.Size() > maxSyncCompatBytes {
+				go func(fn string, info os.FileInfo, vc, ac string) {
+					if _, bgErr := ensureBrowserCompatibleMP4(fn, info, vc, ac); bgErr != nil {
+						log.Warn().Msgf("[CompatTranscode] Background transcode failed for %s: %v", fn, bgErr)
+					}
+				}(filename, fi, vCodec, aCodec)
+
+				if forceCompat || !strings.EqualFold(serveExt, ".mp4") {
+					baseName := filepath.Base(filename)
+					if r.Method == http.MethodHead {
+						setMediaDispositionHeaders(w, baseName, "video/mp4", isInline)
+						w.WriteHeader(http.StatusOK)
+						return
+					}
+					if sErr := streamFragmentedCompatMP4(w, r, filename, baseName, vCodec, aCodec, isInline); sErr == nil {
+						return
+					} else {
+						log.Warn().Msgf("[CompatTranscode] Fragmented stream failed for %s: %v", filename, sErr)
+					}
+				}
 			}
 		}
 	}
@@ -421,17 +526,7 @@ func streamFileToClient(w http.ResponseWriter, r *http.Request, filename string)
 		fileContentType = getMimeType(servePath)
 	}
 
-	var disposition string
-	if isInline {
-		disposition = "inline"
-	} else {
-		disposition = "attachment"
-	}
-
-	escapedName := url.PathEscape(baseName)
-	asciiName := asciiSafeFilename(baseName)
-	w.Header().Set("Content-Disposition", fmt.Sprintf(`%s; filename="%s"; filename*=UTF-8''%s`, disposition, asciiName, escapedName))
-	w.Header().Set("Content-Type", fileContentType)
+	setMediaDispositionHeaders(w, baseName, fileContentType, isInline)
 	w.Header().Set("Accept-Ranges", "bytes")
 
 	http.ServeContent(w, r, baseName, serveInfo.ModTime(), f)

@@ -50,9 +50,11 @@ export function MiniPlayerBar() {
   const [playbackRate, setPlaybackRate] = useState<number>(1);
   const previousVolumeRef = useRef(1);
   const hlsInstanceRef = useRef<Hls | null>(null);
+  const activeMediaKeyRef = useRef<string>('');
 
   // Reset compat state when switching media items
   useEffect(() => {
+    activeMediaKeyRef.current = `${currentMedia?.id || ''}|${currentMedia?.streamUrl || ''}`;
     setUseCompatFallback(false);
     setPlaybackError(null);
     setPlaybackRate(1);
@@ -183,7 +185,21 @@ export function MiniPlayerBar() {
       setUseCompatFallback(true);
       return;
     }
+
+    const effectiveSrc =
+      useCompatFallback && !currentMedia.streamUrl.includes('compat=1')
+        ? `${currentMedia.streamUrl}${currentMedia.streamUrl.includes('?') ? '&' : '?'}compat=1`
+        : currentMedia.streamUrl;
+    const expectedKey = `${currentMedia.id}|${currentMedia.streamUrl}`;
+
     setPlaybackError('Browser could not decode this video format directly. Try Save File or Chrome/Edge.');
+    fetch(effectiveSrc, { method: 'HEAD' })
+      .then((resp) => {
+        if (activeMediaKeyRef.current === expectedKey && resp.status === 404) {
+          setPlaybackError('Media file was moved or deleted from server storage.');
+        }
+      })
+      .catch(() => {});
   };
 
   const progressPercent = duration > 0 ? Math.min(100, (currentTime / duration) * 100) : 0;

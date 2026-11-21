@@ -68,7 +68,9 @@ export function TaskCard({
   const platformName = task.platform || platformInfo.name;
   const displayTitle = task.title || task.mediaName || task.url;
   const displaySubtitle = task.channel || task.uploader || platformName;
-  const thumbUrl = task.thumbnail || `/thumbnail?id=${encodeURIComponent(task.id)}`;
+  const mediaIdQuery = task.mediaId ? `&mediaId=${encodeURIComponent(task.mediaId)}` : '';
+  const thumbUrl = task.thumbnail || `/thumbnail?id=${encodeURIComponent(task.id)}${mediaIdQuery}`;
+  const downloadHref = `/download?id=${encodeURIComponent(task.id)}${mediaIdQuery}`;
   const isCompleted = task.status === 'completed';
   const isDownloading = task.status === 'downloading';
   const isRetryable = task.status === 'failed' || task.status === 'cancelled';
@@ -205,7 +207,7 @@ export function TaskCard({
                   onClick={() => playMedia(task)}
                 />
                 <a
-                  href={`/download?id=${encodeURIComponent(task.id)}`}
+                  href={downloadHref}
                   download
                   className="inline-flex items-center justify-center p-1.5 rounded-lg border border-[var(--color-border)] bg-[var(--color-background-muted)] text-[var(--color-text-primary)] hover:bg-[var(--color-overlay-hover)]"
                   title="Save file to device"
@@ -367,7 +369,7 @@ export function TaskCard({
                   onClick={() => playMedia(task)}
                 />
                 <a
-                  href={`/download?id=${encodeURIComponent(task.id)}`}
+                  href={downloadHref}
                   download
                   className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold border border-[var(--color-border)] bg-[var(--color-background-muted)] text-[var(--color-text-primary)] hover:bg-[var(--color-overlay-hover)] transition-colors"
                 >

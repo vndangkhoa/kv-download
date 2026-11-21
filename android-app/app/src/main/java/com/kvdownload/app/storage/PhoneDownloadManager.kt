@@ -100,7 +100,7 @@ class PhoneDownloadManager(private val context: Context) {
     }
 
     fun saveTaskToPhone(task: DownloadTask) {
-        val url = RetrofitClient.downloadTaskUrl(task.id, inline = false)
+        val url = RetrofitClient.downloadTaskUrl(task.id, inline = false, mediaId = task.mediaId)
         val fallbackExt = if (task.format == "audio") "mp3" else "mp4"
         val baseTitle = sanitizeFileComponent(task.displayTitle(), "media_${task.id}")
         val fileName = ensureExtension(baseTitle, fallbackExt)

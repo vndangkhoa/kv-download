@@ -12,9 +12,13 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.SystemUpdateAlt
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -40,7 +44,11 @@ import com.kvdownload.app.storage.PhoneDownloadManager
 import com.kvdownload.app.ui.adaptive.LocalWindowState
 import com.kvdownload.app.ui.components.AstryxCard
 import com.kvdownload.app.ui.components.AstryxGradientButton
+import com.kvdownload.app.ui.components.AstryxStatusBadge
+import com.kvdownload.app.ui.components.AstryxTone
 import com.kvdownload.app.ui.theme.LocalAstryxPalette
+import com.kvdownload.app.update.AppUpdateInfo
+import com.kvdownload.app.update.AppUpdateManager
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -51,6 +59,10 @@ fun SettingsScreen(
     themeMode: String,
     onThemeModeChanged: (String) -> Unit,
     phoneDownloadManager: PhoneDownloadManager,
+    appUpdateManager: AppUpdateManager,
+    availableUpdate: AppUpdateInfo?,
+    onUpdateChecked: (AppUpdateInfo) -> Unit,
+    onOpenUpdateDialog: (AppUpdateInfo) -> Unit,
     onShowMessage: (String) -> Unit
 ) {
     val scope = rememberCoroutineScope()
@@ -60,6 +72,18 @@ fun SettingsScreen(
     val autoSave by phoneDownloadManager.autoSaveEnabled.collectAsState()
     val organizeByChannel by phoneDownloadManager.organizeByChannel.collectAsState()
     val organizeByType by phoneDownloadManager.organizeByMediaType.collectAsState()
+
+    val (installedVersion, installedCode) = remember { appUpdateManager.getInstalledVersion() }
+    var isCheckingUpdate by remember { mutableStateOf(false) }
+    var updateStatusText by remember(availableUpdate) {
+        mutableStateOf(
+            when {
+                availableUpdate == null -> "Tap \"Check for Updates\" to check GitHub & syno.vndns.net"
+                availableUpdate.hasUpdate -> "New update ready: v${availableUpdate.latestVersion}"
+                else -> "Up to date (v${availableUpdate.latestVersion})"
+            }
+        )
+    }
 
     var serverUrlInput by remember(serverUrl) { mutableStateOf(serverUrl) }
     var connectionStatus by remember { mutableStateOf("Not tested yet") }
@@ -312,6 +336,117 @@ fun SettingsScreen(
         }
     }
 
+    @Composable
+    fun AppUpdateCard() {
+        SettingsCard("App Version & Updates") {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "Installed: v$installedVersion (Build $installedCode)",
+                        style = MaterialTheme.typography.titleSmall,
+                        color = palette.textPrimary
+                    )
+                    Text(
+                        text = updateStatusText,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (availableUpdate?.hasUpdate == true) palette.warning else palette.textSecondary
+                    )
+                }
+                AstryxStatusBadge(
+                    text = if (availableUpdate?.hasUpdate == true) {
+                        "UPDATE v${availableUpdate.latestVersion}"
+                    } else {
+                        "UP TO DATE"
+                    },
+                    tone = if (availableUpdate?.hasUpdate == true) AstryxTone.Warning else AstryxTone.Success
+                )
+            }
+
+            if (availableUpdate?.hasUpdate == true && availableUpdate.releaseNotes.isNotBlank()) {
+                Text(
+                    text = availableUpdate.releaseNotes,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = palette.textSecondary,
+                    maxLines = 3
+                )
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                AstryxGradientButton(
+                    text = if (isCheckingUpdate) "Checking..." else "Check for Updates",
+                    icon = Icons.Default.SystemUpdateAlt,
+                    loading = isCheckingUpdate,
+                    enabled = !isCheckingUpdate,
+                    onClick = {
+                        isCheckingUpdate = true
+                        updateStatusText = "Checking server & GitHub releases..."
+                        scope.launch {
+                            val result = appUpdateManager.checkForUpdate()
+                            isCheckingUpdate = false
+                            result.onSuccess { info ->
+                                onUpdateChecked(info)
+                                if (info.hasUpdate) {
+                                    updateStatusText = "Update available: v${info.latestVersion}"
+                                    onOpenUpdateDialog(info)
+                                } else {
+                                    updateStatusText = "Up to date (v${info.currentVersion})"
+                                    onShowMessage("You're on the latest version (v${info.currentVersion})")
+                                }
+                            }.onFailure { err ->
+                                val msg = err.message ?: "Unable to check updates"
+                                updateStatusText = "Check failed: $msg"
+                                onShowMessage("Update check failed: $msg")
+                            }
+                        }
+                    },
+                    modifier = Modifier.weight(1f)
+                )
+
+                OutlinedButton(
+                    onClick = {
+                        val existing = availableUpdate
+                        if (existing != null) {
+                            onOpenUpdateDialog(existing)
+                        } else {
+                            scope.launch {
+                                isCheckingUpdate = true
+                                val result = appUpdateManager.checkForUpdate()
+                                isCheckingUpdate = false
+                                result.onSuccess { info ->
+                                    onOpenUpdateDialog(info)
+                                }.onFailure {
+                                    onOpenUpdateDialog(
+                                        AppUpdateInfo(
+                                            currentVersion = installedVersion,
+                                            currentVersionCode = installedCode,
+                                            latestVersion = installedVersion,
+                                            downloadUrl = AppUpdateManager.DEFAULT_SYNO_LATEST_APK,
+                                            fallbackUrls = emptyList(),
+                                            releaseNotes = "Direct download from syno.vndns.net",
+                                            releasePageUrl = AppUpdateManager.DEFAULT_SYNO_RELEASE_PAGE,
+                                            hasUpdate = false
+                                        )
+                                    )
+                                }
+                            }
+                        }
+                    },
+                    enabled = !isCheckingUpdate
+                ) {
+                    Icon(Icons.Default.Download, contentDescription = null)
+                    Text("Install APK", modifier = Modifier.padding(start = 6.dp))
+                }
+            }
+        }
+    }
+
     if (windowState.isTwoPane) {
         LazyVerticalGrid(
             columns = GridCells.Fixed(2),
@@ -320,6 +455,7 @@ fun SettingsScreen(
             horizontalArrangement = Arrangement.spacedBy(14.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
+            item { AppUpdateCard() }
             item { ServerCard() }
             item { PhoneStorageCard() }
             item { ServerOrgCard() }
@@ -332,6 +468,7 @@ fun SettingsScreen(
             contentPadding = PaddingValues(14.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
+            item { AppUpdateCard() }
             item { ServerCard() }
             item { PhoneStorageCard() }
             item { ServerOrgCard() }

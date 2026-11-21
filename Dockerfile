@@ -27,6 +27,8 @@ RUN GOOS=$TARGETOS GOARCH=$TARGETARCH go build -o kv-download ./src
 FROM --platform=$TARGETPLATFORM python:3.13.7-alpine3.22
 
 ARG TARGETARCH
+ARG IMAGE_TAG="1.0.43"
+ENV APP_VERSION=$IMAGE_TAG
 
 LABEL org.opencontainers.image.source="https://git.khoavo.myds.me/vndangkhoa/kv-download"
 LABEL org.opencontainers.image.description="KV Download - Mobile friendly video downloader"

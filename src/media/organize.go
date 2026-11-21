@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -377,6 +378,52 @@ func findMediaFile(mediaID string) (string, error) {
 		if fi, err := os.Stat(p); err == nil && !fi.IsDir() {
 			return p, nil
 		}
+	}
+
+	normalized := strings.ReplaceAll(mediaID, "\\", "/")
+	baseFilename := filepath.Base(normalized)
+	ext := strings.ToLower(filepath.Ext(baseFilename))
+	if baseFilename == "" || baseFilename == "." || baseFilename == "/" || ext == "" {
+		return "", os.ErrNotExist
+	}
+
+	dirHash, _, _ := strings.Cut(normalized, "/")
+	stem := strings.TrimSuffix(baseFilename, filepath.Ext(baseFilename))
+	var hashSuffixedName string
+	if len(dirHash) >= 6 && !strings.Contains(dirHash, ".") {
+		hashSuffixedName = stem + "_" + dirHash[:6] + filepath.Ext(baseFilename)
+	}
+
+	skipThumbnails := isVideoExt(ext) || isAudioExt(ext)
+	dir := getDownloadDir()
+	var matched string
+	_ = filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if d.IsDir() {
+			name := d.Name()
+			if path != dir && strings.HasPrefix(name, ".") {
+				return filepath.SkipDir
+			}
+			if strings.EqualFold(name, "json") {
+				return filepath.SkipDir
+			}
+			if skipThumbnails && strings.EqualFold(name, CategoryThumbnails) {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		name := d.Name()
+		if name == baseFilename || strings.EqualFold(name, baseFilename) ||
+			(hashSuffixedName != "" && strings.EqualFold(name, hashSuffixedName)) {
+			matched = path
+			return filepath.SkipAll
+		}
+		return nil
+	})
+	if matched != "" {
+		return matched, nil
 	}
 	return "", os.ErrNotExist
 }

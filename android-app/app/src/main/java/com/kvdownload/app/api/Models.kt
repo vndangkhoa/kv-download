@@ -178,6 +178,14 @@ data class UpdateYtdlpResponse(
     val message: String = ""
 )
 
+data class AppVersionResponse(
+    val version: String = "",
+    val apkUrl: String? = null,
+    val latestApkUrl: String? = null,
+    val releasePageUrl: String? = null,
+    val notes: String? = null
+)
+
 data class WorkersResponse(
     val maxWorkers: Int = 3
 )

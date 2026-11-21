@@ -9,6 +9,7 @@ import org.json.JSONObject
 import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
 import java.net.InetAddress
+import java.net.URLEncoder
 import java.net.UnknownHostException
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
@@ -162,23 +163,31 @@ object RetrofitClient {
         }
     }
 
-    fun downloadTaskUrl(taskId: String, inline: Boolean = false): String {
+    private fun urlEncode(raw: String): String =
+        URLEncoder.encode(raw, "UTF-8").replace("+", "%20")
+
+    fun downloadTaskUrl(taskId: String, inline: Boolean = false, mediaId: String? = null): String {
         val base = getBaseUrl()
-        val encoded = Uri.encode(taskId)
-        return if (inline) "$base/download?id=$encoded&inline=true" else "$base/download?id=$encoded"
+        val encoded = urlEncode(taskId)
+        val mediaIdPart = if (!mediaId.isNullOrBlank()) "&mediaId=${urlEncode(mediaId)}" else ""
+        return if (inline) {
+            "$base/download?id=$encoded$mediaIdPart&inline=true"
+        } else {
+            "$base/download?id=$encoded$mediaIdPart"
+        }
     }
 
     fun downloadGalleryUrl(path: String, inline: Boolean = false): String {
         val base = getBaseUrl()
-        val encoded = Uri.encode(path)
+        val encoded = urlEncode(path)
         return if (inline) "$base/download?file=$encoded&inline=true" else "$base/download?file=$encoded"
     }
 
     fun groupZipUrl(groupId: String): String =
-        "${getBaseUrl()}/download/zip?groupId=${Uri.encode(groupId)}"
+        "${getBaseUrl()}/download/zip?groupId=${urlEncode(groupId)}"
 
     fun folderZipUrl(folder: String): String =
-        "${getBaseUrl()}/download/zip?folder=${Uri.encode(folder)}"
+        "${getBaseUrl()}/download/zip?folder=${urlEncode(folder)}"
 
     fun taskThumbnailUrl(task: DownloadTask): String {
         val raw = task.thumbnail
@@ -186,7 +195,8 @@ object RetrofitClient {
             return if (raw.startsWith("http://") || raw.startsWith("https://")) raw
             else "${getBaseUrl()}$raw"
         }
-        return "${getBaseUrl()}/thumbnail?id=${Uri.encode(task.id)}"
+        val mediaIdPart = if (!task.mediaId.isNullOrBlank()) "&mediaId=${urlEncode(task.mediaId)}" else ""
+        return "${getBaseUrl()}/thumbnail?id=${urlEncode(task.id)}$mediaIdPart"
     }
 
     fun galleryThumbnailUrl(item: GalleryItem): String {
@@ -198,16 +208,16 @@ object RetrofitClient {
             return if (raw.startsWith("http://") || raw.startsWith("https://")) raw
             else "${getBaseUrl()}$raw"
         }
-        return "${getBaseUrl()}/thumbnail?path=${Uri.encode(item.path)}"
+        return "${getBaseUrl()}/thumbnail?path=${urlEncode(item.path)}"
     }
 
     fun browserProxyUrl(targetUrl: String): String =
-        "${getBaseUrl()}/api/browser/proxy?url=${Uri.encode(targetUrl)}"
+        "${getBaseUrl()}/api/browser/proxy?url=${urlEncode(targetUrl)}"
 
     fun browserStreamUrl(mediaUrl: String, referer: String? = null): String {
         if (mediaUrl.startsWith(getBaseUrl())) return mediaUrl
         if (mediaUrl.startsWith("/")) return "${getBaseUrl()}$mediaUrl"
-        val base = "${getBaseUrl()}/api/browser/stream?url=${Uri.encode(mediaUrl)}"
-        return if (!referer.isNullOrBlank()) "$base&referer=${Uri.encode(referer)}" else base
+        val base = "${getBaseUrl()}/api/browser/stream?url=${urlEncode(mediaUrl)}"
+        return if (!referer.isNullOrBlank()) "$base&referer=${urlEncode(referer)}" else base
     }
 }

@@ -592,6 +592,38 @@ func getFileFromId(id string) (string, error) {
 		return "", errors.New("invalid file type")
 	}
 
+	if GlobalQueue != nil && !strings.Contains(id, "/") {
+		GlobalQueue.mu.RLock()
+		t, ok := GlobalQueue.tasks[id]
+		var mediaID, mediaName, title string
+		if ok && t != nil {
+			mediaID = t.MediaID
+			mediaName = t.MediaName
+			title = t.Title
+		}
+		GlobalQueue.mu.RUnlock()
+
+		if ok {
+			if mediaID != "" {
+				if p, err := findMediaFile(mediaID); err == nil {
+					return p, nil
+				}
+			}
+			if mediaName != "" {
+				if p, err := findMediaFile(mediaName); err == nil {
+					return p, nil
+				}
+			}
+			if clean := sanitizeCaptionFilename(title); clean != "" {
+				for _, ext := range []string{".mp4", ".mkv", ".webm", ".mp3", ".m4a"} {
+					if p, err := findMediaFile(clean + ext); err == nil {
+						return p, nil
+					}
+				}
+			}
+		}
+	}
+
 	return findMediaFile(id)
 }
 

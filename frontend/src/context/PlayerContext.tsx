@@ -112,6 +112,8 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     (item: DownloadTask | GalleryItem) => {
       const isGallery = 'path' in item && !('status' in item);
       const id = item.id;
+      const taskMediaId = !isGallery && 'mediaId' in item ? item.mediaId : undefined;
+      const mediaIdParam = taskMediaId ? `&mediaId=${encodeURIComponent(taskMediaId)}` : '';
       const title =
         item.title ||
         ('mediaName' in item && item.mediaName) ||
@@ -123,7 +125,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
         item.thumbnail ||
         (isGallery
           ? `/thumbnail?path=${encodeURIComponent((item as GalleryItem).path)}`
-          : `/thumbnail?id=${encodeURIComponent(id)}`);
+          : `/thumbnail?id=${encodeURIComponent(id)}${mediaIdParam}`);
       const isAudio = isAudioItem(
         'name' in item ? item.name : 'mediaName' in item ? item.mediaName : title,
         'format' in item ? item.format : undefined,
@@ -132,10 +134,10 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
 
       const streamUrl = isGallery
         ? `/download?file=${encodeURIComponent((item as GalleryItem).path)}&inline=true`
-        : `/download?id=${encodeURIComponent(id)}&inline=true`;
+        : `/download?id=${encodeURIComponent(id)}${mediaIdParam}&inline=true`;
       const downloadUrl = isGallery
         ? `/download?file=${encodeURIComponent((item as GalleryItem).path)}`
-        : `/download?id=${encodeURIComponent(id)}`;
+        : `/download?id=${encodeURIComponent(id)}${mediaIdParam}`;
 
       const media: PlayerMedia = {
         id,

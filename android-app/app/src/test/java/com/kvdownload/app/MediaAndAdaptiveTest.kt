@@ -1,11 +1,14 @@
 package com.kvdownload.app
 
 import com.kvdownload.app.api.AV01Resolver
+import com.kvdownload.app.api.DownloadTask
+import com.kvdownload.app.api.RetrofitClient
 import com.kvdownload.app.storage.HlsSegmentDownloader
 import com.kvdownload.app.ui.adaptive.FoldPosture
 import com.kvdownload.app.ui.adaptive.HingeRectDp
 import com.kvdownload.app.ui.adaptive.WidthClass
 import com.kvdownload.app.ui.adaptive.computeWindowState
+import com.kvdownload.app.update.AppUpdateManager
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -134,5 +137,40 @@ class MediaAndAdaptiveTest {
         assertTrue(tabletLandscape.isTwoPane)
         assertEquals(3, tabletLandscape.queueGridColumns)
         assertEquals(4, tabletLandscape.galleryColumns)
+    }
+
+    @Test
+    fun updateVersionComparisonIgnoresSpkTagsAndComparesSemver() {
+        assertTrue(AppUpdateManager.isAppReleaseTag("1.0.43"))
+        assertTrue(AppUpdateManager.isAppReleaseTag("v1.0.44"))
+        assertFalse(AppUpdateManager.isAppReleaseTag("v1.0.0-68"))
+        assertFalse(AppUpdateManager.isAppReleaseTag("1.0.0-69"))
+
+        assertTrue(AppUpdateManager.isNewerVersion("v1.0.44", "1.0.43"))
+        assertTrue(AppUpdateManager.isNewerVersion("1.1.0", "1.0.43"))
+        assertFalse(AppUpdateManager.isNewerVersion("1.0.43", "1.0.43"))
+        assertFalse(AppUpdateManager.isNewerVersion("1.0.42", "1.0.43"))
+        assertFalse(AppUpdateManager.isNewerVersion("v1.0.0-69", "1.0.43"))
+    }
+
+    @Test
+    fun downloadTaskUrlAndThumbnailIncludeMediaIdFallback() {
+        RetrofitClient.configure("https://dl.khoavo.myds.me")
+        val streamUrl = RetrofitClient.downloadTaskUrl(
+            taskId = "502f2593-0bce-4df0-9dc0-80e5019e64c1",
+            inline = true,
+            mediaId = "3faf55e3913cb4054bdbf3aba9f2487c/sample reel.mp4"
+        )
+        assertTrue(streamUrl.contains("/download?id=502f2593-0bce-4df0-9dc0-80e5019e64c1"))
+        assertTrue(streamUrl.contains("mediaId=3faf55e3913cb4054bdbf3aba9f2487c%2Fsample%20reel.mp4"))
+        assertTrue(streamUrl.endsWith("&inline=true"))
+
+        val task = DownloadTask(
+            id = "502f2593-0bce-4df0-9dc0-80e5019e64c1",
+            mediaId = "3faf55e3913cb4054bdbf3aba9f2487c/sample reel.mp4"
+        )
+        val thumbUrl = RetrofitClient.taskThumbnailUrl(task)
+        assertTrue(thumbUrl.contains("/thumbnail?id=502f2593-0bce-4df0-9dc0-80e5019e64c1"))
+        assertTrue(thumbUrl.contains("mediaId=3faf55e3913cb4054bdbf3aba9f2487c%2Fsample%20reel.mp4"))
     }
 }
