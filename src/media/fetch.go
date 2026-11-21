@@ -17,6 +17,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/dustin/go-humanize"
@@ -43,9 +44,10 @@ func parseIndexTemplate() *template.Template {
 	return template.Must(template.ParseFiles("templates/media/index.html"))
 }
 
-var downloadDir = getDownloadDir()
+var downloadDir string
 
 func init() {
+	downloadDir = getDownloadDir()
 	ensureCategoryDirs()
 	go func() {
 		migrateAllLegacy()
@@ -253,7 +255,7 @@ func getMediaResults(inputUrl string, args map[string]string) ([]Media, string, 
 
 func downloadMedia(url string, requestArgs map[string]string) (string, string, error) {
 	id := GetMD5Hash(url, requestArgs)
-	name := getMediaDirectory(id) + "%(title,description,id)s.%(ext)s"
+	name := getMediaDirectory(id) + "%(title,description,id).100B.%(ext)s"
 
 	log.Info().Msgf("Downloading %s to %s", url, name)
 
@@ -261,10 +263,10 @@ func downloadMedia(url string, requestArgs map[string]string) (string, string, e
 
 	defaultArgs := map[string]string{
 		"--format":                "bestvideo+bestaudio/best",
-		"--trim-filenames":        "120",
 		"--no-playlist":           "",
 		"--remux-video":           "mp4",
 		"--merge-output-format":   "mp4",
+		"--format-sort":           "res,vcodec:avc:vp9:av1,acodec:m4a:aac:opus,ext:mp4",
 		"--output":                name,
 		"--no-check-certificates": "",
 		"--extractor-args":        "instagram:image_persist=1;threads:app_version=30.0.0",
@@ -307,29 +309,55 @@ func downloadMedia(url string, requestArgs map[string]string) (string, string, e
 
 	targetURL := url
 	if IsFacebookShareURL(targetURL) {
-		if resolved := resolveFbShareURL(targetURL, ""); resolved != "" && !IsFacebookShareURL(resolved) {
+		if resolved := resolveFbShareURL(targetURL, fbCookieHeader("", targetURL)); resolved != "" && !IsFacebookShareURL(resolved) {
 			targetURL = resolved
 		}
 	}
 
-	args = append(args, targetURL)
+	infoJSONPath := ""
+	if p, ok := GetCachedInfoJSON(targetURL); ok {
+		infoJSONPath = p
+	}
 
 	const maxAttempts = 3
 	var lastErr, lastStderr string
 
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		lastErr, lastStderr = runYtDlp(args)
+		attemptArgs := make([]string, len(args))
+		copy(attemptArgs, args)
+
+		usedInfoJSON := false
+		if attempt == 1 && infoJSONPath != "" {
+			if fi, err := os.Stat(infoJSONPath); err == nil && !fi.IsDir() && fi.Size() > 0 && time.Since(fi.ModTime()) < 4*time.Hour {
+				usedInfoJSON = true
+				attemptArgs = append(attemptArgs, "--load-info-json", infoJSONPath)
+				log.Info().Msgf("[FastStart] Direct download using cached info-json for %s", targetURL)
+			}
+		}
+
+		if !usedInfoJSON {
+			attemptArgs = append(attemptArgs, targetURL)
+		}
+
+		lastErr, lastStderr = runYtDlp(attemptArgs)
 		if lastErr == "" {
 			moveJsonFiles(id)
 			_ = organizeDownloadedFiles(id)
 			return id, "", nil
 		}
+
+		if usedInfoJSON {
+			log.Warn().Msgf("Download with cached info-json failed for %s, invalidating cache for retry: %s", targetURL, lastErr)
+			InvalidateCachedInfoJSON(targetURL)
+		}
+
 		if attempt < maxAttempts {
 			log.Warn().Msgf("yt-dlp attempt %d/%d failed for %s: %s — retrying", attempt, maxAttempts, url, lastErr)
 			time.Sleep(2 * time.Second)
 		}
 	}
 
+	_ = os.RemoveAll(getMediaDirectory(id))
 	return "", lastStderr, errors.New(lastErr)
 }
 
@@ -379,7 +407,7 @@ func runYtDlp(args []string) (string, string) {
 
 func moveJsonFiles(id string) {
 	root := resolveMediaDirectory(id)
-	jsonDir := downloadDir + "json/"
+	jsonDir := filepath.Join(getDownloadDir(), "json")
 
 	if err := os.MkdirAll(jsonDir, 0755); err != nil {
 		log.Error().Msgf("failed to create json dir: %v", err)
@@ -393,10 +421,15 @@ func moveJsonFiles(id string) {
 	files, _ := file.Readdirnames(0)
 	file.Close()
 
+	movedInfo := false
 	for _, f := range files {
 		if strings.HasSuffix(f, ".json") {
-			src := root + f
-			dst := jsonDir + f
+			src := filepath.Join(root, f)
+			dst := filepath.Join(jsonDir, f)
+			if strings.HasSuffix(strings.ToLower(f), ".info.json") && !movedInfo {
+				dst = filepath.Join(jsonDir, id+".info.json")
+				movedInfo = true
+			}
 			if err := os.Rename(src, dst); err != nil {
 				log.Error().Msgf("failed to move json %s: %v", f, err)
 			} else {
@@ -524,7 +557,7 @@ func GetMD5Hash(url string, args map[string]string) string {
 }
 
 func isValidId(id string) bool {
-	if strings.Contains(id, "..") || strings.Contains(id, "\\") {
+	if hasPathTraversal(id) {
 		return false
 	}
 	parts := strings.Split(id, "/")
@@ -540,18 +573,253 @@ func isValidId(id string) bool {
 	return false
 }
 
-func getDownloadDir() string {
-	dir := os.Getenv("MR_DOWNLOAD_DIR")
-	if dir == "" {
-		dir = "downloads/"
+var (
+	downloadDirMu     sync.RWMutex
+	customDownloadDir string
+	customOrganizeMode string
+)
+
+func normalizeOrganizeMode(mode string) string {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "channel_category":
+		return "channel_category"
+	case "platform_channel":
+		return "platform_channel"
+	case "flat_category":
+		return "flat_category"
+	default:
+		return "category_channel"
 	}
+}
+
+func getOrganizeMode() string {
+	if envMode := strings.TrimSpace(os.Getenv("MR_ORGANIZE_MODE")); envMode != "" {
+		return normalizeOrganizeMode(envMode)
+	}
+	downloadDirMu.RLock()
+	if customOrganizeMode != "" {
+		m := customOrganizeMode
+		downloadDirMu.RUnlock()
+		return m
+	}
+	downloadDirMu.RUnlock()
+
+	settingsPaths := []string{"degoog-data/server-settings.json", "../../degoog-data/server-settings.json"}
+	for _, p := range settingsPaths {
+		if data, err := os.ReadFile(p); err == nil {
+			var cfg struct {
+				Settings struct {
+					OrganizeMode string `json:"organizeMode"`
+				} `json:"settings"`
+			}
+			if err := json.Unmarshal(data, &cfg); err == nil && cfg.Settings.OrganizeMode != "" {
+				m := normalizeOrganizeMode(cfg.Settings.OrganizeMode)
+				downloadDirMu.Lock()
+				customOrganizeMode = m
+				downloadDirMu.Unlock()
+				return m
+			}
+		}
+	}
+	return "category_channel"
+}
+
+func SetOrganizeMode(mode string) error {
+	m := normalizeOrganizeMode(mode)
+	downloadDirMu.Lock()
+	customOrganizeMode = m
+	downloadDirMu.Unlock()
+
+	settingsFile := "degoog-data/server-settings.json"
+	var cfg map[string]interface{}
+	if data, err := os.ReadFile(settingsFile); err == nil {
+		_ = json.Unmarshal(data, &cfg)
+	}
+	if cfg == nil {
+		cfg = make(map[string]interface{})
+	}
+	settingsMap, ok := cfg["settings"].(map[string]interface{})
+	if !ok {
+		settingsMap = make(map[string]interface{})
+		cfg["settings"] = settingsMap
+	}
+	settingsMap["organizeMode"] = m
+	if b, err := json.MarshalIndent(cfg, "", "  "); err == nil {
+		_ = os.MkdirAll("degoog-data", 0o755)
+		_ = os.WriteFile(settingsFile, b, 0o644)
+	}
+	return nil
+}
+
+func getDownloadDir() string {
+	if envDir := os.Getenv("MR_DOWNLOAD_DIR"); envDir != "" {
+		if strings.HasPrefix(envDir, "~/") {
+			if home, err := os.UserHomeDir(); err == nil {
+				envDir = filepath.Join(home, envDir[2:])
+			}
+		}
+		if abs, err := filepath.Abs(envDir); err == nil {
+			envDir = abs
+		}
+		if !strings.HasSuffix(envDir, string(filepath.Separator)) {
+			envDir += string(filepath.Separator)
+		}
+		return envDir
+	}
+
+	downloadDirMu.RLock()
+	if customDownloadDir != "" {
+		d := customDownloadDir
+		downloadDirMu.RUnlock()
+		return d
+	}
+	downloadDirMu.RUnlock()
+
+	// Check degoog-data/server-settings.json
+	settingsPaths := []string{"degoog-data/server-settings.json", "../../degoog-data/server-settings.json"}
+	for _, p := range settingsPaths {
+		if data, err := os.ReadFile(p); err == nil {
+			var cfg struct {
+				Settings struct {
+					DownloadDir string `json:"downloadDir"`
+				} `json:"settings"`
+			}
+			if err := json.Unmarshal(data, &cfg); err == nil && cfg.Settings.DownloadDir != "" {
+				d := cfg.Settings.DownloadDir
+				if strings.HasPrefix(d, "~/") {
+					if home, err := os.UserHomeDir(); err == nil {
+						d = filepath.Join(home, d[2:])
+					}
+				}
+				if abs, err := filepath.Abs(d); err == nil {
+					d = abs
+				}
+				if !strings.HasSuffix(d, string(filepath.Separator)) {
+					d += string(filepath.Separator)
+				}
+				downloadDirMu.Lock()
+				customDownloadDir = d
+				downloadDir = d
+				downloadDirMu.Unlock()
+				return d
+			}
+		}
+	}
+
+	dir := "downloads/"
 	if abs, err := filepath.Abs(dir); err == nil {
 		dir = abs
 	}
-	if !strings.HasSuffix(dir, "/") {
-		dir += "/"
+	if !strings.HasSuffix(dir, string(filepath.Separator)) {
+		dir += string(filepath.Separator)
 	}
+	downloadDirMu.Lock()
+	customDownloadDir = dir
+	downloadDir = dir
+	downloadDirMu.Unlock()
 	return dir
+}
+
+func SetDownloadDir(dirPath string) error {
+	dirPath = strings.TrimSpace(dirPath)
+	if dirPath == "" {
+		return errors.New("empty path")
+	}
+	if strings.HasPrefix(dirPath, "~/") {
+		if home, err := os.UserHomeDir(); err == nil {
+			dirPath = filepath.Join(home, dirPath[2:])
+		}
+	}
+	absPath, err := filepath.Abs(dirPath)
+	if err != nil {
+		return err
+	}
+	if !strings.HasSuffix(absPath, string(filepath.Separator)) {
+		absPath += string(filepath.Separator)
+	}
+
+	if err := os.MkdirAll(absPath, 0o755); err != nil {
+		return err
+	}
+
+	downloadDirMu.Lock()
+	customDownloadDir = absPath
+	downloadDir = absPath
+	downloadDirMu.Unlock()
+
+	ensureCategoryDirs()
+
+	// Persist to degoog-data/server-settings.json
+	settingsFile := "degoog-data/server-settings.json"
+	var cfg map[string]interface{}
+	if data, err := os.ReadFile(settingsFile); err == nil {
+		_ = json.Unmarshal(data, &cfg)
+	}
+	if cfg == nil {
+		cfg = make(map[string]interface{})
+	}
+	settingsMap, ok := cfg["settings"].(map[string]interface{})
+	if !ok {
+		settingsMap = make(map[string]interface{})
+		cfg["settings"] = settingsMap
+	}
+	settingsMap["downloadDir"] = absPath
+	if b, err := json.MarshalIndent(cfg, "", "  "); err == nil {
+		_ = os.MkdirAll("degoog-data", 0o755)
+		_ = os.WriteFile(settingsFile, b, 0o644)
+	}
+
+	log.Info().Msgf("Updated storage destination to %s", absPath)
+	return nil
+}
+
+func GetStorageSettingHandler(w http.ResponseWriter, r *http.Request) {
+	dir := getDownloadDir()
+	mode := getOrganizeMode()
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"path":         dir,
+		"downloadDir":  dir,
+		"organizeMode": mode,
+	})
+}
+
+func SetStorageSettingHandler(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Path         string `json:"path"`
+		DownloadDir  string `json:"downloadDir"`
+		OrganizeMode string `json:"organizeMode"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "Invalid JSON payload", http.StatusBadRequest)
+		return
+	}
+	newPath := strings.TrimSpace(body.DownloadDir)
+	if newPath == "" {
+		newPath = strings.TrimSpace(body.Path)
+	}
+	if newPath != "" {
+		if err := SetDownloadDir(newPath); err != nil {
+			http.Error(w, "Failed to set storage directory: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
+	if strings.TrimSpace(body.OrganizeMode) != "" {
+		_ = SetOrganizeMode(body.OrganizeMode)
+	}
+	if newPath == "" && strings.TrimSpace(body.OrganizeMode) == "" {
+		http.Error(w, "Path cannot be empty", http.StatusBadRequest)
+		return
+	}
+	dir := getDownloadDir()
+	mode := getOrganizeMode()
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"success":      true,
+		"path":         dir,
+		"downloadDir":  dir,
+		"organizeMode": mode,
+	})
 }
 
 func getCookiesPath() string {

@@ -8,3 +8,6 @@ cookies.txt.*
 degoog-data/
 .opencode/
 *.log
+frontend/node_modules/
+frontend/.next/
+.impeccable/

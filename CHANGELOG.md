@@ -7,6 +7,103 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.0.40] - 2026-10-17
+
+### 🎨 Impeccable Visual & UX Overhaul (Light/Dark Theme, Task Cards & Responsive Layout)
+
+**Semantic Light & Dark Theme Tokens**:
+- **Full Light Mode Contrast**: Replaced hardcoded dark-only alpha classes with semantic CSS variables (`--surface-subtle`, `--surface-footer`, `--badge-bg`, `--status-success`, `--status-info`, `--status-danger`) across all views and modals.
+- **Refined Typography**: Adopted `Hanken Grotesk` for UI controls and prose, reserving `JetBrains Mono` (`tabular-nums`) strictly for speed telemetry, file sizes, durations, and filesystem paths.
+
+**Download Center & Media Gallery Redesign**:
+- **Rich Queue Cards**: `TaskCard` now renders video/audio thumbnails, duration overlays, and platform badges (`YouTube`, `TikTok`, `Facebook`, etc.) across `Standard`, `Compact`, and `List` views.
+- **Distilled Completed State**: Retired redundant 100% progress bars on finished downloads, promoted `Play` as the primary action, and added a two-step inline confirmation for disk deletion.
+- **Compact Mobile Toolbars**: Collapsed the 4-row Media Gallery filter stack into a compact 2-row toolbar, added loading skeletons, hid horizontal chip scrollbars (`.scrollbar-none`), and prevented mobile status-tab clipping.
+- **Unified Settings & Accessible Modals**: Consolidated `SettingsView` into structured preference panels with inline `"Saved ✓"` feedback, added contextual desktop header titles, unlocked mobile pinch-to-zoom, and added `Escape`-key + backdrop dismissal to all modals.
+
+---
+
+## [1.0.39] - 2026-10-01
+
+### ⚡ Yoinks `--load-info-json` Caching & Codec Scoring Engine
+
+**Instant Start via `--load-info-json` Caching**:
+- **Zero Re-Extraction Startup Delay**: Probe results from `/api/scan` and `StreamScanUrl` are cached atomically in `kv-info-cache/info-<hash>.json`.
+- **Instant Execution**: Queue download workers pass `--load-info-json <path>` to `yt-dlp` instead of re-fetching platform webpages over network, dropping startup latency from 5–8s down to ~0.3s.
+- **Resilient Fallback**: Automatic cache invalidation and live URL fallback on retry if pre-signed CDN tokens expire.
+- **Automated Cache Maintenance**: Periodic background cleanup (`StartInfoCachePruner`) prunes expired cache files (> 6 hours).
+
+**Codec Scoring & Universal Hardware Playback**:
+- **Yoinks Codec Scorer**: Integrated Pablo Stanley's `scoreVideo` algorithm prioritizing H.264/AVC video and AAC audio inside MP4 containers (`--format-sort "res,vcodec:avc:vp9:av1,acodec:m4a:aac:opus,ext:mp4"`).
+- **Smooth Playback Across Devices**: Prevents VP9/AV1 codec stutter on iOS/macOS Safari, Apple Silicon, older Androids, and Synology NAS DLNA players.
+- **Combined Stream Size Estimation**: Accurately computes video size + audio size for format resolution options (`BuildFormatChoices`).
+
+---
+
+## [1.0.38] - 2026-09-04
+
+### 🎬 8K/4K Video Resolution Selection & In-App Deletion Overhaul
+
+**Video Resolution & Audio Merging**:
+- **Comprehensive Resolution Presets**: Added structured video format presets including **Max / 8K / 4K (Highest Available)**, **4K Ultra HD (2160p)**, **2K Quad HD (1440p)**, **1080p Full HD**, **720p HD**, **480p SD**, and **360p Data Saver**.
+- **Guaranteed Video + Sound**: Enforced `--merge-output-format mp4` and `bestvideo[height<=...]+bestaudio/best` so modern AV1, VP9, and H.264 video tracks are seamlessly merged with high-bitrate Opus/AAC audio into standard MP4 files.
+- **Grouped Selection Dropdown**: Clean `<optgroup>` organization separating video formats from audio extraction (`MP3`, `M4A`, `FLAC`).
+- **Human-Readable Task Badges**: Displays clean badge titles (e.g. `Max / 8K / 4K`, `4K UHD`, `1080p FHD`) in task lists and cards.
+
+**Media Gallery & Task Deletion Overhaul**:
+- **Custom In-App Deletion Modal**: Replaced native browser `window.confirm()` popups with an in-app glass confirmation modal that cannot be suppressed or blocked by browser popup blockers.
+- **Optimistic UI Updates**: Deleted cards instantly vanish from the gallery view upon confirmation with automatic background cleanup.
+- **Deep Task Metadata Cleanup**: Deletion now clears the media file, candidate thumbnails, empty channel directories, and associated `downloads/json/<id>.json` task index records.
+- **Download Center Direct Delete**: Added a dedicated file deletion (Trash) button directly onto completed cards in Download Center.
+
+---
+
+## [1.0.37] - 2026-09-04
+
+### 🎬 Grid Media Selector, Live Sniffer Overhaul & Theme Polish
+
+**Playlist & Album Media Selection**:
+- **Responsive Grid & List Views**: Introduced 2-to-4 column Grid View with `16:10` video thumbnails, duration overlays, channel titles, and multi-select checkboxes.
+- **Search & Quick Actions**: Search/filter playlist items by name, select all, deselect all, and choose output format (highest, 1080p, 720p, MP3, FLAC).
+- **Scan Stream Stop Button**: Instant abort button to halt long-running playlist or channel scans at any time.
+
+**In-App Web Browser & Real-Time Sniffer**:
+- **Floating Sniffer FAB**: Non-intrusive floating action button with live media counters to maximize web surfing viewport.
+- **Category Filter Tabs**: Segregate sniffed streams into `All`, `Videos`, `Audio`, and `Images` with badge counts.
+- **High-Res Previews & CORS Proxy**: Automatic thumbnail resolution and fallback proxying for captured web streams.
+- **Expanded Sandbox Privileges**: Enables smooth operation on dynamic web apps (YouTube, Tinh Tế, Vimeo, SoundCloud).
+
+**Media Library & Gallery Improvements**:
+- **Smart Thumbnail Filtering**: Suppressed separate thumbnail cards in Gallery when corresponding video/audio files exist.
+- **Robust Batch Deletion**: Safe deletion of multiple selected gallery files with automatic cleanup of thumbnail artifacts and empty parent folders.
+- **Facebook Share & Profile Fetching**: Enhanced mobile share URL conversion and profile-level video ingestion.
+
+**Theme & Legibility Optimization**:
+- **Cinema Video Player**: Guaranteed crisp contrast for playback timestamps, scrubber, volume slider, and controls across both Light and Dark modes.
+- **Button Hover States**: Unified CSS variable hover behaviors preventing white-on-white text clipping in Light mode.
+
+---
+
+## [1.0.30] - 2026-09-04
+
+### 🚀 Next.js 15 + React 19 + TypeScript Full Rewrite & Mobile-First Interface
+
+**Next.js & TypeScript Architecture**:
+- **Full Next.js SPA Modernization**: Complete migration to Next.js 15 (App Router) + React 19 + TypeScript + Tailwind CSS with static export (`frontend/out`) directly served by the high-performance Go backend on port 9292.
+- **Type-Safe Data Flow**: Strict TypeScript interfaces for download tasks, media gallery items, storage configuration, yt-dlp release versions, and scanning streams.
+- **Real-time SSE Hook**: `useSSE` hook with auto-reconnection, heartbeat monitoring, and live download speed calculation.
+- **Global Media Player Context**: Persistent audio/video playback with seek scrubber, 10s rewind/forward, and `MediaSession` integration.
+
+**Mobile-First Ergonomics & Responsiveness**:
+- **Frosted Bottom Navigation Dock**: Native mobile bottom navigation dock with badge counters, active indicators, and safe-area padding for screens under 768px.
+- **Smart Floating Mini-Player**: Automatically docks above the mobile bottom navigation bar (`bottom-[68px]`) with seek scrubber and quick play/save controls.
+- **In-App Browser Mobile Switcher**: Added responsive mobile tabs to effortlessly toggle between the Web Browser and Live Sniffed Media stream captures.
+- **Streamlined Minimal Header**: Removed redundant tab titles to maximize screen space and keep live SSE speed telemetry pill unconstrained.
+- **Media Gallery Polish**: Horizontally swipeable folder chips, responsive search and filter toolbars, multi-selection batch delete, and Material You media cards.
+- **Tab Cleanup**: Fully removed legacy "Queues" and "Playlists & Albums" tabs to provide a unified Download Center and direct-disk Media Gallery.
+
+---
+
 ## [1.0.29] - 2026-09-04
 
 ### 🖥️ Complete Frontend Rewrite — App.js Architecture + Enhanced Launcher

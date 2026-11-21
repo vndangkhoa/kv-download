@@ -1,8 +1,20 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
-  <rect x="0" y="0" width="512" height="512" rx="0" fill="#0f0f0f"/>
-  <g fill="white">
-    <rect x="238" y="155" width="36" height="180" rx="18"/>
-    <rect x="166" y="161" width="180" height="28" rx="14"/>
-    <polygon points="256,370 136,260 376,260"/>
-  </g>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="zapBg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#9333ea"/>
+      <stop offset="50%" stop-color="#a855f7"/>
+      <stop offset="100%" stop-color="#c084fc"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Background Squircle Card -->
+  <rect x="24" y="24" width="464" height="464" rx="128" fill="url(#zapBg)"/>
+
+  <!-- Crisp White Lightning Bolt (Zap) -->
+  <path d="M 288 80 L 150 275 L 250 275 L 224 432 L 362 237 L 262 237 Z" 
+        fill="#ffffff" 
+        stroke="#ffffff" 
+        stroke-width="14" 
+        stroke-linecap="round" 
+        stroke-linejoin="round"/>
 </svg>

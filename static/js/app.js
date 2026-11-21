@@ -72,6 +72,17 @@
     var concurrentWorkerSelect = document.getElementById('concurrentWorkerSelect');
     var notifToggle = document.getElementById('notifToggle');
     var themeToggleBtn = document.getElementById('themeToggleBtn');
+    var storagePathInput = document.getElementById('storagePathInput');
+    var btnSaveStoragePath = document.getElementById('btnSaveStoragePath');
+    var btnResetStoragePath = document.getElementById('btnResetStoragePath');
+
+    // DOM Elements - Gallery Selection Mode
+    var gallerySelectToolbar = document.getElementById('gallerySelectToolbar');
+    var gallerySelectedCountBadge = document.getElementById('gallerySelectedCountBadge');
+    var btnGalleryToggleSelectMode = document.getElementById('btnGalleryToggleSelectMode');
+    var btnGallerySelectAll = document.getElementById('btnGallerySelectAll');
+    var btnGalleryDeselectAll = document.getElementById('btnGalleryDeselectAll');
+    var btnGalleryDeleteSelected = document.getElementById('btnGalleryDeleteSelected');
 
     // Modals
     var albumModal = document.getElementById('albumModal');
@@ -123,10 +134,8 @@
         var titles = {
             'download-center': ['Download Center', 'Paste any link or M3U8 stream to fetch or download media in high quality.'],
             'browser': ['In-App Browser', 'Browse any website with live media sniffing, M3U8 stream capture, and instant downloads.'],
-            'history': ['Media Gallery', 'Full-featured media preview, Android lockscreen controls, and file management.'],
-            'queues': ['Queue Manager', 'Monitor active worker threads and manage queued tasks.'],
-            'playlists': ['Playlists & Albums', 'Inspect and batch download full albums and playlists.'],
-            'settings': ['Application Settings', 'Manage yt-dlp release channels (stable, nightly), speed limits, and preferences.'],
+            'history': ['Media Gallery', 'Full-featured media preview, Android lockscreen controls, multi-select, and file management.'],
+            'settings': ['Application Settings', 'Manage storage destination, yt-dlp release channels, speed limits, and preferences.'],
             'api-docs': ['API Reference & Integrations', 'Interactive REST API and Aria2 JSON-RPC documentation for developers and integrations.']
         };
         var t = titles[viewName] || titles['download-center'];
@@ -134,7 +143,7 @@
         document.getElementById('topSubtitle').textContent = t[1];
 
         if (viewName === 'history') { fetchGallery(); if (historySearch) historySearch.focus(); }
-        if (viewName === 'settings') { checkYtDlpVersionInfo(); }
+        if (viewName === 'settings') { checkYtDlpVersionInfo(); fetchStorageSettings(); }
         if (viewName === 'browser' && !browserInitialized) { initBrowserView(); }
         renderTasks();
     }
@@ -346,6 +355,96 @@
     var galleryData = { items: [], folders: [], total: 0 };
     var currentGalleryFolder = '';
     var currentHistoryTypeFilter = 'all';
+    var isGallerySelectMode = false;
+    var selectedGalleryItems = new Set();
+
+    function updateGallerySelectToolbar() {
+        if (gallerySelectToolbar) {
+            gallerySelectToolbar.classList.toggle('d-none', !isGallerySelectMode);
+        }
+        if (btnGalleryToggleSelectMode) {
+            btnGalleryToggleSelectMode.classList.toggle('bg-primary', isGallerySelectMode);
+            btnGalleryToggleSelectMode.classList.toggle('text-black', isGallerySelectMode);
+            btnGalleryToggleSelectMode.classList.toggle('bg-white/5', !isGallerySelectMode);
+            btnGalleryToggleSelectMode.classList.toggle('text-on-surface-variant', !isGallerySelectMode);
+            btnGalleryToggleSelectMode.innerHTML = isGallerySelectMode
+                ? '<i class="bi bi-x-circle-fill"></i> Exit Selection'
+                : '<i class="bi bi-check2-square"></i> Select';
+        }
+        if (gallerySelectedCountBadge) {
+            gallerySelectedCountBadge.textContent = selectedGalleryItems.size + ' Selected';
+        }
+        if (btnGalleryDeleteSelected) {
+            btnGalleryDeleteSelected.disabled = selectedGalleryItems.size === 0;
+            btnGalleryDeleteSelected.innerHTML = '<i class="bi bi-trash3-fill"></i> Delete Selected (' + selectedGalleryItems.size + ')';
+        }
+    }
+
+    if (btnGalleryToggleSelectMode) {
+        btnGalleryToggleSelectMode.addEventListener('click', function() {
+            isGallerySelectMode = !isGallerySelectMode;
+            if (!isGallerySelectMode) {
+                selectedGalleryItems.clear();
+            }
+            updateGallerySelectToolbar();
+            renderGalleryItems();
+        });
+    }
+
+    if (btnGallerySelectAll) {
+        btnGallerySelectAll.addEventListener('click', function() {
+            var items = getFilteredGalleryItems();
+            items.forEach(function(it) {
+                selectedGalleryItems.add(it.id);
+            });
+            updateGallerySelectToolbar();
+            renderGalleryItems();
+        });
+    }
+
+    if (btnGalleryDeselectAll) {
+        btnGalleryDeselectAll.addEventListener('click', function() {
+            selectedGalleryItems.clear();
+            updateGallerySelectToolbar();
+            renderGalleryItems();
+        });
+    }
+
+    if (btnGalleryDeleteSelected) {
+        btnGalleryDeleteSelected.addEventListener('click', function() {
+            if (selectedGalleryItems.size === 0) return;
+            var count = selectedGalleryItems.size;
+            if (!confirm('Permanently delete ' + count + ' selected item(s) completely from disk?')) return;
+
+            var paths = Array.from(selectedGalleryItems);
+            var xhr = new XMLHttpRequest();
+            xhr.open('POST', '/api/gallery/delete-multiple', true);
+            xhr.setRequestHeader('Content-Type', 'application/json');
+            xhr.onload = function() {
+                if (xhr.status === 200) {
+                    try {
+                        var res = JSON.parse(xhr.responseText);
+                        showToast('Successfully deleted ' + (res.deletedCount || count) + ' file(s)', 'info');
+                    } catch(e) {
+                        showToast('Deleted selected files', 'info');
+                    }
+                    paths.forEach(function(p) {
+                        delete tasksMap[p];
+                    });
+                    selectedGalleryItems.clear();
+                    updateGallerySelectToolbar();
+                    fetchGallery();
+                    renderTasks();
+                } else {
+                    showToast('Failed to delete files: ' + xhr.responseText, 'error');
+                }
+            };
+            xhr.onerror = function() {
+                showToast('Network error during batch deletion', 'error');
+            };
+            xhr.send(JSON.stringify({ paths: paths }));
+        });
+    }
 
     function fetchGallery() {
         var xhr = new XMLHttpRequest();
@@ -408,8 +507,7 @@
         });
     }
 
-    function renderGalleryItems() {
-        if (!historyList) return;
+    function getFilteredGalleryItems() {
         var items = (galleryData.items || []).slice();
 
         // 1. Filter by Folder / Channel
@@ -436,10 +534,6 @@
             });
         }
 
-        // Update counts in header
-        var allEl = document.getElementById('histCountAll');
-        if (allEl) allEl.textContent = (galleryData.items || []).length;
-
         // 4. Sort
         var sortMode = historySortSelect ? historySortSelect.value : 'newest';
         items.sort(function(a, b) {
@@ -448,6 +542,17 @@
             if (sortMode === 'name') return (a.title || a.name).localeCompare(b.title || b.name);
             return new Date(b.modTime) - new Date(a.modTime);
         });
+
+        return items;
+    }
+
+    function renderGalleryItems() {
+        if (!historyList) return;
+        var items = getFilteredGalleryItems();
+
+        // Update counts in header
+        var allEl = document.getElementById('histCountAll');
+        if (allEl) allEl.textContent = (galleryData.items || []).length;
 
         // Map GalleryItem to card format
         var mapped = items.map(function(it) {
@@ -576,8 +681,66 @@
     }
 
     // =========================================================================
-    // SETTINGS: SPEED LIMITER & WORKERS
+    // SETTINGS: STORAGE LOCATION, SPEED LIMITER & WORKERS
     // =========================================================================
+    function fetchStorageSettings() {
+        var xhr = new XMLHttpRequest();
+        xhr.open('GET', '/api/settings/storage', true);
+        xhr.onload = function() {
+            if (xhr.status === 200) {
+                try {
+                    var d = JSON.parse(xhr.responseText);
+                    if (storagePathInput && d.downloadDir) {
+                        storagePathInput.value = d.downloadDir;
+                    }
+                } catch(e) {}
+            }
+        };
+        xhr.send();
+    }
+
+    function saveStorageSettings(path) {
+        if (!path || !path.trim()) {
+            showToast('Please enter a valid directory path', 'warning');
+            return;
+        }
+        var xhr = new XMLHttpRequest();
+        xhr.open('POST', '/api/settings/storage', true);
+        xhr.setRequestHeader('Content-Type', 'application/json');
+        xhr.onload = function() {
+            if (xhr.status === 200) {
+                try {
+                    var d = JSON.parse(xhr.responseText);
+                    if (storagePathInput && d.downloadDir) {
+                        storagePathInput.value = d.downloadDir;
+                    }
+                    showToast('Storage destination updated to: ' + d.downloadDir, 'success');
+                    fetchGallery();
+                } catch(e) {}
+            } else {
+                showToast('Failed to update storage path: ' + xhr.responseText, 'error');
+            }
+        };
+        xhr.onerror = function() {
+            showToast('Network error while saving storage settings', 'error');
+        };
+        xhr.send(JSON.stringify({ downloadDir: path.trim() }));
+    }
+
+    if (btnSaveStoragePath) {
+        btnSaveStoragePath.addEventListener('click', function() {
+            if (storagePathInput) {
+                saveStorageSettings(storagePathInput.value);
+            }
+        });
+    }
+
+    if (btnResetStoragePath) {
+        btnResetStoragePath.addEventListener('click', function() {
+            saveStorageSettings('~/Downloads/kv-download');
+        });
+    }
+
     if (speedLimitSelect) {
         speedLimitSelect.value = currentSpeedLimit;
         speedLimitSelect.addEventListener('change', function() {
@@ -630,6 +793,12 @@
         submitBtnIcon.style.animation = 'spin 1s linear infinite';
         submitBtnText.textContent = 'Enqueuing ' + urls.length + '...';
 
+        // Clear input area immediately for snappy user experience
+        if (urlInput) urlInput.value = '';
+        if (btnClearInput) btnClearInput.classList.add('d-none');
+        if (urlCountIndicator) urlCountIndicator.classList.add('d-none');
+        if (detectedPlatformBadge) detectedPlatformBadge.classList.add('d-none');
+
         var cookies = localStorage.getItem('kv_user_cookies') || '';
         var rateLimit = localStorage.getItem('kv_speed_limit') || '';
         var payload = {
@@ -660,6 +829,7 @@
                 } catch (e) {}
                 setFilter('all');
                 switchView('download-center');
+                renderTasks();
                 showToast(urls.length + (urls.length === 1 ? ' task enqueued!' : ' tasks enqueued!'), 'success');
             } else {
                 showToast('Failed to enqueue: ' + xhr.statusText, 'error');
@@ -1626,6 +1796,22 @@
     });
 
     historyList.addEventListener('click', function(e) {
+        // Selection Mode checkbox toggle
+        var selBtn = e.target.closest('.btn-gallery-select-item');
+        if (selBtn) {
+            var fileId = selBtn.getAttribute('data-id');
+            if (fileId) {
+                if (selectedGalleryItems.has(fileId)) {
+                    selectedGalleryItems.delete(fileId);
+                } else {
+                    selectedGalleryItems.add(fileId);
+                }
+                updateGallerySelectToolbar();
+                renderGalleryItems();
+            }
+            return;
+        }
+
         var d = e.target.closest('.btn-action-delete') || e.target.closest('.btn-action-delete-file');
         if (d) {
             var fileId = d.getAttribute('data-id');
@@ -1642,6 +1828,10 @@
                             delete tasksMap[fileId];
                             renderTasks();
                         }
+                        if (selectedGalleryItems.has(fileId)) {
+                            selectedGalleryItems.delete(fileId);
+                            updateGallerySelectToolbar();
+                        }
                         fetchGallery();
                     } else {
                         showToast('Failed to delete file', 'error');
@@ -1651,6 +1841,28 @@
             }
             return;
         }
+
+        // If in selection mode, clicking on a card selects/deselects it (unless clicking download button)
+        if (isGallerySelectMode) {
+            var dl = e.target.closest('a[download]');
+            if (!dl) {
+                var card = e.target.closest('.android-gallery-card, .task-card');
+                if (card) {
+                    var cardFileId = card.getAttribute('data-id') || (card.id ? card.id.replace('task-card-', '') : '');
+                    if (cardFileId) {
+                        if (selectedGalleryItems.has(cardFileId)) {
+                            selectedGalleryItems.delete(cardFileId);
+                        } else {
+                            selectedGalleryItems.add(cardFileId);
+                        }
+                        updateGallerySelectToolbar();
+                        renderGalleryItems();
+                        return;
+                    }
+                }
+            }
+        }
+
         var p = e.target.closest('.btn-action-play'); if (p) {
             var fileId = p.getAttribute('data-id');
             var item = (galleryData.items || []).find(function(it) { return it.id === fileId; });
@@ -2051,7 +2263,7 @@
         set('telemetrySpeed', spd); set('navGlobalSpeed', spd); set('footerSpeed', spd);
     }
 
-    // Render Tasks across Download Center, History, and Queues
+    // Render Tasks across Download Center and History
     function renderTasks() {
         var all = Object.values(tasksMap);
         updateTelemetryAndCounts(all);
@@ -2072,155 +2284,9 @@
         // Render Gallery Items directly from disk
         renderGalleryItems();
 
-        // Render Playlists & Channel Collections
-        renderPlaylists();
-
-        // Render Queues
-        if (queueList) {
-            var activeQueueList = all.filter(function(t) { return t.status === 'downloading' || t.status === 'queued'; });
-            renderTaskGrid(queueList, activeQueueList, 'standard', false);
-        }
-
         // Update theme-aware colors for dynamically created elements
         updateTaskCardsForTheme();
     }
-
-    function renderPlaylists() {
-        var container = document.getElementById('playlistsContainer');
-        if (!container) return;
-        var all = Object.values(tasksMap);
-        var completedList = all.filter(function(t) { return t.status === 'completed'; });
-
-        // Group completed items by collection/channel/playlist
-        var groups = {};
-        completedList.forEach(function(t) {
-            var groupKey = '';
-            var groupTitle = '';
-            var channelName = t.channel || t.uploader || '';
-
-            if (t.playlistTitle) {
-                groupKey = 'pl:' + t.playlistTitle;
-                groupTitle = t.playlistTitle;
-            } else if (t.channel) {
-                groupKey = 'ch:' + t.channel;
-                groupTitle = t.channel + ' (Channel)';
-            } else if (t.uploader) {
-                groupKey = 'up:' + t.uploader;
-                groupTitle = '@' + t.uploader + ' (Creator)';
-            } else if (t.url) {
-                var ttM = t.url.match(/tiktok\.com\/@([a-zA-Z0-9_.]+)/);
-                if (ttM && ttM[1]) {
-                    groupKey = 'tt:@' + ttM[1];
-                    groupTitle = '@' + ttM[1] + ' (TikTok)';
-                    channelName = '@' + ttM[1];
-                }
-            }
-
-            if (!groupKey) {
-                groupKey = 'single:media';
-                groupTitle = 'Individual Downloads';
-            }
-
-            if (!groups[groupKey]) {
-                groups[groupKey] = {
-                    key: groupKey,
-                    title: groupTitle,
-                    channel: channelName,
-                    items: [],
-                    totalBytes: 0,
-                    platform: detectPlatform(t.url) || { name: 'Media', icon: 'bi-collection-play-fill', color: '#a078ff' },
-                    thumbnails: []
-                };
-            }
-            groups[groupKey].items.push(t);
-            groups[groupKey].totalBytes += (t.totalBytes || 0);
-            if (t.thumbnail && groups[groupKey].thumbnails.length < 4) {
-                groups[groupKey].thumbnails.push(t.thumbnail);
-            }
-        });
-
-        var groupList = Object.values(groups);
-        if (groupList.length === 0) {
-            container.innerHTML = '<div class="glass-panel p-8 flex flex-col items-center justify-center text-center col-span-full">' +
-                '<div class="w-14 h-14 rounded-2xl bg-primary/10 border border-primary/20 flex items-center justify-center text-primary mb-3">' +
-                '<span class="material-symbols-outlined text-[28px]">playlist_play</span>' +
-                '</div>' +
-                '<h4 class="text-[15px] font-bold text-white">No Channel or Playlist Collections Yet</h4>' +
-                '<p class="text-[12px] text-on-surface-variant mt-1 max-w-md">When you download videos from a TikTok channel (e.g. <code>https://www.tiktok.com/@username</code>), YouTube playlist, or album, they will be organized into collections here with 1-click Play All and batch management.</p>' +
-                '<button type="button" class="btn-primary-glow px-4 py-2 rounded-xl text-[12px] font-bold mt-4 flex items-center gap-1.5" onclick="document.querySelector(\'[data-view=download-center]\').click()"><i class="bi bi-plus-circle-fill"></i> Download Channel or Playlist</button>' +
-                '</div>';
-            return;
-        }
-
-        container.innerHTML = '';
-        groupList.forEach(function(g) {
-            var card = document.createElement('div');
-            card.className = 'glass-panel p-4 rounded-2xl border border-white/10 flex flex-col justify-between gap-3 relative overflow-hidden';
-            
-            // Multi-thumbnail preview header
-            var thumbsHtml = '';
-            if (g.thumbnails.length > 0) {
-                thumbsHtml = '<div class="grid ' + (g.thumbnails.length > 1 ? 'grid-cols-2' : 'grid-cols-1') + ' gap-1 rounded-xl overflow-hidden aspect-video bg-black/40 border border-white/5 relative">';
-                g.thumbnails.slice(0, 4).forEach(function(th) {
-                    thumbsHtml += '<img src="' + escapeHtml(th) + '" class="w-full h-full object-cover" referrerpolicy="no-referrer" onerror="this.src=\'/static/logo.svg\'">';
-                });
-                thumbsHtml += '<div class="absolute bottom-2 right-2 px-2 py-0.5 rounded-md bg-black/75 backdrop-blur-md text-[10px] font-mono text-cyan-300 font-bold">' + g.items.length + ' Videos</div>';
-                thumbsHtml += '</div>';
-            } else {
-                thumbsHtml = '<div class="w-full aspect-video rounded-xl bg-black/40 border border-white/5 flex items-center justify-center text-on-surface-variant/40"><i class="bi ' + g.platform.icon + ' text-[32px]"></i></div>';
-            }
-
-            var humanSize = formatBytes(g.totalBytes);
-
-            card.innerHTML = thumbsHtml +
-                '<div class="flex flex-col gap-1 min-w-0">' +
-                '<div class="flex items-center gap-1.5">' +
-                '<span class="text-[10px] px-2 py-0.5 rounded-full bg-white/5 text-white font-bold flex items-center gap-1"><i class="bi ' + g.platform.icon + '"></i> ' + g.platform.name + '</span>' +
-                '<span class="text-[10px] text-on-surface-variant font-mono">' + humanSize + '</span>' +
-                '</div>' +
-                '<h4 class="text-[14px] font-bold text-white truncate" title="' + escapeHtml(g.title) + '">' + escapeHtml(g.title) + '</h4>' +
-                (g.channel ? '<p class="text-[11px] text-on-surface-variant truncate">Channel: ' + escapeHtml(g.channel) + '</p>' : '') +
-                '</div>' +
-                '<div class="pt-2 border-t border-white/5 flex items-center justify-between gap-2">' +
-                '<button type="button" class="btn-play-collection btn-primary-glow px-3.5 py-1.5 rounded-xl text-[11px] font-bold flex items-center gap-1.5" data-key="' + escapeHtml(g.key) + '"><i class="bi bi-play-fill text-[14px]"></i> Play All (' + g.items.length + ')</button>' +
-                '<button type="button" class="btn-inspect-collection px-3 py-1.5 rounded-xl bg-white/5 hover:bg-white/10 text-white text-[11px] font-semibold flex items-center gap-1" data-key="' + escapeHtml(g.key) + '"><i class="bi bi-collection"></i> View (' + g.items.length + ')</button>' +
-                '</div>';
-
-            container.appendChild(card);
-        });
-    }
-
-    document.addEventListener('click', function(e) {
-        var playBtn = e.target.closest('.btn-play-collection');
-        if (playBtn) {
-            var key = playBtn.getAttribute('data-key');
-            var all = Object.values(tasksMap).filter(function(t) { return t.status === 'completed' && t.mediaId; });
-            var matched = all.filter(function(t) {
-                return (t.playlistTitle && 'pl:' + t.playlistTitle === key) ||
-                       (t.channel && 'ch:' + t.channel === key) ||
-                       (t.uploader && 'up:' + t.uploader === key) ||
-                       (key.startsWith('tt:') && t.url && t.url.indexOf(key.replace('tt:', '')) !== -1) ||
-                       (key === 'single:media');
-            });
-            if (matched.length > 0) {
-                playMediaItem(matched[0]);
-                showToast('Playing collection (' + matched.length + ' videos)', 'info');
-            }
-            return;
-        }
-
-        var inspectBtn = e.target.closest('.btn-inspect-collection');
-        if (inspectBtn) {
-            var key = inspectBtn.getAttribute('data-key');
-            var cleanKey = key.replace(/^(pl:|ch:|up:|tt:|single:)/, '').replace(/ \(.*\)$/, '');
-            if (historySearch) {
-                historySearch.value = cleanKey === 'media' ? '' : cleanKey;
-                switchView('history');
-                renderTasks();
-            }
-            return;
-        }
-    });
 
     function renderTaskGrid(container, items, viewMode, isHistory) {
         if (!container) return;
@@ -2230,7 +2296,7 @@
             var empty = document.createElement('div');
             empty.className = 'glass-panel p-8 flex flex-col items-center justify-center text-center col-span-full';
             var icon = 'bi-inboxes-fill', title = 'No downloads found', desc = 'Paste a video, audio, or M3U8 link above to start downloading.';
-            if (isHistory) { icon = 'bi-collection-play', title = 'Your Media Gallery is empty', desc = 'Completed media downloads will appear here with rich artwork, instant streaming, and Android lockscreen controls.'; }
+            if (isHistory) { icon = 'bi-collection-play', title = 'Your Media Gallery is empty', desc = 'Completed media downloads will appear here with rich artwork, instant streaming, and multi-selection management.'; }
             else if (currentFilter === 'downloading') { icon = 'bi-arrow-down-circle-fill'; title = 'No active downloads'; desc = 'Active downloads will stream real-time speed & progress here.'; }
             else if (currentFilter === 'queued') { icon = 'bi-hourglass-split'; title = 'Queue is clear'; desc = 'No tasks waiting for a worker slot.'; }
             else if (currentFilter === 'completed') { icon = 'bi-check-circle-fill'; title = 'No completed downloads yet'; desc = 'Finished downloads will appear here with media player & save button.'; }
@@ -2244,6 +2310,7 @@
             var card = document.createElement('div');
             card.className = 'task-card glass-panel flex flex-col overflow-hidden';
             card.id = 'task-card-' + t.id;
+            card.setAttribute('data-id', t.id);
 
             var percent = Math.min(100, Math.max(0, t.percent || 0)).toFixed(1);
             var inlineStreamUrl = t.mediaId ? ('/download?id=' + encodeURIComponent(t.mediaId) + '&inline=true') : '#';
@@ -2271,16 +2338,21 @@
             else if (t.status === 'queued') { statusColor = '#fbbf24'; statusBg = 'rgba(251,191,36,.15)'; statusBorder = 'rgba(251,191,36,.3)'; }
 
             var isAudio = (t.format && t.format.indexOf('audio') !== -1) || (t.mediaName && (t.mediaName.endsWith('.mp3') || t.mediaName.endsWith('.m4a')));
+            var isSelected = selectedGalleryItems.has(t.id);
 
-            // =========================================================
             // 1. GALLERY COMPACT MODE (ANDROID 14 MATERIAL YOU CARDS)
-            // =========================================================
             if (isHistory && viewMode === 'compact') {
-                card.className = 'android-gallery-card group';
-                card.innerHTML = '<div class="android-thumb-wrap">' +
+                card.className = 'android-gallery-card group ' + (isSelected ? 'ring-2 ring-primary' : '');
+                var selectBtnHtml = '';
+                if (isGallerySelectMode) {
+                    selectBtnHtml = '<button type="button" class="btn-gallery-select-item absolute top-2.5 right-2.5 z-20 w-7 h-7 rounded-lg ' + (isSelected ? 'bg-primary text-black font-bold shadow-lg ring-2 ring-white/50' : 'bg-black/70 text-white border border-white/20 hover:bg-black/90') + ' flex items-center justify-center text-[13px] transition-all" data-id="' + escapeHtml(t.id) + '"><i class="bi ' + (isSelected ? 'bi-check-square-fill text-black' : 'bi-square') + '"></i></button>';
+                }
+
+                card.innerHTML = '<div class="android-thumb-wrap relative">' +
                     '<img src="' + escapeHtml(thumb) + '" alt="" class="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105" onerror="if(!this.dataset.retry){this.dataset.retry=\'1\';this.src=\'/thumbnail?id=' + encodeURIComponent(t.mediaId ? t.mediaId.split('/')[0] : t.id) + '\';}else{this.src=\'/static/logo.svg\';}">' +
+                    selectBtnHtml +
                     '<div class="android-play-overlay">' +
-                    '<button type="button" class="android-play-btn-circle btn-action-play" data-id="' + t.id + '"><i class="bi bi-play-fill ml-0.5"></i></button>' +
+                    '<button type="button" class="android-play-btn-circle btn-action-play" data-id="' + t.id + '"><i class="bi bi-play-fill ml-0.5 text-white"></i></button>' +
                     '</div>' +
                     '<div class="absolute top-2.5 left-2.5 flex items-center gap-1.5">' +
                     '<span class="text-[10px] px-2 py-0.5 rounded-full bg-black/60 backdrop-blur-md text-white border border-white/10 font-bold flex items-center gap-1"><i class="bi ' + plat.icon + '"></i> ' + plat.name + '</span>' +
@@ -2308,7 +2380,7 @@
 
             // 2. LIST VIEW MODE (Single Row)
             if (viewMode === 'list') {
-                card.className = 'task-card glass-panel p-3 flex items-center justify-between gap-3 overflow-hidden rounded-xl';
+                card.className = 'task-card glass-panel p-3 flex items-center justify-between gap-3 overflow-hidden rounded-xl ' + (isHistory && isSelected ? 'ring-2 ring-primary' : '');
                 var listActions = '';
                 if (t.status === 'completed' && t.mediaId) {
                     listActions += '<button type="button" class="btn-action-play px-3 py-1 rounded-lg bg-primary/15 hover:bg-primary/25 text-primary text-[11px] font-bold transition-all shrink-0" data-id="' + t.id + '"><i class="bi bi-play-fill"></i> Play</button>';
@@ -2326,7 +2398,13 @@
                     listActions += '<button type="button" class="btn-action-dismiss w-7 h-7 rounded-lg bg-white/5 hover:bg-white/15 text-on-surface-variant hover:text-white flex items-center justify-center transition-all shrink-0" data-id="' + t.id + '" title="Clear from recent downloads"><i class="bi bi-x-lg text-[11px]"></i></button>';
                 }
 
-                card.innerHTML = '<div class="w-8 h-8 rounded-lg bg-primary/10 border border-primary/20 flex items-center justify-center text-primary shrink-0"><i class="bi ' + plat.icon + '"></i></div>' +
+                var listSelectHtml = '';
+                if (isHistory && isGallerySelectMode) {
+                    listSelectHtml = '<button type="button" class="btn-gallery-select-item w-7 h-7 rounded-lg ' + (isSelected ? 'bg-primary text-black font-bold ring-2 ring-white/50' : 'bg-white/5 text-on-surface-variant border border-white/10') + ' flex items-center justify-center text-[13px] shrink-0" data-id="' + escapeHtml(t.id) + '"><i class="bi ' + (isSelected ? 'bi-check-square-fill text-black' : 'bi-square') + '"></i></button>';
+                }
+
+                card.innerHTML = listSelectHtml +
+                    '<div class="w-8 h-8 rounded-lg bg-primary/10 border border-primary/20 flex items-center justify-center text-primary shrink-0"><i class="bi ' + plat.icon + '"></i></div>' +
                     '<div class="flex-1 min-w-0">' +
                     '<div class="flex items-center gap-2">' +
                     '<h4 class="text-[12px] font-bold text-white truncate" title="' + escapeHtml(t.title || t.url) + '">' + escapeHtml(t.title || t.url) + '</h4>' +
@@ -2344,7 +2422,7 @@
                 return;
             }
 
-            // 3. COMPACT GRID VIEW MODE FOR DOWNLOAD CENTER
+            // 3. COMPACT GRID VIEW MODE
             if (viewMode === 'compact') {
                 var compactActions = '';
                 if (t.status === 'completed' && t.mediaId) {
@@ -2385,7 +2463,7 @@
                 return;
             }
 
-            // 4. STANDARD GRID VIEW MODE (Rich Cards with Video/Audio Preview)
+            // 4. STANDARD GRID VIEW MODE
             var actionsHtml = '';
             if (t.status === 'queued' || t.status === 'downloading') {
                 actionsHtml += '<button type="button" class="btn-action-cancel px-3 py-1.5 rounded-full bg-white/5 hover:bg-white/10 border border-white/10 text-white text-[11px] font-semibold transition-all" data-id="' + t.id + '"><i class="bi bi-x-circle"></i> Cancel</button>';
@@ -2416,7 +2494,13 @@
                 mediaPreviewHtml = '<div class="mx-3.5 mb-2.5 p-2.5 rounded-xl bg-red-500/10 border border-red-500/20 text-[11px] text-red-200"><div class="font-bold text-red-400 mb-1 flex items-center gap-1"><i class="bi bi-bug-fill"></i> Error Details:</div><pre class="font-mono text-[10px] whitespace-pre-wrap break-all text-red-300">' + escapeHtml(t.errorMessage) + '</pre></div>';
             }
 
-            card.innerHTML = '<div class="p-3.5 flex gap-3 items-start justify-between">' +
+            var stdSelectHtml = '';
+            if (isHistory && isGallerySelectMode) {
+                stdSelectHtml = '<button type="button" class="btn-gallery-select-item absolute top-3 right-3 z-20 w-7 h-7 rounded-lg ' + (isSelected ? 'bg-primary text-black font-bold shadow-lg ring-2 ring-white/50' : 'bg-black/70 text-white border border-white/20 hover:bg-black/90') + ' flex items-center justify-center text-[13px] transition-all" data-id="' + escapeHtml(t.id) + '"><i class="bi ' + (isSelected ? 'bi-check-square-fill text-black' : 'bi-square') + '"></i></button>';
+            }
+
+            card.innerHTML = '<div class="p-3.5 flex gap-3 items-start justify-between relative">' +
+                stdSelectHtml +
                 '<div class="w-9 h-9 rounded-xl bg-primary/10 border border-primary/20 flex items-center justify-center text-primary shrink-0"><i class="bi ' + plat.icon + ' text-[16px]"></i></div>' +
                 '<div class="flex-1 min-w-0">' +
                 '<h4 class="text-[13px] font-bold text-white truncate" title="' + escapeHtml(t.title || t.url) + '">' + escapeHtml(t.title || t.url) + '</h4>' +

@@ -1,15 +1,18 @@
+# ⚡ KV-Download — Universal Multi-Platform Media Extractor & Downloader
+
 <div align="center">
 
-# 🎬 KV Download
+**A blazing-fast, mobile-friendly Go + yt-dlp media downloader with batch queuing, ZIP export, and anti-bot browser impersonation.**
 
-**A fast, mobile-friendly video downloader for social media platforms.**
+[![GitHub Stars](https://img.shields.io/github/stars/vndangkhoa/kv-download?style=flat-square&logo=github&color=gold)](https://github.com/vndangkhoa/kv-download/stargazers)
+[![GitHub Forks](https://img.shields.io/github/forks/vndangkhoa/kv-download?style=flat-square&logo=github&color=blue)](https://github.com/vndangkhoa/kv-download/network/members)
+[![Go Version](https://img.shields.io/badge/Go-1.24+-00ADD8.svg?style=flat-square&logo=go&logoColor=white)](https://go.dev/)
+[![Docker Image](https://img.shields.io/badge/Docker-vndangkhoa%2Fkv--download-2496ED?style=flat-square&logo=docker&logoColor=white)](https://hub.docker.com/repositories/vndangkhoa)
+[![Platform](https://img.shields.io/badge/Platform-amd64%20%7C%20arm64-blue.svg?style=flat-square)](#-docker)
+[![yt-dlp](https://img.shields.io/badge/Engine-yt--dlp%20%2B%20curl__cffi-E50914?style=flat-square)](https://github.com/yt-dlp/yt-dlp)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg?style=flat-square)](LICENSE)
 
-Built with **Go** + **[yt-dlp](https://github.com/yt-dlp/yt-dlp)** — deploy anywhere in one command.
-
-[![Go Version](https://img.shields.io/badge/Go-1.24+-00ADD8.svg?logo=go&logoColor=white)](https://go.dev/)
-[![Docker Hub](https://img.shields.io/badge/Docker-vndangkhoa%2Fkv--download-2496ED?logo=docker&logoColor=white)](https://hub.docker.com/repositories/vndangkhoa)
-[![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Platform](https://img.shields.io/badge/Platform-amd64%20%7C%20arm64-blue.svg)](#docker)
+[Features](#-key-features) • [Comparison](#-why-kv-download) • [Architecture](#-architecture) • [Quickstart](#-quick-start) • [Docker & NAS](#-docker--nas-deployment) • [API](#-api) • [License](#-license)
 
 </div>
 
@@ -17,54 +20,77 @@ Built with **Go** + **[yt-dlp](https://github.com/yt-dlp/yt-dlp)** — deploy an
   <img src="static/images/screenshot.png" alt="KV Download — screenshot" width="90%" style="border-radius: 12px; box-shadow: 0 8px 32px rgba(0,0,0,0.3);">
 </div>
 
-<br>
+---
 
-## 📦 Table of Contents
+## ⚡ Why KV-Download?
 
-- [✨ Features](#-features)
-- [🚀 Quick Start](#-quick-start)
-- [🐳 Docker](#-docker)
-  - [Docker Hub](#docker-hub)
-  - [Forgejo Registry](#forgejo-registry)
-  - [Docker Compose](#docker-compose)
-  - [Build Locally](#build-locally)
-  - [Synology NAS](#synology-nas)
-- [🍪 Cookies (optional)](#-cookies-optional)
-- [⚙️ Configuration](#️-configuration)
-- [📡 API](#-api)
-- [🗂️ File Structure](#️-file-structure)
-- [📄 License](#-license)
-- [☕ Support](#-support)
+Free online video converters are plagued by intrusive popups, shady redirects, low speed throttles, and privacy risks. Self-hosted alternatives are often bloated, resource-heavy, or fail against aggressive TikTok/Instagram anti-bot mechanisms.
+
+**KV-Download** delivers an ultra-clean, ad-free self-hosted gateway powered by a concurrent **Go HTTP core** and **yt-dlp with `curl_cffi` browser impersonation**.
+
+### 📊 Competitive Matrix
+
+| Feature | ⚡ KV-Download | 🌐 Cobalt | 📺 youtube-dl-webui | 🚫 Ad-filled Converters |
+| :--- | :---: | :---: | :---: | :---: |
+| **Backend Engine** | **Compiled Go + yt-dlp** | Node.js + custom scrapers | Python / Node | Blackbox / Cloud |
+| **Anti-Bot Impersonation**| ✅ **curl_cffi (<0.16) bypass**| ⚠️ API-based | ❌ Basic requests | ❌ Cloudflare block |
+| **Multi-URL Batching** | ✅ **Batch paste + ZIP all**| ❌ One-by-one | ⚠️ Queued individually | ❌ One-by-one |
+| **Mobile & Glass UI** | ✅ **Responsive Glassmorphism**| ✅ Clean UI | 🐢 Outdated Web UI | 🛑 Cluttered with Ads |
+| **Automatic Cookie Refresh**| ✅ **Auto-extract & sync** | ❌ Manual config | ❌ Manual upload | ❌ Not supported |
+| **NAS & Homelab Ready** | ✅ **amd64 + arm64 single image**| ⚠️ Heavy multi-container| 🟡 Single arch often | ❌ Cloud only |
+| **Zero Telemetry / Ads** | ✅ **100% Private & Open** | ✅ Open source | ✅ Open source | ❌ Malware / Tracking |
 
 ---
 
-## ✨ Features
+## ✨ Key Features
 
-| 🚀 Multi-URL | 📥 Download queue | 💾 ZIP export |
-|:---:|:---:|:---:|
-| Paste multiple links, download them all in sequence | Real-time per-URL status with progress bar | Bundle all videos into a single download |
+| 🚀 Multi-URL Batch | 📥 Concurrent Queue | 💾 Bundle ZIP Export |
+| :---: | :---: | :---: |
+| Paste multiple URLs at once and download in parallel | Live real-time download progress and status per link | One-click bundle to download all extracted videos as a single `.zip` |
 
-| 📱 Responsive | 👀 Video preview | 🔄 Auto-update |
-|:---:|:---:|:---:|
-| Works on desktop, tablet, and mobile | Watch before you save | yt-dlp refreshes itself every 6 hours |
+| 📱 Responsive Glassmorphism | 👀 In-Browser Preview | 🔄 Auto-Updating Engine |
+| :---: | :---: | :---: |
+| Sleek modern dark mode for desktop, tablet, and mobile | Watch videos directly before downloading | yt-dlp automatically refreshes its extractors every 6 hours |
 
-| 🌙 Dark mode | 🔒 Cookie support | 🐳 One-command deploy |
-|:---:|:---:|:---:|
-| Sleek glassmorphism UI | Auto-refresh + manual `cookies.txt` for TikTok/IG/Twitter | Single Docker image for amd64 & arm64 |
+| 🛡️ Anti-Bot Bypass | 🔄 Smart Retries | 🧹 Automated NAS Cleanup |
+| :---: | :---: | :---: |
+| Browser fingerprint impersonation via `curl_cffi` | Automatic 3× retry on transient network/platform limits | Cron-friendly file expiration for Synology NAS |
 
-| 🛡️ Anti-bot | 🔄 Smart retry | 🧹 Auto cleanup (NAS) |
-|:---:|:---:|:---:|
-| Browser impersonation via curl_cffi | Retries transient failures up to 3× | Cron-based download cleanup for Synology |
+**Supported Platforms:** YouTube · TikTok · Instagram · Twitter / X · Facebook · Vimeo · Reddit · Twitch · [and 1000+ more](https://github.com/yt-dlp/yt-dlp/blob/master/supportedsites.md).
 
-### Supported platforms
+---
 
-YouTube · TikTok · Instagram · Twitter/X · Vimeo · Reddit · [many more](https://github.com/yt-dlp/yt-dlp/blob/master/supportedsites.md)
+## 🏗️ Architecture
+
+```
+┌────────────────────────────────────────────────────────┐
+│             Web Browser / Bookmarklet / API            │
+└───────────────────────────┬────────────────────────────┘
+                            │ HTTP GET/POST (JSON / Stream)
+┌───────────────────────────▼────────────────────────────┐
+│                  KV-Download Go Engine                 │
+│                                                        │
+│  ┌──────────────────────┐    ┌──────────────────────┐  │
+│  │   Goroutine Worker   │    │  In-Memory / SQLite  │  │
+│  │   Batch Queue Pool   │    │     Job Dispatch     │  │
+│  └──────────┬───────────┘    └──────────────────────┘  │
+│             │                                          │
+│  ┌──────────▼───────────────────────────────────────┐  │
+│  │     yt-dlp Engine + curl_cffi Browser TLS        │  │
+│  │       (Auto-Cookie Injector + Proxy Support)     │  │
+│  └──────────────────────────┬───────────────────────┘  │
+└─────────────────────────────┼──────────────────────────┘
+                              │ HTTPS with TLS Camouflage
+┌─────────────────────────────▼──────────────────────────┐
+│     Target Media Platforms (YouTube, TikTok, X...)     │
+└────────────────────────────────────────────────────────┘
+```
 
 ---
 
 ## 🚀 Quick Start
 
-**Prerequisites:** [Go](https://go.dev/dl/), [yt-dlp](https://github.com/yt-dlp/yt-dlp#installation), [FFmpeg](https://ffmpeg.org/download.html)
+**Prerequisites:** [Go 1.24+](https://go.dev/dl/), [yt-dlp](https://github.com/yt-dlp/yt-dlp#installation), [FFmpeg](https://ffmpeg.org/download.html).
 
 ```bash
 git clone https://github.com/vndangkhoa/kv-download.git
@@ -72,199 +98,20 @@ cd kv-download
 ./run.sh
 ```
 
-Then open **http://localhost:9292** 🎉
+Navigate to **http://localhost:9292** in your browser 🎉
 
 ---
 
-## 🐳 Docker
+## 🐳 Docker & NAS Deployment
 
-### Docker Hub
-
-```bash
-docker pull vndangkhoa/kv-download:latest
-docker run -d -p 9292:9292 \
-  -v ./downloads:/download \
-  vndangkhoa/kv-download:latest
-```
-
-### Forgejo Registry
+### Quick Docker Run
 
 ```bash
-docker pull git.khoavo.myds.me/vndangkhoa/kv-download:latest
-docker run -d -p 9292:9292 \
-  -v ./downloads:/download \
-  git.khoavo.myds.me/vndangkhoa/kv-download:latest
+docker run -d   --name kv-download   -p 9292:9292   -v ./downloads:/download   -v ./cookies.txt:/app/cookies.txt   --restart unless-stopped   vndangkhoa/kv-download:latest
 ```
 
 ### Docker Compose
 
-```yaml
-services:
-  kv-download:
-    image: vndangkhoa/kv-download:latest
-    container_name: kv-download
-    restart: unless-stopped
-    ports:
-      - "9292:9292"
-    volumes:
-      - ./downloads:/download
-    environment:
-      - TZ=Asia/Ho_Chi_Minh
-```
-
-```bash
-docker compose up -d
-```
-
-### Build Locally
-
-```bash
-./docker-build.sh
-./docker-run.sh
-```
-
-### Synology NAS
-
-1. Open **Container Manager** (or **Docker** on older DSM)
-2. Create a new project/stack:
-
-```yaml
-services:
-  kv-download:
-    image: vndangkhoa/kv-download:latest
-    container_name: kv-download
-    restart: unless-stopped
-    ports:
-      - "9292:9292"
-    volumes:
-      - /volume2/docker/kv-download/downloads:/download
-      - /volume2/docker/kv-download/cookies.txt:/app/cookies.txt
-    environment:
-      - TZ=Asia/Ho_Chi_Minh
-```
-
-3. Place `cookies.txt` in `/volume2/docker/kv-download/`
-4. Access at `http://NAS_IP:9292`
-
-#### 🧹 Clean up downloads
-
-```bash
-# SSH into NAS, then delete all downloaded files
-rm -rf /volume2/docker/kv-download/downloads/*
-
-# Or delete files older than 7 days
-find /volume2/docker/kv-download/downloads/ -type f -mtime +7 -delete
-```
-
-Automate cleanup via **Task Scheduler** in DSM:
-
-```bash
-# Run daily at 3 AM, delete files older than 7 days
-0 3 * * * find /volume2/docker/kv-download/downloads/ -type f -mtime +7 -delete
-```
-
----
-
-## 🍪 Cookies (optional)
-
-Some platforms (**TikTok**, **Instagram**, **Twitter/X**) require authentication to download private or age-restricted content. Create a `cookies.txt` in Netscape format:
-
-### Option 1: Browser extension
-
-1. Install [Get cookies.txt LOCALLY](https://chromewebstore.google.com/detail/get-cookiestxt-locally/cclelndahbckbenkjhflpdbgdldlbecc) (Chrome) or [cookies.txt](https://addons.mozilla.org/en-US/firefox/addon/cookies-txt/) (Firefox)
-2. Log in to the platform (TikTok, Instagram, etc.)
-3. Click the extension icon and export as `cookies.txt`
-4. Place the file in the project root (same directory as `run.sh`)
-
-### Option 2: yt-dlp browser extraction
-
-yt-dlp can extract cookies directly from your installed browser. **Close the browser first!**
-
-<details>
-<summary>🍎 macOS</summary>
-
-```bash
-pip3 install secretstorage
-
-# Chrome
-yt-dlp --cookies-from-browser chrome --cookies cookies.txt "https://www.youtube.com/"
-# Safari
-yt-dlp --cookies-from-browser safari --cookies cookies.txt "https://www.youtube.com/"
-# Firefox
-yt-dlp --cookies-from-browser firefox --cookies cookies.txt "https://www.youtube.com/"
-```
-</details>
-
-<details>
-<summary>🐧 Linux</summary>
-
-```bash
-# Ubuntu/Debian
-sudo apt install python3-secretstorage
-
-# Chrome
-yt-dlp --cookies-from-browser chrome --cookies cookies.txt "https://www.youtube.com/"
-# Firefox
-yt-dlp --cookies-from-browser firefox --cookies cookies.txt "https://www.youtube.com/"
-```
-</details>
-
-<details>
-<summary>🪟 Windows</summary>
-
-```cmd
-pip install secretstorage
-yt-dlp --cookies-from-browser chrome --cookies cookies.txt "https://www.youtube.com/"
-yt-dlp --cookies-from-browser firefox --cookies cookies.txt "https://www.youtube.com/"
-```
-</details>
-
-> ⚠️ **Note:** The browser must be fully closed (not running in background) when extracting cookies.
-
-### Option 3: Automatic (built-in) 🔄
-
-The app can generate and keep `cookies.txt` fresh by itself — no manual export needed.
-
-```bash
-# Local
-MR_COOKIES_BROWSER=chrome ./run.sh
-
-# Docker
-docker run -d -p 9292:9292 \
-  -e MR_COOKIES_BROWSER=chrome \
-  -v ./downloads:/download \
-  vndangkhoa/kv-download:latest
-```
-
-On startup, and every 24 hours, it extracts cookies from the configured browser if `cookies.txt` is **missing or older than 7 days**. The browser must be installed on the same machine and closed during extraction.
-
-| Variable | Description | Default |
-|---|---|---|
-| `MR_COOKIES_BROWSER` | Browser to extract cookies from (`chrome`, `chromium`, `firefox`, `edge`, `brave`, `opera`, `vivaldi`, `safari`) | _(disabled)_ |
-| `MR_COOKIES_URL` | Page to visit during extraction | `https://www.tiktok.com/` |
-| `MR_COOKIES_MAX_AGE_HOURS` | Refresh interval for stale cookies | `168` (7 days) |
-
-> 💡 On a NAS (no browser), generate cookies once on your PC and copy `cookies.txt` to the mounted volume — the app will use it as-is and keep it updated between runs.
-
-> 🚀 **TikTok & impersonation:** TikTok blocks plain downloads. The app ships with `curl_cffi` (pinned `<0.16` — newer versions break yt-dlp) to impersonate a real browser. If TikTok fails with *"no impersonate target is available"*, run `pip install "curl_cffi>=0.15,<0.16"` — and note the app auto-retries transient anti-bot failures up to 3 times.
-
-### Using cookies.txt
-
-**Local:**
-```bash
-# Place cookies.txt in the project root — run.sh passes it automatically
-./run.sh
-```
-
-**Docker:**
-```bash
-docker run -d -p 9292:9292 \
-  -v ./downloads:/download \
-  -v ./cookies.txt:/app/cookies.txt \
-  vndangkhoa/kv-download:latest
-```
-
-**Docker Compose:**
 ```yaml
 services:
   kv-download:
@@ -280,34 +127,63 @@ services:
       - TZ=Asia/Ho_Chi_Minh
 ```
 
-> 🔒 **Security:** `cookies.txt` contains session tokens. **Never commit it to git or share it publicly.**
->
-> ⚠️ **Note:** `cookies.txt` must be **writable** (don't mount it with `:ro`) — yt-dlp saves cookies back to the file on exit. If it's read-only, downloads will fail with an error.
+```bash
+docker compose up -d
+```
+
+### Synology NAS (Container Manager)
+
+1. Open **Container Manager** on DSM.
+2. Create project `kv-download` mapped to `/volume1/docker/kv-download/`.
+3. Use the Compose snippet above (change volume to `/volume1/docker/kv-download/downloads`).
+4. Place `cookies.txt` in `/volume1/docker/kv-download/` if downloading restricted social media clips.
+5. Set up DSM **Task Scheduler** for auto-cleanup (e.g., delete files older than 7 days):
+   ```bash
+   0 3 * * * find /volume1/docker/kv-download/downloads/ -type f -mtime +7 -delete
+   ```
 
 ---
 
-## ⚙️ Configuration
+## 🍪 Cookies & Anti-Bot Bypass
+
+Some platforms (**TikTok**, **Instagram**, **Twitter/X**) require active session cookies to download HD or restricted media.
+
+### Option 1: Built-in Automatic Cookie Sync 🔄
+
+Set `MR_COOKIES_BROWSER` to auto-extract cookies on startup and every 24 hours:
+
+```bash
+docker run -d -p 9292:9292   -e MR_COOKIES_BROWSER=chrome   -v ./downloads:/download   vndangkhoa/kv-download:latest
+```
+
+### Option 2: Manual `cookies.txt`
+
+1. Use browser extension [Get cookies.txt LOCALLY](https://chromewebstore.google.com/detail/get-cookiestxt-locally/cclelndahbckbenkjhflpdbgdldlbecc) (Chrome) or [cookies.txt](https://addons.mozilla.org/en-US/firefox/addon/cookies-txt/) (Firefox).
+2. Export cookies for your target domain.
+3. Mount the file into `/app/cookies.txt` in the container.
+
+> ⚠️ **Note:** Mount `cookies.txt` as **read-write** (not `:ro`), as yt-dlp updates cookies on exit.
+
+---
+
+## ⚙️ Environment Configuration
 
 | Variable | Description | Default |
 |---|---|---|
-| `MR_DOWNLOAD_DIR` | Main folder where downloads are saved (auto-organized into `videos/` `music/` `photos/`) | `/download` (Docker) / `downloads/` (local) |
-| `MR_PROXY` | Proxy URL passed to yt-dlp via `--proxy` | _(empty)_ |
-| `MR_COOKIES_BROWSER` | Auto-extract cookies from browser (`chrome`, `firefox`, `edge`, ...) | _(disabled)_ |
-| `MR_COOKIES_URL` | Page to visit during cookie extraction | `https://www.tiktok.com/` |
-| `MR_COOKIES_MAX_AGE_HOURS` | Refresh `cookies.txt` when older than this | `168` (7 days) |
+| `MR_DOWNLOAD_DIR` | Main folder where downloads are stored (`videos/`, `music/`, `photos/`) | `/download` (Docker) / `downloads/` |
+| `MR_PROXY` | HTTP/SOCKS5 proxy URL for geo-blocked downloads | _(empty)_ |
+| `MR_COOKIES_BROWSER` | Browser to auto-extract cookies (`chrome`, `firefox`, `edge`, `brave`, `safari`) | _(disabled)_ |
+| `MR_COOKIES_URL` | Check URL during cookie refresh | `https://www.tiktok.com/` |
+| `MR_COOKIES_MAX_AGE_HOURS` | Expiration limit before refreshing cookies | `168` (7 days) |
 
 ---
 
-## 📡 API
+## 📡 REST API & Bookmarklet
 
-### Get video info (JSON)
-
+### Fetch Media Info
+```http
+GET /api/info?url=https://www.youtube.com/watch?v=VIDEO_ID
 ```
-GET /api/info?url=VIDEO_URL
-```
-
-**Returns:**
-
 ```json
 {
   "media": [
@@ -322,61 +198,36 @@ GET /api/info?url=VIDEO_URL
 }
 ```
 
-### Download a video
-
+### Stream Video
+```http
+GET /download?id=abc123/video.mp4
 ```
-GET /download?id=VIDEO_ID
-```
 
-Streams the video file directly.
-
-### Download all as ZIP
-
-```
+### Batch ZIP Archive
+```http
 GET /download/zip?id=ID1&id=ID2&id=ID3
 ```
 
-Bundles multiple videos into a single `.zip` file.
-
-### Bookmarklet
-
-Drag this to your bookmarks bar for one-click downloads from any page:
-
-```
-javascript:(location.href="http://127.0.0.1:9292/fetch?url="+encodeURIComponent(location.href));
+### One-Click Browser Bookmarklet
+Drag this snippet into your browser bookmarks bar:
+```javascript
+javascript:(location.href="http://localhost:9292/fetch?url="+encodeURIComponent(location.href));
 ```
 
 ---
 
-## 🗂️ File Structure
+## 🌟 Star History
 
-```
-<download-dir>/
-├── <hash>/
-│   ├── <video-id>.mp4
-│   └── <video-id>.mp4
-└── json/
-    └── <video-id>.info.json
-```
+[![Star History Chart](https://api.star-history.com/svg?repos=vndangkhoa/kv-download&type=Date)](https://star-history.com/#vndangkhoa/kv-download&Date)
 
 ---
 
 ## 📄 License
 
-[MIT](LICENSE)
-
----
-
-## ☕ Support
-
-If you find KV Download useful, consider supporting its development:
+This project is open source under the [MIT License](LICENSE).
 
 <div align="center">
-  <img src="static/images/donation.jpg" alt="Donation QR code" width="260" style="border-radius: 12px; box-shadow: 0 8px 32px rgba(0,0,0,0.3);">
-</div>
-
----
-
-<div align="center">
-  <sub>Made with ❤️ by <a href="https://github.com/vndangkhoa">vndangkhoa</a> · Star it on <a href="https://github.com/vndangkhoa/kv-download">GitHub</a> ⭐</sub>
+  <img src="static/images/donation.jpg" alt="Donation QR code" width="220" style="border-radius: 12px; box-shadow: 0 8px 32px rgba(0,0,0,0.3);">
+  <br><br>
+  <sub>Crafted with ❤️ by <a href="https://github.com/vndangkhoa">vndangkhoa</a></sub>
 </div>

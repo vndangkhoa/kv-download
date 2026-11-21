@@ -1,9 +1,17 @@
 downloads/
 download/
+degoog-data/
+android-app/
+dist/
+frontend/node_modules/
+frontend/.next/
 .git/
 .github/
 .forgejo/
 .idea/
 .DS_Store
 *.md
+output*.txt
+test2.txt
+kv
 kv-download

@@ -19,8 +19,19 @@ import (
 func main() {
 	// setup routes
 	router := chi.NewRouter()
-	router.Get("/", media.Index)
-	router.Head("/", media.Index)
+	// Setup Next.js Frontend Static Export or legacy fallback
+	outDir, _ := filepath.Abs("frontend/out")
+	hasFrontendOut := false
+	if _, err := os.Stat(outDir); err == nil {
+		hasFrontendOut = true
+		fileServer(router, "/_next", filepath.Join(outDir, "_next"))
+	}
+
+	if !hasFrontendOut {
+		router.Get("/", media.Index)
+		router.Head("/", media.Index)
+	}
+
 	router.Get("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("OK\n"))
@@ -40,11 +51,18 @@ func main() {
 	router.Post("/api/queue/retry", media.QueueRetryHandler)
 	router.Post("/api/queue/clear-completed", media.QueueClearCompletedHandler)
 	router.Post("/api/queue/retry-failed", media.QueueRetryFailedHandler)
+	router.Post("/api/queue/group/cancel", media.QueueGroupCancelHandler)
+	router.Post("/api/queue/group/retry", media.QueueGroupRetryHandler)
+	router.Delete("/api/queue/group", media.QueueGroupDeleteHandler)
 	router.Get("/api/queue/workers", media.QueueGetWorkersHandler)
 	router.Post("/api/queue/workers", media.QueueSetWorkersHandler)
 	router.Delete("/api/queue/item", media.QueueDeleteHandler)
 	router.Get("/api/gallery", media.GalleryHandler)
+	router.Post("/api/gallery/organize", media.GalleryOrganizeHandler)
 	router.Delete("/api/gallery/file", media.GalleryDeleteHandler)
+	router.Post("/api/gallery/delete-multiple", media.GalleryDeleteMultipleHandler)
+	router.Get("/api/settings/storage", media.GetStorageSettingHandler)
+	router.Post("/api/settings/storage", media.SetStorageSettingHandler)
 	router.Get("/download/zip", media.DownloadAllZip)
 	router.Get("/download", media.ServeMedia)
 	router.Head("/download", media.ServeMedia)
@@ -68,6 +86,35 @@ func main() {
 		http.ServeFile(w, r, "static/favicon.ico")
 	})
 
+	if hasFrontendOut {
+		spaHandler := func(w http.ResponseWriter, r *http.Request) {
+			path := strings.TrimPrefix(r.URL.Path, "/")
+			if path == "" {
+				http.ServeFile(w, r, filepath.Join(outDir, "index.html"))
+				return
+			}
+			fullPath := filepath.Join(outDir, path)
+			if fi, err := os.Stat(fullPath); err == nil && !fi.IsDir() {
+				http.ServeFile(w, r, fullPath)
+				return
+			}
+			if fi, err := os.Stat(fullPath + ".html"); err == nil && !fi.IsDir() {
+				http.ServeFile(w, r, fullPath+".html")
+				return
+			}
+			if fi, err := os.Stat(filepath.Join(fullPath, "index.html")); err == nil && !fi.IsDir() {
+				http.ServeFile(w, r, filepath.Join(fullPath, "index.html"))
+				return
+			}
+			// Fallback to index.html for client-side routing
+			http.ServeFile(w, r, filepath.Join(outDir, "index.html"))
+		}
+		router.Get("/", spaHandler)
+		router.Head("/", spaHandler)
+		router.Get("/*", spaHandler)
+		router.Head("/*", spaHandler)
+	}
+
 	// Print out all routes
 	walkFunc := func(method string, route string, handler http.Handler, middlewares ...func(http.Handler) http.Handler) error {
 		log.Info().Msgf("%s %s", method, route)
@@ -81,6 +128,7 @@ func main() {
 	media.GetInstalledVersion()
 	go startYtDlpUpdater()
 	go startCookieRefresher()
+	go media.StartInfoCachePruner()
 
 	port := strings.TrimSpace(os.Getenv("PORT"))
 	if port == "" {

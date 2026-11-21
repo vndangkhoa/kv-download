@@ -103,8 +103,8 @@ func TestOrganizeWithoutChannel(t *testing.T) {
 		t.Fatalf("organizeDownloadedFiles failed: %v", err)
 	}
 
-	expectedVideo := filepath.Join(tempDir, "videos", "sample_clip.mp4")
-	expectedThumb := filepath.Join(tempDir, "thumbnails", "sample_clip.jpg")
+	expectedVideo := filepath.Join(tempDir, "videos", "Single Videos", "sample_clip.mp4")
+	expectedThumb := filepath.Join(tempDir, "thumbnails", "Single Videos", "sample_clip.jpg")
 
 	if _, err := os.Stat(expectedVideo); os.IsNotExist(err) {
 		t.Errorf("expected video at %s, not found", expectedVideo)

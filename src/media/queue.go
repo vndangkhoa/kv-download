@@ -35,26 +35,32 @@ const (
 )
 
 type DownloadTask struct {
-	ID           string     `json:"id"`
-	URL          string     `json:"url"`
-	Title        string     `json:"title"`
-	Thumbnail    string     `json:"thumbnail"`
-	Format       string     `json:"format"`
-	Cookies      string     `json:"cookies,omitempty"`
-	RateLimit    string     `json:"rateLimit,omitempty"`
-	Status       TaskStatus `json:"status"`
-	Percent      float64    `json:"percent"`
-	Speed        string     `json:"speed"`
-	ETA          string     `json:"eta"`
-	Downloaded   int64      `json:"downloaded"`
-	TotalBytes   int64      `json:"totalBytes"`
-	HumanSize    string     `json:"humanSize"`
-	ErrorMessage string     `json:"errorMessage"`
-	MediaID      string     `json:"mediaId"`
+	ID            string     `json:"id"`
+	URL           string     `json:"url"`
+	Title         string     `json:"title"`
+	Thumbnail     string     `json:"thumbnail"`
+	Format        string     `json:"format"`
+	Cookies       string     `json:"cookies,omitempty"`
+	RateLimit     string     `json:"rateLimit,omitempty"`
+	Status        TaskStatus `json:"status"`
+	Percent       float64    `json:"percent"`
+	Speed         string     `json:"speed"`
+	ETA           string     `json:"eta"`
+	Downloaded    int64      `json:"downloaded"`
+	TotalBytes    int64      `json:"totalBytes"`
+	HumanSize     string     `json:"humanSize"`
+	ErrorMessage  string     `json:"errorMessage"`
+	MediaID       string     `json:"mediaId"`
 	MediaName     string     `json:"mediaName"`
 	PlaylistTitle string     `json:"playlistTitle,omitempty"`
 	Channel       string     `json:"channel,omitempty"`
 	Uploader      string     `json:"uploader,omitempty"`
+	GroupID       string     `json:"groupId,omitempty"`
+	GroupTitle    string     `json:"groupTitle,omitempty"`
+	GroupType     string     `json:"groupType,omitempty"`
+	Platform      string     `json:"platform,omitempty"`
+	Duration      string     `json:"duration,omitempty"`
+	InfoJSONPath  string     `json:"infoJsonPath,omitempty"`
 	CreatedAt     time.Time  `json:"createdAt"`
 	CompletedAt   *time.Time `json:"completedAt,omitempty"`
 
@@ -105,9 +111,94 @@ func (q *QueueManager) AddFull(url string, format string, cookies string, rateLi
 	return q.AddFullWithMeta(url, format, cookies, rateLimit, "", "", "", "", "")
 }
 
+func detectPlatformName(rawURL string) string {
+	u := strings.ToLower(strings.TrimSpace(rawURL))
+	switch {
+	case strings.Contains(u, "youtube.com") || strings.Contains(u, "youtu.be"):
+		return "YouTube"
+	case strings.Contains(u, "tiktok.com"):
+		return "TikTok"
+	case strings.Contains(u, "facebook.com") || strings.Contains(u, "fb.watch") || strings.Contains(u, "fb.com"):
+		return "Facebook"
+	case strings.Contains(u, "instagram.com"):
+		return "Instagram"
+	case strings.Contains(u, "twitter.com") || strings.Contains(u, "x.com"):
+		return "X / Twitter"
+	case strings.Contains(u, "soundcloud.com"):
+		return "SoundCloud"
+	case strings.Contains(u, "bilibili.com"):
+		return "Bilibili"
+	case strings.Contains(u, "vimeo.com"):
+		return "Vimeo"
+	case strings.Contains(u, ".m3u8") || strings.Contains(u, "/m3u8"):
+		return "HLS Stream"
+	default:
+		if parsed, err := url.Parse(rawURL); err == nil && parsed.Host != "" {
+			host := strings.TrimPrefix(strings.ToLower(parsed.Host), "www.")
+			return host
+		}
+		return "Direct Link"
+	}
+}
+
+func isChannelOrPlaylistURL(rawURL string) (bool, string) {
+	u := strings.ToLower(strings.TrimSpace(rawURL))
+	if u == "" {
+		return false, ""
+	}
+	if strings.Contains(u, "tiktok.com/@") && !strings.Contains(u, "/video/") && !strings.Contains(u, "/photo/") {
+		return true, "channel"
+	}
+	if strings.Contains(u, "youtube.com/@") ||
+		strings.Contains(u, "youtube.com/channel/") ||
+		strings.Contains(u, "youtube.com/c/") ||
+		strings.Contains(u, "youtube.com/user/") ||
+		strings.Contains(u, "youtu.be/@") ||
+		strings.Contains(u, "space.bilibili.com/") {
+		return true, "channel"
+	}
+	if strings.Contains(u, "list=") ||
+		strings.Contains(u, "/playlist") ||
+		strings.Contains(u, "/mix") ||
+		strings.Contains(u, "/radio") ||
+		(strings.Contains(u, "soundcloud.com/") && (strings.Contains(u, "/sets/") || strings.Contains(u, "/albums/"))) ||
+		strings.Contains(u, "bilibili.com/medialist") ||
+		strings.Contains(u, "imgur.com/a/") ||
+		strings.Contains(u, "imgur.com/gallery/") ||
+		strings.Contains(u, "archive.org/details/") ||
+		strings.Contains(u, "pixeldrain.com/l/") {
+		return true, "playlist"
+	}
+	return false, ""
+}
+
+func formatDurationFloat(sec float64) string {
+	if sec <= 0 {
+		return ""
+	}
+	total := int(sec)
+	h := total / 3600
+	m := (total % 3600) / 60
+	s := total % 60
+	if h > 0 {
+		return strconv.Itoa(h) + ":" + pad2(m) + ":" + pad2(s)
+	}
+	return strconv.Itoa(m) + ":" + pad2(s)
+}
+
+func pad2(v int) string {
+	if v < 10 {
+		return "0" + strconv.Itoa(v)
+	}
+	return strconv.Itoa(v)
+}
+
 func (q *QueueManager) AddFullWithMeta(url string, format string, cookies string, rateLimit string, title string, thumbnail string, playlistTitle string, channel string, uploader string) *DownloadTask {
+	return q.AddTaskWithGroup(url, format, cookies, rateLimit, title, thumbnail, playlistTitle, channel, uploader, "", "", "", "")
+}
+
+func (q *QueueManager) AddTaskWithGroup(rawURL, format, cookies, rateLimit, title, thumbnail, playlistTitle, channel, uploader, groupID, groupTitle, groupType, duration string) *DownloadTask {
 	q.mu.Lock()
-	defer q.mu.Unlock()
 
 	if format == "" {
 		format = "highest"
@@ -116,19 +207,32 @@ func (q *QueueManager) AddFullWithMeta(url string, format string, cookies string
 	initialThumb := thumbnail
 	if initialThumb == "" {
 		ytRegex := regexp.MustCompile(`(?:youtu\.be/|youtube\.com/(?:watch\?v=|shorts/|embed/))([a-zA-Z0-9_-]{11})`)
-		if m := ytRegex.FindStringSubmatch(url); len(m) > 1 {
+		if m := ytRegex.FindStringSubmatch(rawURL); len(m) > 1 {
 			initialThumb = "https://i.ytimg.com/vi/" + m[1] + "/hqdefault.jpg"
 		}
 	}
 
-	taskTitle := title
+	taskTitle := strings.TrimSpace(title)
 	if taskTitle == "" {
-		taskTitle = shortUrl(url)
+		taskTitle = shortUrl(rawURL)
+	}
+
+	infoPath := ""
+	if p, ok := GetCachedInfoJSON(rawURL); ok {
+		infoPath = p
+	}
+
+	if groupID == "" && playlistTitle != "" {
+		groupID = "pl_" + GetMD5Hash(playlistTitle, nil)[:10]
+		groupTitle = playlistTitle
+		if groupType == "" {
+			groupType = "playlist"
+		}
 	}
 
 	task := &DownloadTask{
 		ID:            uuid.New().String(),
-		URL:           url,
+		URL:           rawURL,
 		Title:         taskTitle,
 		Thumbnail:     initialThumb,
 		Format:        format,
@@ -137,6 +241,12 @@ func (q *QueueManager) AddFullWithMeta(url string, format string, cookies string
 		PlaylistTitle: playlistTitle,
 		Channel:       channel,
 		Uploader:      uploader,
+		GroupID:       groupID,
+		GroupTitle:    groupTitle,
+		GroupType:     groupType,
+		Platform:      detectPlatformName(rawURL),
+		Duration:      duration,
+		InfoJSONPath:  infoPath,
 		Status:        StatusQueued,
 		CreatedAt:     time.Now(),
 	}
@@ -144,14 +254,108 @@ func (q *QueueManager) AddFullWithMeta(url string, format string, cookies string
 	q.tasks[task.ID] = task
 	q.queue = append(q.queue, task.ID)
 
-	log.Info().Msgf("Enqueued task %s for URL %s (title: %s, playlist: %s, channel: %s, format: %s, rateLimit: %s, hasCustomCookies: %t)", task.ID, url, taskTitle, playlistTitle, channel, format, rateLimit, cookies != "")
+	log.Info().Msgf("Enqueued task %s for URL %s (title: %s, group: %s [%s], channel: %s, format: %s)", task.ID, rawURL, taskTitle, groupTitle, groupID, channel, format)
 
 	q.saveStateLocked()
+	q.dispatchLocked()
+	needsMeta := (isUrlLike(task.Title) || task.Title == shortUrl(rawURL)) && strings.HasPrefix(rawURL, "http")
+	q.mu.Unlock()
+
 	q.broadcastTaskUpdate(task)
 
-	q.dispatchLocked()
+	if needsMeta {
+		go q.resolveTaskMetadataAsync(task.ID)
+	}
 
 	return task
+}
+
+func (q *QueueManager) resolveTaskMetadataAsync(taskID string) {
+	q.mu.RLock()
+	t, exists := q.tasks[taskID]
+	if !exists || t == nil {
+		q.mu.RUnlock()
+		return
+	}
+	targetURL := t.URL
+	cookies := t.Cookies
+	q.mu.RUnlock()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+	defer cancel()
+
+	args := []string{"--dump-json", "--no-playlist", "--no-warnings", "--no-check-certificates", "--skip-download"}
+	if cookies != "" {
+		if tmpCookie, cleanup, err := CreateEphemeralCookieFile(cookies, targetURL); err == nil && tmpCookie != "" {
+			defer cleanup()
+			args = append(args, "--cookies", tmpCookie)
+		}
+	} else {
+		if workingCookies := getWorkingCookiesPath(getCookiesPath()); workingCookies != "" {
+			args = append(args, "--cookies", workingCookies)
+		}
+	}
+	args = append(args, targetURL)
+
+	cmd := exec.CommandContext(ctx, "yt-dlp", args...)
+	out, err := cmd.Output()
+	if err != nil || len(out) == 0 {
+		return
+	}
+
+	var meta struct {
+		Title          string  `json:"title"`
+		Channel        string  `json:"channel"`
+		Uploader       string  `json:"uploader"`
+		Thumbnail      string  `json:"thumbnail"`
+		Duration       float64 `json:"duration"`
+		DurationString string  `json:"duration_string"`
+	}
+	if json.Unmarshal(out, &meta) != nil {
+		return
+	}
+
+	q.mu.Lock()
+	task, ok := q.tasks[taskID]
+	if !ok || task == nil {
+		q.mu.Unlock()
+		return
+	}
+	changed := false
+	if meta.Title != "" && !isUrlLike(meta.Title) && (isUrlLike(task.Title) || task.Title == shortUrl(task.URL)) {
+		task.Title = meta.Title
+		changed = true
+	}
+	if task.Channel == "" {
+		if meta.Channel != "" {
+			task.Channel = meta.Channel
+			changed = true
+		} else if meta.Uploader != "" {
+			task.Channel = meta.Uploader
+			changed = true
+		}
+	}
+	if task.Thumbnail == "" && meta.Thumbnail != "" {
+		task.Thumbnail = meta.Thumbnail
+		changed = true
+	}
+	if task.Duration == "" {
+		if meta.DurationString != "" {
+			task.Duration = meta.DurationString
+			changed = true
+		} else if meta.Duration > 0 {
+			task.Duration = formatDurationFloat(meta.Duration)
+			changed = true
+		}
+	}
+	if changed {
+		q.saveStateLocked()
+	}
+	q.mu.Unlock()
+
+	if changed {
+		q.broadcastTaskUpdate(task)
+	}
 }
 
 func (q *QueueManager) Cancel(id string) bool {
@@ -371,6 +575,11 @@ func (q *QueueManager) dispatchLocked() {
 	}
 }
 
+func isAudioFormat(format string) bool {
+	f := strings.ToLower(strings.TrimSpace(format))
+	return strings.HasPrefix(f, "audio_") || f == "mp3" || f == "m4a" || f == "flac" || f == "wav" || f == "aac" || f == "opus" || f == "ogg"
+}
+
 func (q *QueueManager) processTask(ctx context.Context, task *DownloadTask) {
 	defer func() {
 		if task.cancelFunc != nil {
@@ -401,7 +610,11 @@ func (q *QueueManager) processTask(ctx context.Context, task *DownloadTask) {
 			if ch == "" {
 				ch = task.PlaylistTitle
 			}
-			_ = organizeDownloadedTaskFiles(dirID, ch, task.Title)
+			grpTitle := task.GroupTitle
+			if grpTitle == "" {
+				grpTitle = task.PlaylistTitle
+			}
+			_ = organizeDownloadedTaskFilesWithGroup(dirID, ch, grpTitle, task.Platform, task.Title)
 			medias, _ := getAllFilesForId(dirID)
 			if len(medias) > 0 {
 				q.completeTask(task, medias[0], dirID)
@@ -424,7 +637,11 @@ func (q *QueueManager) processTask(ctx context.Context, task *DownloadTask) {
 				if ch == "" {
 					ch = task.PlaylistTitle
 				}
-				_ = organizeDownloadedTaskFiles(dirID, ch, task.Title)
+				grpTitle := task.GroupTitle
+				if grpTitle == "" {
+					grpTitle = task.PlaylistTitle
+				}
+				_ = organizeDownloadedTaskFilesWithGroup(dirID, ch, grpTitle, task.Platform, task.Title)
 				medias, _ := getAllFilesForId(dirID)
 				if len(medias) > 0 {
 					q.completeTask(task, medias[0], dirID)
@@ -434,13 +651,14 @@ func (q *QueueManager) processTask(ctx context.Context, task *DownloadTask) {
 		}
 	}
 
-	outputTemplate := targetDir + "%(title,description,uploader_id,id)s.%(ext)s"
+	outputTemplate := targetDir + "%(title,description,uploader_id,id).100B.%(ext)s"
 
 	var lastErr string
 	maxAttempts := 3
 
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		if ctx.Err() == context.Canceled {
+			_ = os.RemoveAll(targetDir)
 			q.mu.Lock()
 			task.Status = StatusCancelled
 			now := time.Now()
@@ -451,47 +669,49 @@ func (q *QueueManager) processTask(ctx context.Context, task *DownloadTask) {
 			return
 		}
 
+		isAudio := isAudioFormat(task.Format)
+
 		args := []string{
 			"--newline",
 			"--progress-template", "%(progress._percent_str)s|%(progress._speed_str)s|%(progress._eta_str)s|%(progress.downloaded_bytes)s|%(progress.total_bytes)s",
 			"--no-playlist",
-			"--trim-filenames", "120",
+			"--write-info-json",
 			"--write-thumbnail",
 			"--convert-thumbnails", "jpg",
-			"--remux-video", "mp4",
-			"--merge-output-format", "mp4",
 			"--output", outputTemplate,
 			"--no-check-certificates",
 			"--extractor-args", "instagram:image_persist=1;threads:app_version=30.0.0",
 		}
 
+		if !isAudio {
+			args = append(args, "--remux-video", "mp4", "--merge-output-format", "mp4")
+			// Yoinks codec scoring: prioritize AVC/H.264 over VP9/AV1, AAC over Opus, MP4 container
+			args = append(args, DefaultFormatSortArgs()...)
+		}
+
 		// Attempt 1: try aria2c if available. Attempt 2+: use native yt-dlp downloader to avoid CDN 403s
-		if attempt == 1 && anpan.HasAria2c() && task.Format != "audio_mp3" && task.Format != "audio_m4a" && !strings.Contains(task.URL, "tiktok.com") {
+		if attempt == 1 && anpan.HasAria2c() && !isAudio && !strings.Contains(task.URL, "tiktok.com") {
 			if ariaArgs := anpan.BuildYtDlpAria2Args(16); ariaArgs != nil {
 				args = append(args, ariaArgs...)
 			}
 		}
 
-		// Apply Format Selection (Highest / Optimal / Normal / Low / Audio)
-		switch task.Format {
-		case "highest", "best", "max", "source":
-			args = append(args, "--format", "bestvideo+bestaudio/best")
-		case "optimal", "1080p":
-			args = append(args, "--format", "bestvideo[height<=1080]+bestaudio/best[height<=1080]/best")
-		case "normal", "720p":
-			args = append(args, "--format", "bestvideo[height<=720]+bestaudio/best[height<=720]/best")
-		case "low", "480p", "360p":
-			args = append(args, "--format", "bestvideo[height<=480]+bestaudio/best[height<=480]/best")
-		case "audio_mp3":
-			args = append(args, "--extract-audio", "--audio-format", "mp3")
-		case "audio_m4a":
-			args = append(args, "--extract-audio", "--audio-format", "m4a")
-		default:
-			if strings.Contains(task.Format, "+") || strings.Contains(task.Format, "[") {
-				args = append(args, "--format", task.Format)
-			} else {
-				args = append(args, "--format", "bestvideo+bestaudio/best")
+		// Apply Format Selection (Highest / 8K / 4K / 2K / 1080p / 720p / 480p / 360p / Audio)
+		if isAudio {
+			switch strings.ToLower(strings.TrimSpace(task.Format)) {
+			case "audio_mp3", "mp3":
+				args = append(args, "--extract-audio", "--audio-format", "mp3", "--audio-quality", "0")
+			case "audio_m4a", "m4a", "aac":
+				args = append(args, "--extract-audio", "--audio-format", "m4a", "--audio-quality", "0")
+			case "audio_flac", "flac":
+				args = append(args, "--extract-audio", "--audio-format", "flac", "--audio-quality", "0")
+			case "audio_wav", "wav":
+				args = append(args, "--extract-audio", "--audio-format", "wav", "--audio-quality", "0")
+			default:
+				args = append(args, "--extract-audio", "--audio-format", "mp3", "--audio-quality", "0")
 			}
+		} else {
+			args = append(args, "--format", BuildYtDlpFormatSelector(task.Format))
 		}
 
 		if impersonate := strings.TrimSpace(os.Getenv("MR_IMPERSONATE")); impersonate != "" {
@@ -523,14 +743,41 @@ func (q *QueueManager) processTask(ctx context.Context, task *DownloadTask) {
 			args = append(args, arg, value)
 		}
 
-		targetURL := task.URL
+		targetURL := strings.TrimSpace(task.URL)
 		if IsFacebookShareURL(targetURL) {
 			if resolved := resolveFbShareURL(targetURL, task.Cookies); resolved != "" && !IsFacebookShareURL(resolved) {
+				if canon := fbCanonicalVideoUrl(resolved); canon != "" {
+					resolved = canon
+				}
 				targetURL = resolved
+			}
+		} else if matched, _ := regexp.MatchString(`^\d{6,}$`, targetURL); matched {
+			targetURL = "https://www.facebook.com/watch/?v=" + targetURL
+		}
+
+		// Fast start: on attempt 1, use cached info-json to skip redundant extractor network requests.
+		// If attempt 1 fails (e.g. pre-signed CDN URL expired), subsequent attempts fall back to live URL.
+		usedInfoJSON := false
+		infoJSONPath := task.InfoJSONPath
+		if infoJSONPath == "" {
+			if cached, ok := GetCachedInfoJSON(targetURL); ok {
+				infoJSONPath = cached
+			} else if cachedOrig, okOrig := GetCachedInfoJSON(task.URL); okOrig {
+				infoJSONPath = cachedOrig
 			}
 		}
 
-		args = append(args, targetURL)
+		if attempt == 1 && infoJSONPath != "" {
+			if fi, err := os.Stat(infoJSONPath); err == nil && !fi.IsDir() && fi.Size() > 0 && time.Since(fi.ModTime()) < 4*time.Hour {
+				usedInfoJSON = true
+				args = append(args, "--load-info-json", infoJSONPath)
+				log.Info().Msgf("[FastStart] Fast start via cached info-json for %s (%s)", task.URL, infoJSONPath)
+			}
+		}
+
+		if !usedInfoJSON {
+			args = append(args, targetURL)
+		}
 
 		cmd := exec.CommandContext(ctx, "yt-dlp", args...)
 		cmd.Env = append(os.Environ(), "PYTHONUNBUFFERED=1")
@@ -562,6 +809,7 @@ func (q *QueueManager) processTask(ctx context.Context, task *DownloadTask) {
 		err = cmd.Wait()
 
 		if ctx.Err() == context.Canceled {
+			_ = os.RemoveAll(targetDir)
 			q.mu.Lock()
 			task.Status = StatusCancelled
 			now := time.Now()
@@ -581,11 +829,25 @@ func (q *QueueManager) processTask(ctx context.Context, task *DownloadTask) {
 			if ch == "" {
 				ch = task.PlaylistTitle
 			}
-			_ = organizeDownloadedTaskFiles(dirID, ch, task.Title)
+			grpTitle := task.GroupTitle
+			if grpTitle == "" {
+				grpTitle = task.PlaylistTitle
+			}
+			_ = organizeDownloadedTaskFilesWithGroup(dirID, ch, grpTitle, task.Platform, task.Title)
 			medias, _ := getAllFilesForId(dirID)
 			if len(medias) > 0 {
-				q.completeTask(task, medias[0], dirID)
-				return
+				var chosen *Media
+				for i := range medias {
+					cat := getCategoryByExt(filepath.Ext(medias[i].Name))
+					if cat == CategoryVideos || cat == CategoryMusic {
+						chosen = &medias[i]
+						break
+					}
+				}
+				if chosen != nil {
+					q.completeTask(task, *chosen, dirID)
+					return
+				}
 			}
 		}
 
@@ -594,10 +856,19 @@ func (q *QueueManager) processTask(ctx context.Context, task *DownloadTask) {
 			errMsg = err.Error()
 		}
 		lastErr = errMsg
+
+		if usedInfoJSON {
+			log.Warn().Msgf("Download with cached info-json failed for %s, invalidating cache to force fresh live extraction on retry: %s", task.URL, errMsg)
+			InvalidateCachedInfoJSON(task.URL)
+			InvalidateCachedInfoJSON(targetURL)
+			task.InfoJSONPath = ""
+		}
+
 		log.Warn().Msgf("Download attempt %d/%d failed for task %s (%s): %s", attempt, maxAttempts, task.ID, task.URL, errMsg)
 		time.Sleep(500 * time.Millisecond)
 	}
 
+	_ = os.RemoveAll(targetDir)
 	if lastErr == "" {
 		lastErr = "No media file generated"
 	}
@@ -612,9 +883,34 @@ func (q *QueueManager) completeTask(task *DownloadTask, item Media, dirID string
 	task.ETA = ""
 	task.MediaID = item.Id
 	task.MediaName = item.Name
-	if task.Title == shortUrl(task.URL) {
-		task.Title = item.Name
+
+	cleanTitle := strings.TrimSuffix(item.Name, filepath.Ext(item.Name))
+	if isUrlLike(task.Title) || task.Title == shortUrl(task.URL) || task.Title == "" {
+		task.Title = cleanTitle
 	}
+
+	// Check TaskIndex metadata for real title, channel, platform & duration
+	if idx, err := readTaskIndex(dirID); err == nil && idx != nil {
+		if idx.Title != "" && !isUrlLike(idx.Title) {
+			task.Title = idx.Title
+		}
+		if idx.Channel != "" && (task.Channel == "" || isUrlLike(task.Channel)) {
+			task.Channel = idx.Channel
+		}
+		if idx.Platform != "" && task.Platform == "" {
+			task.Platform = idx.Platform
+		}
+		if idx.Duration != "" && task.Duration == "" {
+			task.Duration = idx.Duration
+		}
+		if idx.GroupTitle != "" && task.GroupTitle == "" {
+			task.GroupTitle = idx.GroupTitle
+		}
+	}
+	if task.Platform == "" {
+		task.Platform = detectPlatformName(task.URL)
+	}
+
 	task.HumanSize = item.HumanSize
 	task.TotalBytes = item.SizeInBytes
 
@@ -656,7 +952,7 @@ func (q *QueueManager) completeTask(task *DownloadTask, item Media, dirID string
 	q.broadcastTaskUpdate(task)
 
 	// Fetch Synced Lyrics from LRCLIB for Audio Downloads
-	if task.Format == "audio_mp3" || task.Format == "audio_m4a" {
+	if isAudioFormat(task.Format) || strings.HasSuffix(item.Name, ".mp3") || strings.HasSuffix(item.Name, ".m4a") || strings.HasSuffix(item.Name, ".flac") {
 		go func(m Media, rawTitle string) {
 			cleanTitle := strings.TrimSuffix(m.Name, filepath.Ext(m.Name))
 			parts := strings.Split(cleanTitle, " - ")
@@ -778,6 +1074,102 @@ func (q *QueueManager) saveStateLocked() {
 	_ = os.WriteFile(file, data, 0644)
 }
 
+func (q *QueueManager) CancelGroup(groupID string) int {
+	if groupID == "" {
+		return 0
+	}
+	var toCancel []*DownloadTask
+	q.mu.Lock()
+	for _, t := range q.tasks {
+		if t.GroupID == groupID && (t.Status == StatusQueued || t.Status == StatusDownloading) {
+			if t.Status == StatusQueued {
+				t.Status = StatusCancelled
+				now := time.Now()
+				t.CompletedAt = &now
+				q.removeFromQueueLocked(t.ID)
+				toCancel = append(toCancel, t)
+			} else if t.Status == StatusDownloading && t.cancelFunc != nil {
+				t.Status = StatusCancelled
+				t.cancelFunc()
+				now := time.Now()
+				t.CompletedAt = &now
+				toCancel = append(toCancel, t)
+			}
+		}
+	}
+	if len(toCancel) > 0 {
+		q.saveStateLocked()
+	}
+	q.mu.Unlock()
+	for _, t := range toCancel {
+		q.broadcastTaskUpdate(t)
+	}
+	return len(toCancel)
+}
+
+func (q *QueueManager) RetryGroup(groupID string) int {
+	if groupID == "" {
+		return 0
+	}
+	q.mu.Lock()
+	var retried []*DownloadTask
+	for id, t := range q.tasks {
+		if t.GroupID == groupID && (t.Status == StatusFailed || t.Status == StatusCancelled) {
+			t.Status = StatusQueued
+			t.Percent = 0
+			t.Speed = ""
+			t.ETA = ""
+			t.ErrorMessage = ""
+			t.CompletedAt = nil
+			q.queue = append(q.queue, id)
+			retried = append(retried, t)
+		}
+	}
+	if len(retried) > 0 {
+		q.saveStateLocked()
+		q.dispatchLocked()
+	}
+	q.mu.Unlock()
+	for _, t := range retried {
+		q.broadcastTaskUpdate(t)
+	}
+	return len(retried)
+}
+
+func (q *QueueManager) DeleteGroup(groupID string, deleteFiles bool) int {
+	if groupID == "" {
+		return 0
+	}
+	q.mu.Lock()
+	var removedIDs []string
+	for id, t := range q.tasks {
+		if t.GroupID == groupID {
+			if t.cancelFunc != nil {
+				t.cancelFunc()
+			}
+			q.removeFromQueueLocked(id)
+			if deleteFiles {
+				deleteTaskFiles(id, t.MediaID)
+			}
+			delete(q.tasks, id)
+			removedIDs = append(removedIDs, id)
+		}
+	}
+	if len(removedIDs) > 0 {
+		q.saveStateLocked()
+	}
+	tasksSnapshot := q.getTasksLocked()
+	q.mu.Unlock()
+
+	if len(removedIDs) > 0 {
+		GlobalBroadcaster.Broadcast(map[string]interface{}{
+			"type":  "init",
+			"tasks": tasksSnapshot,
+		})
+	}
+	return len(removedIDs)
+}
+
 func (q *QueueManager) LoadState() {
 	q.mu.Lock()
 	defer q.mu.Unlock()
@@ -794,11 +1186,45 @@ func (q *QueueManager) LoadState() {
 	}
 
 	ytRegex := regexp.MustCompile(`(?:youtu\.be/|youtube\.com/(?:watch\?v=|shorts/|embed/))([a-zA-Z0-9_-]{11})`)
+	channelCounts := make(map[string]int)
 
 	for _, t := range tasksList {
 		if t.Status == StatusDownloading || t.Status == StatusQueued {
 			t.Status = StatusFailed
 			t.ErrorMessage = "Interrupted by server restart"
+		}
+
+		if t.Platform == "" && t.URL != "" {
+			t.Platform = detectPlatformName(t.URL)
+		}
+
+		// Backfill real metadata from TaskIndex if available
+		dirID := GetMD5Hash(t.URL, map[string]string{"format": t.Format})
+		if idx, err := readTaskIndex(dirID); err == nil && idx != nil {
+			if idx.Title != "" && !isUrlLike(idx.Title) && (t.Title == "" || isUrlLike(t.Title) || t.Title == shortUrl(t.URL)) {
+				t.Title = idx.Title
+			}
+			if idx.Channel != "" && t.Channel == "" {
+				t.Channel = idx.Channel
+			}
+			if idx.Duration != "" && t.Duration == "" {
+				t.Duration = idx.Duration
+			}
+			if idx.GroupTitle != "" && t.GroupTitle == "" {
+				t.GroupTitle = idx.GroupTitle
+			}
+		}
+
+		if t.GroupID == "" && t.PlaylistTitle != "" {
+			t.GroupID = "pl_" + GetMD5Hash(t.PlaylistTitle, nil)[:10]
+			t.GroupTitle = t.PlaylistTitle
+			if t.GroupType == "" {
+				t.GroupType = "playlist"
+			}
+		}
+
+		if t.Channel != "" && !isUrlLike(t.Channel) {
+			channelCounts[t.Channel]++
 		}
 
 		// Ensure thumbnail is available for existing tasks
@@ -810,17 +1236,17 @@ func (q *QueueManager) LoadState() {
 
 		if t.Status == StatusCompleted && t.MediaID != "" {
 			parts := strings.Split(t.MediaID, "/")
-			dirID := parts[0]
+			mediaDirID := parts[0]
 			if len(parts) == 3 {
-				dirID = parts[1]
+				mediaDirID = parts[1]
 			}
-			targetDir := resolveMediaDirectory(dirID)
+			targetDir := resolveMediaDirectory(mediaDirID)
 			foundThumb := false
 			if entries, err := os.ReadDir(targetDir); err == nil {
 				for _, e := range entries {
 					l := strings.ToLower(e.Name())
 					if !e.IsDir() && (strings.HasSuffix(l, ".jpg") || strings.HasSuffix(l, ".jpeg") || strings.HasSuffix(l, ".png") || strings.HasSuffix(l, ".webp")) {
-						t.Thumbnail = "/thumbnail?id=" + url.QueryEscape(dirID+"/"+e.Name())
+						t.Thumbnail = "/thumbnail?id=" + url.QueryEscape(mediaDirID+"/"+e.Name())
 						foundThumb = true
 						break
 					}
@@ -832,21 +1258,73 @@ func (q *QueueManager) LoadState() {
 				videoExt := strings.ToLower(filepath.Ext(t.MediaName))
 				if videoExt == ".mp4" || videoExt == ".mkv" || videoExt == ".webm" || videoExt == ".m4v" || videoExt == ".mov" || videoExt == ".avi" {
 					if err := ExtractThumbnailFromVideo(videoPath, thumbPath); err == nil {
-						t.Thumbnail = "/thumbnail?id=" + url.QueryEscape(dirID+"/thumb.jpg")
+						t.Thumbnail = "/thumbnail?id=" + url.QueryEscape(mediaDirID+"/thumb.jpg")
 					}
 				} else if videoExt == ".mp3" || videoExt == ".m4a" || videoExt == ".flac" {
 					if err := ExtractThumbnailFromAudio(videoPath, thumbPath); err == nil {
-						t.Thumbnail = "/thumbnail?id=" + url.QueryEscape(dirID+"/thumb.jpg")
+						t.Thumbnail = "/thumbnail?id=" + url.QueryEscape(mediaDirID+"/thumb.jpg")
 					}
 				}
 			}
 			if t.Thumbnail == "" {
-				t.Thumbnail = "/thumbnail?id=" + url.QueryEscape(dirID)
+				t.Thumbnail = "/thumbnail?id=" + url.QueryEscape(mediaDirID)
 			}
 		}
 
 		q.tasks[t.ID] = t
 	}
+
+	// Second pass: group ungrouped tasks sharing a channel (>= 2 items)
+	var ungrouped []*DownloadTask
+	for _, t := range tasksList {
+		if t.GroupID == "" && t.Channel != "" && channelCounts[t.Channel] >= 2 {
+			t.GroupID = "ch_" + GetMD5Hash(t.Channel, nil)[:10]
+			t.GroupTitle = t.Channel
+			t.GroupType = "channel"
+		}
+		if t.GroupID == "" {
+			ungrouped = append(ungrouped, t)
+		}
+	}
+
+	// Third pass: cluster remaining ungrouped tasks enqueued within 60s with same platform & format
+	if len(ungrouped) >= 2 {
+		sort.Slice(ungrouped, func(i, j int) bool {
+			return ungrouped[i].CreatedAt.Before(ungrouped[j].CreatedAt)
+		})
+		var cluster []*DownloadTask
+		flushCluster := func() {
+			if len(cluster) >= 2 {
+				gid := "batch_" + GetMD5Hash(cluster[0].ID, nil)[:10]
+				pName := cluster[0].Platform
+				if pName == "" {
+					pName = "Media"
+				}
+				gTitle := pName + " Batch (" + strconv.Itoa(len(cluster)) + " items)"
+				for _, item := range cluster {
+					item.GroupID = gid
+					item.GroupTitle = gTitle
+					item.GroupType = "batch"
+				}
+			}
+			cluster = nil
+		}
+		for _, t := range ungrouped {
+			if len(cluster) == 0 {
+				cluster = append(cluster, t)
+				continue
+			}
+			prev := cluster[len(cluster)-1]
+			if t.Platform == prev.Platform && t.Format == prev.Format && t.CreatedAt.Sub(prev.CreatedAt) <= 60*time.Second {
+				cluster = append(cluster, t)
+			} else {
+				flushCluster()
+				cluster = append(cluster, t)
+			}
+		}
+		flushCluster()
+	}
+
 	log.Info().Msgf("Loaded %d download tasks from persistent queue state", len(q.tasks))
 }
 
@@ -861,11 +1339,13 @@ func shortUrl(u string) string {
 
 func QueueAddHandler(w http.ResponseWriter, r *http.Request) {
 	type QueueItemInput struct {
-		URL       string `json:"url"`
-		Title     string `json:"title"`
-		Thumbnail string `json:"thumbnail"`
-		Uploader  string `json:"uploader"`
-		Channel   string `json:"channel"`
+		URL          string `json:"url"`
+		Title        string `json:"title"`
+		Thumbnail    string `json:"thumbnail"`
+		Uploader     string `json:"uploader"`
+		Channel      string `json:"channel"`
+		Duration     string `json:"duration,omitempty"`
+		InfoJSONPath string `json:"infoJsonPath,omitempty"`
 	}
 
 	var body struct {
@@ -877,6 +1357,9 @@ func QueueAddHandler(w http.ResponseWriter, r *http.Request) {
 		RateLimit     string           `json:"rateLimit"`
 		PlaylistTitle string           `json:"playlistTitle"`
 		Channel       string           `json:"channel"`
+		GroupID       string           `json:"groupId"`
+		GroupTitle    string           `json:"groupTitle"`
+		GroupType     string           `json:"groupType"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -886,6 +1369,31 @@ func QueueAddHandler(w http.ResponseWriter, r *http.Request) {
 
 	addedTasks := make([]*DownloadTask, 0)
 	if len(body.Items) > 0 {
+		gid := strings.TrimSpace(body.GroupID)
+		gTitle := strings.TrimSpace(body.GroupTitle)
+		gType := strings.TrimSpace(body.GroupType)
+		if gTitle == "" {
+			gTitle = strings.TrimSpace(body.PlaylistTitle)
+		}
+		if gTitle == "" {
+			gTitle = strings.TrimSpace(body.Channel)
+		}
+		if len(body.Items) > 1 && gid == "" {
+			gid = "grp_" + uuid.New().String()[:8]
+			if gType == "" {
+				if body.PlaylistTitle != "" {
+					gType = "playlist"
+				} else if body.Channel != "" {
+					gType = "channel"
+				} else {
+					gType = "batch"
+				}
+			}
+			if gTitle == "" {
+				gTitle = detectPlatformName(body.Items[0].URL) + " Batch (" + strconv.Itoa(len(body.Items)) + " items)"
+			}
+		}
+
 		for _, it := range body.Items {
 			u := strings.TrimSpace(it.URL)
 			if u != "" {
@@ -894,7 +1402,10 @@ func QueueAddHandler(w http.ResponseWriter, r *http.Request) {
 					ch = body.Channel
 				}
 				up := it.Uploader
-				task := GlobalQueue.AddFullWithMeta(u, body.Format, body.Cookies, body.RateLimit, it.Title, it.Thumbnail, body.PlaylistTitle, ch, up)
+				task := GlobalQueue.AddTaskWithGroup(u, body.Format, body.Cookies, body.RateLimit, it.Title, it.Thumbnail, body.PlaylistTitle, ch, up, gid, gTitle, gType, it.Duration)
+				if it.InfoJSONPath != "" {
+					task.InfoJSONPath = it.InfoJSONPath
+				}
 				addedTasks = append(addedTasks, task)
 			}
 		}
@@ -903,64 +1414,100 @@ func QueueAddHandler(w http.ResponseWriter, r *http.Request) {
 		if len(urls) == 0 && body.URL != "" {
 			urls = []string{body.URL}
 		}
+
+		cleanUrls := make([]string, 0, len(urls))
 		for _, u := range urls {
 			u = strings.TrimSpace(u)
 			if u != "" {
-				if IsFacebookProfileURL(u) {
-					if scan, _, err := ScrapeFacebookVideos(u, body.Cookies, 1, 100); err == nil && scan != nil && len(scan.Entries) > 0 {
-						for _, entry := range scan.Entries {
-							tTitle := entry.Title
-							if tTitle == "" {
-								tTitle = scan.Title
+				cleanUrls = append(cleanUrls, u)
+			}
+		}
+
+		batchGID := strings.TrimSpace(body.GroupID)
+		batchTitle := strings.TrimSpace(body.GroupTitle)
+		batchType := strings.TrimSpace(body.GroupType)
+		if len(cleanUrls) > 1 && batchGID == "" {
+			batchGID = "batch_" + uuid.New().String()[:8]
+			if batchType == "" {
+				batchType = "batch"
+			}
+			if batchTitle == "" {
+				batchTitle = strings.TrimSpace(body.PlaylistTitle)
+			}
+			if batchTitle == "" {
+				batchTitle = detectPlatformName(cleanUrls[0]) + " Batch (" + strconv.Itoa(len(cleanUrls)) + " links)"
+			}
+		}
+
+		for _, u := range cleanUrls {
+			if IsFacebookProfileURL(u) {
+				if scan, _, err := ScrapeFacebookVideos(u, body.Cookies, 1, 100); err == nil && scan != nil && len(scan.Entries) > 0 {
+					gid := "grp_" + GetMD5Hash(u, nil)[:10]
+					gTitle := scan.Title
+					if gTitle == "" {
+						gTitle = scan.Channel
+					}
+					if gTitle == "" {
+						gTitle = "Facebook Videos"
+					}
+					for _, entry := range scan.Entries {
+						tTitle := entry.Title
+						if tTitle == "" {
+							tTitle = scan.Title
+						}
+						task := GlobalQueue.AddTaskWithGroup(entry.Url, body.Format, body.Cookies, body.RateLimit, tTitle, entry.Thumbnail, scan.Title, scan.Channel, "", gid, gTitle, "channel", formatDurationFloat(entry.Duration))
+						addedTasks = append(addedTasks, task)
+					}
+					continue
+				}
+			}
+
+			isPlaylist, plKind := isChannelOrPlaylistURL(u)
+			if isPlaylist {
+				if scan, _, err := ScanUrlWithPagination(u, body.Cookies, 1, 200); err == nil && scan != nil && len(scan.Entries) > 0 {
+					plTitle := scan.Title
+					if plTitle == "" {
+						plTitle = body.PlaylistTitle
+					}
+					plChannel := scan.Channel
+					if plChannel == "" {
+						plChannel = scan.Uploader
+					}
+					if plChannel == "" {
+						plChannel = body.Channel
+					}
+					gid := "grp_" + GetMD5Hash(u, nil)[:10]
+					gTitle := plTitle
+					if gTitle == "" {
+						gTitle = plChannel
+					}
+					if gTitle == "" {
+						gTitle = detectPlatformName(u) + " Collection"
+					}
+					for _, entry := range scan.Entries {
+						eUrl := entry.Url
+						if eUrl == "" && entry.Id != "" {
+							if strings.Contains(u, "youtube.com") || strings.Contains(u, "youtu.be") {
+								eUrl = "https://www.youtube.com/watch?v=" + entry.Id
+							} else {
+								eUrl = entry.Id
 							}
-							task := GlobalQueue.AddFullWithMeta(entry.Url, body.Format, body.Cookies, body.RateLimit, tTitle, entry.Thumbnail, scan.Title, scan.Channel, "")
+						}
+						if eUrl != "" {
+							eThumb := entry.Thumbnail
+							if eThumb == "" && len(entry.Thumbnails) > 0 {
+								eThumb = entry.Thumbnails[len(entry.Thumbnails)-1].URL
+							}
+							task := GlobalQueue.AddTaskWithGroup(eUrl, body.Format, body.Cookies, body.RateLimit, entry.Title, eThumb, plTitle, plChannel, entry.Uploader, gid, gTitle, plKind, formatDurationFloat(entry.Duration))
 							addedTasks = append(addedTasks, task)
 						}
-						continue
 					}
+					continue
 				}
-
-				isPlaylist := strings.Contains(u, "list=") || strings.Contains(u, "/playlist") ||
-					(strings.Contains(u, "tiktok.com/@") && !strings.Contains(u, "/video/") && !strings.Contains(u, "/photo/")) ||
-					(strings.Contains(u, "soundcloud.com/") && (strings.Contains(u, "/sets/") || strings.Contains(u, "/albums/")))
-				if isPlaylist {
-					if scan, _, err := ScanUrlWithPagination(u, body.Cookies, 1, 200); err == nil && scan != nil && len(scan.Entries) > 0 {
-						plTitle := scan.Title
-						if plTitle == "" {
-							plTitle = body.PlaylistTitle
-						}
-						plChannel := scan.Channel
-						if plChannel == "" {
-							plChannel = scan.Uploader
-						}
-						if plChannel == "" {
-							plChannel = body.Channel
-						}
-						for _, entry := range scan.Entries {
-							eUrl := entry.Url
-							if eUrl == "" && entry.Id != "" {
-								if strings.Contains(u, "youtube.com") || strings.Contains(u, "youtu.be") {
-									eUrl = "https://www.youtube.com/watch?v=" + entry.Id
-								} else {
-									eUrl = entry.Id
-								}
-							}
-							if eUrl != "" {
-								eThumb := entry.Thumbnail
-								if eThumb == "" && len(entry.Thumbnails) > 0 {
-									eThumb = entry.Thumbnails[len(entry.Thumbnails)-1].URL
-								}
-								task := GlobalQueue.AddFullWithMeta(eUrl, body.Format, body.Cookies, body.RateLimit, entry.Title, eThumb, plTitle, plChannel, entry.Uploader)
-								addedTasks = append(addedTasks, task)
-							}
-						}
-						continue
-					}
-				}
-
-				task := GlobalQueue.AddFullWithMeta(u, body.Format, body.Cookies, body.RateLimit, "", "", body.PlaylistTitle, body.Channel, "")
-				addedTasks = append(addedTasks, task)
 			}
+
+			task := GlobalQueue.AddTaskWithGroup(u, body.Format, body.Cookies, body.RateLimit, "", "", body.PlaylistTitle, body.Channel, "", batchGID, batchTitle, batchType, "")
+			addedTasks = append(addedTasks, task)
 		}
 	}
 
@@ -973,6 +1520,49 @@ func QueueAddHandler(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
 		"success": true,
 		"tasks":   addedTasks,
+	})
+}
+
+func QueueGroupCancelHandler(w http.ResponseWriter, r *http.Request) {
+	groupID := strings.TrimSpace(r.URL.Query().Get("groupId"))
+	if groupID == "" {
+		http.Error(w, "Missing groupId", http.StatusBadRequest)
+		return
+	}
+	cancelled := GlobalQueue.CancelGroup(groupID)
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"success":   true,
+		"cancelled": cancelled,
+	})
+}
+
+func QueueGroupRetryHandler(w http.ResponseWriter, r *http.Request) {
+	groupID := strings.TrimSpace(r.URL.Query().Get("groupId"))
+	if groupID == "" {
+		http.Error(w, "Missing groupId", http.StatusBadRequest)
+		return
+	}
+	retried := GlobalQueue.RetryGroup(groupID)
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"retried": retried,
+	})
+}
+
+func QueueGroupDeleteHandler(w http.ResponseWriter, r *http.Request) {
+	groupID := strings.TrimSpace(r.URL.Query().Get("groupId"))
+	if groupID == "" {
+		http.Error(w, "Missing groupId", http.StatusBadRequest)
+		return
+	}
+	deleteFiles := r.URL.Query().Get("deleteFiles") == "true"
+	removed := GlobalQueue.DeleteGroup(groupID, deleteFiles)
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"removed": removed,
 	})
 }
 

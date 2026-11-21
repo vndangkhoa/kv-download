@@ -220,9 +220,18 @@ echo ""
 # ==============================================================================
 # Build if requested
 # ==============================================================================
+if [ ! -d "frontend/out" ] || [ "$FAST_BUILD" = true ]; then
+    echo -e "${CYAN}[BUILD] Compiling Next.js frontend...${RESET}"
+    if command -v pnpm >/dev/null 2>&1; then
+        (cd frontend && pnpm install --silent && pnpm build)
+    elif command -v npm >/dev/null 2>&1; then
+        (cd frontend && npm install --silent && npm run build)
+    fi
+fi
+
 if [ "$FAST_BUILD" = true ]; then
-    echo -e "${CYAN}[BUILD] Compiling KV Download...${RESET}"
-    if "$GO_CMD" build $BUILD_ARGS -o kv-download src/main.go 2>&1; then
+    echo -e "${CYAN}[BUILD] Compiling KV Download Go binary...${RESET}"
+    if "$GO_CMD" build $BUILD_ARGS -o kv-download ./src 2>&1; then
         echo -e "${GREEN}[BUILD] ✓ Binary ready: ./kv-download${RESET}"
         chmod +x kv-download
     else
@@ -254,5 +263,5 @@ if [ "$FAST_BUILD" = true ] && [ -x "./kv-download" ]; then
     exec ./kv-download
 else
     echo -e "${YELLOW}[DEV MODE] Running with go run (slower, use --build for release)${RESET}"
-    exec "$GO_CMD" run ./src/main.go
+    exec "$GO_CMD" run ./src
 fi

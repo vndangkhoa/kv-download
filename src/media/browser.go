@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -23,14 +24,18 @@ import (
 )
 
 type SniffedMediaItem struct {
-	ID        string `json:"id"`
-	Type      string `json:"type"`      // "video", "audio", "image", "stream"
-	Format    string `json:"format"`    // "M3U8 HLS", "MP4 1080p", "MP3", "JPG Image", etc.
-	Title     string `json:"title"`     // Title or filename
-	URL       string `json:"url"`       // Stream or direct media URL
-	Thumbnail string `json:"thumbnail"` // Thumbnail if available
-	Size      string `json:"size"`      // Formatted size if known
-	Source    string `json:"source"`    // "page_dom", "network_sniffer", "ytdlp_engine", "anpan_extractor"
+	ID         string `json:"id"`
+	Type       string `json:"type"`      // "video", "audio", "image", "stream"
+	Format     string `json:"format"`    // "M3U8 HLS", "MP4 1080p", "MP3", "JPG Image", etc.
+	Title      string `json:"title"`     // Title or filename
+	URL        string `json:"url"`       // Stream or direct media URL
+	Thumbnail  string `json:"thumbnail"` // Thumbnail if available
+	Size       string `json:"size"`      // Formatted size if known
+	Source     string `json:"source"`    // "page_dom", "network_sniffer", "ytdlp_engine", "anpan_extractor"
+	Duration   string `json:"duration,omitempty"`
+	Resolution string `json:"resolution,omitempty"`
+	Channel    string `json:"channel,omitempty"`
+	IsStream   bool   `json:"isStream,omitempty"`
 }
 
 type BrowserSniffResult struct {
@@ -55,12 +60,95 @@ func sanitizeMediaUrl(raw string) string {
 	return u
 }
 
+func normalizeSniffUrl(raw string) string {
+	cleaned := sanitizeMediaUrl(raw)
+	if cleaned == "" {
+		return ""
+	}
+	u, err := url.Parse(cleaned)
+	if err != nil {
+		return cleaned
+	}
+	u.Fragment = ""
+	q := u.Query()
+	for k := range q {
+		lk := strings.ToLower(k)
+		if strings.HasPrefix(lk, "utm_") || lk == "fbclid" || lk == "gclid" || lk == "mc_cid" || lk == "mc_eid" || lk == "ref" {
+			q.Del(k)
+		}
+	}
+	u.RawQuery = q.Encode()
+	return u.String()
+}
+
+var smallDimRegex = regexp.MustCompile(`(?i)(?:^|[/_\-=])(\d{2,4})x(\d{2,4})(?:[/_\-.&]|$)`)
+
+func isNoisyImageURL(raw string) bool {
+	lower := strings.ToLower(raw)
+	for _, kw := range []string{
+		"avatar", "logo", "icon", "badge", "emoji", "spinner", "loader",
+		"placeholder", "banner", "favicon", "sprite", "1x1", "pixel",
+		"tracking", "/ads/", "doubleclick", "googlesyndication", ".svg",
+		"/data/avatars/", "/smilies/", "/stickers/", "gravatar.com",
+	} {
+		if strings.Contains(lower, kw) {
+			return true
+		}
+	}
+	if m := smallDimRegex.FindStringSubmatch(lower); len(m) == 3 {
+		var w, h int
+		_, _ = fmt.Sscanf(m[1], "%d", &w)
+		_, _ = fmt.Sscanf(m[2], "%d", &h)
+		if (w > 0 && w < 240) || (h > 0 && h < 180) {
+			return true
+		}
+	}
+	return false
+}
+
+func deriveCleanMediaTitle(rawURL, candidate, pageTitle, prefix string, index int) string {
+	c := strings.TrimSpace(html.UnescapeString(candidate))
+	if c != "" && !strings.EqualFold(c, pageTitle) && !strings.HasPrefix(c, "http") {
+		return c
+	}
+	base := filepath.Base(strings.Split(rawURL, "?")[0])
+	stem := strings.TrimSuffix(base, filepath.Ext(base))
+	// Check if stem looks meaningful (not just random hex/numeric/master/index)
+	isGenericStem := stem == "" || stem == "master" || stem == "index" || stem == "playlist" || stem == "video" || len(stem) <= 3
+	if !isGenericStem {
+		hexLike, _ := regexp.MatchString(`^[0-9a-fA-F_-]{16,}$`, stem)
+		numLike, _ := regexp.MatchString(`^\d+$`, stem)
+		if !hexLike && !numLike {
+			clean := strings.ReplaceAll(strings.ReplaceAll(stem, "-", " "), "_", " ")
+			if pageTitle != "" && !strings.HasPrefix(pageTitle, "http") && len(clean) < 28 {
+				return fmt.Sprintf("%s — %s", pageTitle, clean)
+			}
+			return clean
+		}
+	}
+	if pageTitle != "" && !strings.HasPrefix(pageTitle, "http") {
+		if index > 1 {
+			return fmt.Sprintf("%s (%s #%d)", pageTitle, prefix, index)
+		}
+		return pageTitle
+	}
+	if index > 1 {
+		return fmt.Sprintf("%s #%d", prefix, index)
+	}
+	return base
+}
+
 var (
-	m3u8Regex  = regexp.MustCompile(`https?://[^\s"'<>\\]+?\.(?:m3u8|mpd)(?:\?[^\s"'<>\\]*)?`)
-	videoRegex = regexp.MustCompile(`https?://[^\s"'<>\\]+?\.(?:mp4|webm|mkv|mov|avi|flv)(?:\?[^\s"'<>\\]*)?`)
-	audioRegex = regexp.MustCompile(`https?://[^\s"'<>\\]+?\.(?:mp3|m4a|aac|wav|flac|ogg|oga)(?:\?[^\s"'<>\\]*)?`)
-	imageRegex = regexp.MustCompile(`https?://[^\s"'<>\\]+?\.(?:jpg|jpeg|png|webp|gif|avif)(?:\?[^\s"'<>\\]*)?`)
-	titleRegex = regexp.MustCompile(`(?i)<title[^>]*>([^<]+)</title>`)
+	m3u8Regex       = regexp.MustCompile(`https?://[^\s"'<>\\]+?\.(?:m3u8|mpd)(?:\?[^\s"'<>\\]*)?`)
+	videoRegex      = regexp.MustCompile(`https?://[^\s"'<>\\]+?\.(?:mp4|webm|mkv|mov|avi|flv)(?:\?[^\s"'<>\\]*)?`)
+	audioRegex      = regexp.MustCompile(`https?://[^\s"'<>\\]+?\.(?:mp3|m4a|aac|wav|flac|ogg|oga)(?:\?[^\s"'<>\\]*)?`)
+	imgTagRegex     = regexp.MustCompile(`(?is)<img\s+[^>]*?(?:src|data-src|data-original)=["']([^"']+)["'][^>]*>`)
+	altAttrRegex    = regexp.MustCompile(`(?is)(?:alt|title)=["']([^"']+)["']`)
+	ogVideoRegex    = regexp.MustCompile(`(?i)<meta\s+[^>]*?(?:property|name)=["'](?:og:video(?::url|:secure_url)?|twitter:player:stream)["'][^>]*?content=["']([^"']+)["']`)
+	jsonLdScriptRe  = regexp.MustCompile(`(?is)<script[^>]*type=["']application/ld\+json["'][^>]*>([\s\S]*?)</script>`)
+	titleRegex      = regexp.MustCompile(`(?i)<title[^>]*>([^<]+)</title>`)
+	ytEmbedRegex    = regexp.MustCompile(`(?:youtube\.com/(?:embed/|v/|watch\?v=|shorts/)|youtu\.be/)([a-zA-Z0-9_-]{11})`)
+	vimeoEmbedRegex = regexp.MustCompile(`(?:vimeo\.com/(?:video/)?|player\.vimeo\.com/video/)(\d+)`)
 )
 
 // BrowserSniffHandler deeply analyzes any URL and extracts all playable videos, m3u8 streams, audio, and photos.
@@ -74,6 +162,7 @@ func BrowserSniffHandler(w http.ResponseWriter, r *http.Request) {
 	if !strings.HasPrefix(targetUrl, "http://") && !strings.HasPrefix(targetUrl, "https://") {
 		targetUrl = "https://" + targetUrl
 	}
+	normalizedTarget := normalizeSniffUrl(targetUrl)
 
 	w.Header().Set("Content-Type", "application/json")
 
@@ -85,29 +174,30 @@ func BrowserSniffHandler(w http.ResponseWriter, r *http.Request) {
 	seenURLs := make(map[string]bool)
 	var mu sync.Mutex
 
-	addItem := func(item SniffedMediaItem) {
+	addItem := func(item SniffedMediaItem) bool {
 		mu.Lock()
 		defer mu.Unlock()
-		cleanURL := sanitizeMediaUrl(item.URL)
-		if cleanURL == "" || seenURLs[cleanURL] {
-			return
+		normURL := normalizeSniffUrl(item.URL)
+		if normURL == "" || seenURLs[normURL] {
+			return false
 		}
-		seenURLs[cleanURL] = true
-		item.URL = cleanURL
+		seenURLs[normURL] = true
+		item.URL = sanitizeMediaUrl(item.URL)
 		if item.ID == "" {
 			item.ID = fmt.Sprintf("sniff_%d", len(result.Items)+1)
 		}
 		if item.Title == "" {
-			item.Title = filepath.Base(strings.Split(cleanURL, "?")[0])
+			item.Title = filepath.Base(strings.Split(item.URL, "?")[0])
 		}
 		if item.Thumbnail != "" {
 			item.Thumbnail = sanitizeMediaUrl(item.Thumbnail)
 		}
 		result.Items = append(result.Items, item)
+		return true
 	}
 
 	// 1. Check with Anpan Multi-source Engines (Archive, Booru, Cloud, Pixiv, Imgur)
-	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), 12*time.Second)
 	defer cancel()
 
 	if target, err := anpan.InspectTarget(ctx, targetUrl); err == nil && target != nil {
@@ -143,7 +233,7 @@ func BrowserSniffHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// 2. Fetch page HTML and inspect for embedded media and M3U8
+	// 2. Fetch page HTML and inspect for embedded media, JSON-LD VideoObject, og:video and M3U8
 	req, errReq := http.NewRequestWithContext(ctx, "GET", targetUrl, nil)
 	if errReq == nil {
 		req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
@@ -158,82 +248,238 @@ func BrowserSniffHandler(w http.ResponseWriter, r *http.Request) {
 			// Extract Page Title
 			if result.PageTitle == "" {
 				if m := titleRegex.FindStringSubmatch(htmlStr); len(m) > 1 {
-					result.PageTitle = strings.TrimSpace(m[1])
+					result.PageTitle = strings.TrimSpace(html.UnescapeString(m[1]))
 				}
 			}
 
-			// M3U8 Streams
+			// Extract OpenGraph Image and Title
+			ogImage := ""
+			ogImgRe := regexp.MustCompile(`(?i)<meta\s+[^>]*?(?:property|name)=["'](?:og:image|twitter:image)["'][^>]*?content=["']([^"']+)["']`)
+			if m := ogImgRe.FindStringSubmatch(htmlStr); len(m) > 1 {
+				ogImage = sanitizeMediaUrl(m[1])
+			}
+			ogTitleRe := regexp.MustCompile(`(?i)<meta\s+[^>]*?(?:property|name)=["'](?:og:title|twitter:title)["'][^>]*?content=["']([^"']+)["']`)
+			if m := ogTitleRe.FindStringSubmatch(htmlStr); len(m) > 1 {
+				tVal := strings.TrimSpace(html.UnescapeString(m[1]))
+				if result.PageTitle == "" || (len(tVal) > len(result.PageTitle) && len(tVal) < 140) {
+					result.PageTitle = tVal
+				}
+			}
+
+			videoIdx := 0
+
+			// OpenGraph Video tags
+			for _, m := range ogVideoRegex.FindAllStringSubmatch(htmlStr, -1) {
+				if len(m) > 1 {
+					videoIdx++
+					vUrl := sanitizeMediaUrl(m[1])
+					addItem(SniffedMediaItem{
+						Type:      "video",
+						Format:    "OpenGraph Video",
+						Title:     deriveCleanMediaTitle(vUrl, "", result.PageTitle, "Video", videoIdx),
+						URL:       vUrl,
+						Thumbnail: ogImage,
+						IsStream:  strings.Contains(strings.ToLower(vUrl), ".m3u8"),
+						Source:    "og_video",
+					})
+				}
+			}
+
+			// JSON-LD VideoObject extraction
+			for _, ldMatch := range jsonLdScriptRe.FindAllStringSubmatch(htmlStr, -1) {
+				if len(ldMatch) < 2 {
+					continue
+				}
+				var vo struct {
+					Type         string `json:"@type"`
+					Name         string `json:"name"`
+					ContentURL   string `json:"contentUrl"`
+					EmbedURL     string `json:"embedUrl"`
+					ThumbnailURL string `json:"thumbnailUrl"`
+					Duration     string `json:"duration"`
+				}
+				if json.Unmarshal([]byte(ldMatch[1]), &vo) == nil && strings.EqualFold(vo.Type, "VideoObject") {
+					targetMedia := vo.ContentURL
+					if targetMedia == "" {
+						targetMedia = vo.EmbedURL
+					}
+					if targetMedia != "" {
+						videoIdx++
+						thumb := vo.ThumbnailURL
+						if thumb == "" {
+							thumb = ogImage
+						}
+						addItem(SniffedMediaItem{
+							Type:      "video",
+							Format:    "VideoObject",
+							Title:     deriveCleanMediaTitle(targetMedia, vo.Name, result.PageTitle, "Video", videoIdx),
+							URL:       targetMedia,
+							Thumbnail: thumb,
+							Duration:  vo.Duration,
+							IsStream:  strings.Contains(strings.ToLower(targetMedia), ".m3u8"),
+							Source:    "json_ld",
+						})
+					}
+				}
+			}
+
+			// M3U8 / MPD Streams
 			for _, m := range m3u8Regex.FindAllString(htmlStr, -1) {
 				clean := strings.ReplaceAll(m, `\/`, `/`)
+				videoIdx++
+				fmtLabel := "M3U8 HLS Stream"
+				if strings.Contains(strings.ToLower(clean), ".mpd") {
+					fmtLabel = "MPEG-DASH Stream"
+				}
 				addItem(SniffedMediaItem{
-					Type:   "video",
-					Format: "M3U8 HLS Stream",
-					Title:  "HLS Video Stream (.m3u8)",
-					URL:    clean,
-					Source: "stream_sniffer",
+					Type:      "video",
+					Format:    fmtLabel,
+					Title:     deriveCleanMediaTitle(clean, "", result.PageTitle, "Stream", videoIdx),
+					URL:       clean,
+					Thumbnail: ogImage,
+					IsStream:  true,
+					Source:    "stream_sniffer",
 				})
 			}
 
 			// Direct Videos
 			for _, m := range videoRegex.FindAllString(htmlStr, -1) {
 				clean := strings.ReplaceAll(m, `\/`, `/`)
+				videoIdx++
 				addItem(SniffedMediaItem{
-					Type:   "video",
-					Format: strings.ToUpper(strings.TrimPrefix(filepath.Ext(strings.Split(clean, "?")[0]), ".")),
-					Title:  filepath.Base(strings.Split(clean, "?")[0]),
-					URL:    clean,
-					Source: "video_sniffer",
+					Type:      "video",
+					Format:    strings.ToUpper(strings.TrimPrefix(filepath.Ext(strings.Split(clean, "?")[0]), ".")),
+					Title:     deriveCleanMediaTitle(clean, "", result.PageTitle, "Video", videoIdx),
+					URL:       clean,
+					Thumbnail: ogImage,
+					Source:    "video_sniffer",
 				})
 			}
 
 			// Direct Audio
+			audioIdx := 0
 			for _, m := range audioRegex.FindAllString(htmlStr, -1) {
 				clean := strings.ReplaceAll(m, `\/`, `/`)
+				audioIdx++
 				addItem(SniffedMediaItem{
-					Type:   "audio",
-					Format: strings.ToUpper(strings.TrimPrefix(filepath.Ext(strings.Split(clean, "?")[0]), ".")),
-					Title:  filepath.Base(strings.Split(clean, "?")[0]),
-					URL:    clean,
-					Source: "audio_sniffer",
+					Type:      "audio",
+					Format:    strings.ToUpper(strings.TrimPrefix(filepath.Ext(strings.Split(clean, "?")[0]), ".")),
+					Title:     deriveCleanMediaTitle(clean, "", result.PageTitle, "Audio", audioIdx),
+					URL:       clean,
+					Thumbnail: ogImage,
+					Source:    "audio_sniffer",
 				})
 			}
 
-			// High-res Images
-			imgMatches := imageRegex.FindAllString(htmlStr, -1)
-			for idx, m := range imgMatches {
-				if idx >= 15 {
-					break
+			// Embedded YouTube Video Detection
+			for _, ym := range ytEmbedRegex.FindAllStringSubmatch(htmlStr, -1) {
+				if len(ym) > 1 {
+					vid := ym[1]
+					ytUrl := "https://www.youtube.com/watch?v=" + vid
+					videoIdx++
+					addItem(SniffedMediaItem{
+						Type:      "video",
+						Format:    "YouTube Embed",
+						Title:     deriveCleanMediaTitle(ytUrl, "", result.PageTitle, "YouTube Clip", videoIdx),
+						URL:       ytUrl,
+						Thumbnail: "https://i.ytimg.com/vi/" + vid + "/hqdefault.jpg",
+						Source:    "youtube_embed",
+					})
 				}
-				clean := strings.ReplaceAll(m, `\/`, `/`)
-				addItem(SniffedMediaItem{
-					Type:      "image",
-					Format:    strings.ToUpper(strings.TrimPrefix(filepath.Ext(strings.Split(clean, "?")[0]), ".")),
-					Title:     filepath.Base(strings.Split(clean, "?")[0]),
-					URL:       clean,
-					Thumbnail: clean,
-					Source:    "image_sniffer",
-				})
+			}
+
+			// Embedded Vimeo Detection
+			for _, vm := range vimeoEmbedRegex.FindAllStringSubmatch(htmlStr, -1) {
+				if len(vm) > 1 {
+					videoIdx++
+					vUrl := "https://vimeo.com/" + vm[1]
+					addItem(SniffedMediaItem{
+						Type:      "video",
+						Format:    "Vimeo Embed",
+						Title:     deriveCleanMediaTitle(vUrl, "", result.PageTitle, "Vimeo Clip", videoIdx),
+						URL:       vUrl,
+						Thumbnail: ogImage,
+						Source:    "vimeo_embed",
+					})
+				}
 			}
 
 			// Extracted page links helper
 			for _, l := range ExtractPageLinks(htmlStr, targetUrl) {
+				if normalizeSniffUrl(l) == normalizedTarget {
+					continue
+				}
+				videoIdx++
 				addItem(SniffedMediaItem{
-					Type:   "video",
-					Format: "Stream Link",
-					Title:  "Extracted Video Stream",
-					URL:    l,
-					Source: "page_extractor",
+					Type:      "video",
+					Format:    "Extracted Stream",
+					Title:     deriveCleanMediaTitle(l, "", result.PageTitle, "Stream", videoIdx),
+					URL:       l,
+					Thumbnail: ogImage,
+					IsStream:  strings.Contains(strings.ToLower(l), ".m3u8"),
+					Source:    "page_extractor",
 				})
+			}
+
+			// Filtered high-res <img> tags only (avoid scraping noisy JSON/CSS/avatar/icon URLs)
+			parsedPage, _ := url.Parse(targetUrl)
+			imgAdded := 0
+			for _, match := range imgTagRegex.FindAllStringSubmatch(htmlStr, -1) {
+				if imgAdded >= 12 {
+					break
+				}
+				if len(match) < 2 {
+					continue
+				}
+				rawImg := strings.TrimSpace(html.UnescapeString(match[1]))
+				if rawImg == "" || strings.HasPrefix(rawImg, "data:") {
+					continue
+				}
+				if parsedPage != nil {
+					if relU, errU := url.Parse(rawImg); errU == nil {
+						rawImg = parsedPage.ResolveReference(relU).String()
+					}
+				}
+				if isNoisyImageURL(rawImg) {
+					continue
+				}
+				imgTitle := ""
+				if am := altAttrRegex.FindStringSubmatch(match[0]); len(am) > 1 {
+					imgTitle = strings.TrimSpace(html.UnescapeString(am[1]))
+				}
+				if imgTitle == "" {
+					base := filepath.Base(strings.Split(rawImg, "?")[0])
+					imgTitle = strings.TrimSuffix(base, filepath.Ext(base))
+				}
+				if addItem(SniffedMediaItem{
+					Type:      "image",
+					Format:    strings.ToUpper(strings.TrimPrefix(filepath.Ext(strings.Split(rawImg, "?")[0]), ".")),
+					Title:     imgTitle,
+					URL:       rawImg,
+					Thumbnail: rawImg,
+					Source:    "image_sniffer",
+				}) {
+					imgAdded++
+				}
 			}
 		}
 	}
 
-	// 3. Scan with yt-dlp metadata engine (in background timeout)
+	// 3. Scan with yt-dlp metadata engine — ignore generic fallback entry where entry.Url == targetUrl with no formats
 	if scanInfo, _, errScan := ScanUrl(targetUrl, ""); errScan == nil && scanInfo != nil {
-		if result.PageTitle == "" && scanInfo.Title != "" {
+		if (result.PageTitle == "" || result.PageTitle == targetUrl) && scanInfo.Title != "" && scanInfo.Title != targetUrl {
 			result.PageTitle = scanInfo.Title
 		}
 		for _, entry := range scanInfo.Entries {
+			if entry.Url == "" {
+				continue
+			}
+			isSameDummy := normalizeSniffUrl(entry.Url) == normalizedTarget &&
+				len(entry.Formats) == 0 && entry.Duration <= 0 && !scanInfo.IsPlaylist &&
+				(entry.Title == "" || entry.Title == targetUrl)
+			if isSameDummy {
+				continue
+			}
 			thumb := entry.Thumbnail
 			if thumb == "" && len(entry.Thumbnails) > 0 {
 				thumb = entry.Thumbnails[len(entry.Thumbnails)-1].URL
@@ -244,10 +490,34 @@ func BrowserSniffHandler(w http.ResponseWriter, r *http.Request) {
 				Title:     entry.Title,
 				URL:       entry.Url,
 				Thumbnail: thumb,
+				Duration:  formatDurationFloat(entry.Duration),
+				Channel:   entry.Channel,
 				Source:    "ytdlp_engine",
 			})
 		}
 	}
+
+	// Sort items: videos/streams first, then audio, then images
+	typeRank := func(t string) int {
+		switch t {
+		case "video", "stream":
+			return 0
+		case "audio":
+			return 1
+		default:
+			return 2
+		}
+	}
+	sort.SliceStable(result.Items, func(i, j int) bool {
+		ri, rj := typeRank(result.Items[i].Type), typeRank(result.Items[j].Type)
+		if ri != rj {
+			return ri < rj
+		}
+		if result.Items[i].IsStream != result.Items[j].IsStream {
+			return result.Items[i].IsStream
+		}
+		return false
+	})
 
 	if result.PageTitle == "" {
 		result.PageTitle = targetUrl
@@ -269,6 +539,14 @@ func BrowserProxyHandler(w http.ResponseWriter, r *http.Request) {
 		targetUrl = "https://" + targetUrl
 	}
 
+	if strings.Contains(targetUrl, "youtube.com") || strings.Contains(targetUrl, "youtu.be") {
+		if strings.HasPrefix(targetUrl, "https://www.youtube.com") {
+			targetUrl = strings.Replace(targetUrl, "https://www.youtube.com", "https://m.youtube.com", 1)
+		} else if strings.HasPrefix(targetUrl, "https://youtube.com") {
+			targetUrl = strings.Replace(targetUrl, "https://youtube.com", "https://m.youtube.com", 1)
+		}
+	}
+
 	parsedTarget, errUrl := url.Parse(targetUrl)
 	if errUrl != nil {
 		http.Error(w, "Invalid URL", http.StatusBadRequest)
@@ -282,7 +560,11 @@ func BrowserProxyHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Forward client Accept and user agent
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
+	ua := "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+	if strings.Contains(targetUrl, "m.youtube.com") {
+		ua = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1"
+	}
+	req.Header.Set("User-Agent", ua)
 	req.Header.Set("Accept", r.Header.Get("Accept"))
 	req.Header.Set("Accept-Language", "en-US,en;q=0.9,vi;q=0.8")
 	req.Header.Set("Sec-Fetch-Dest", "document")
@@ -353,32 +635,62 @@ func BrowserProxyHandler(w http.ResponseWriter, r *http.Request) {
 <base href="%s">
 <script>
 (function() {
+  var currentPageUrl = %q;
   var detected = new Set();
-  function report(url, type, format, title) {
-    if (!url || typeof url !== 'string' || detected.has(url)) return;
-    detected.add(url);
+  function normUrl(u) {
+    try {
+      var parsed = new URL(u, document.baseURI);
+      parsed.hash = '';
+      ['utm_source','utm_medium','utm_campaign','utm_term','utm_content','fbclid','gclid'].forEach(function(k){ parsed.searchParams.delete(k); });
+      return parsed.toString();
+    } catch(e) { return u; }
+  }
+  function report(url, type, format, title, thumb, isStream) {
+    if (!url || typeof url !== 'string') return;
+    if (url.startsWith('blob:') || url.startsWith('data:')) return;
+    var key = normUrl(url);
+    if (detected.has(key)) return;
+    detected.add(key);
     try {
       window.parent.postMessage({
         type: 'kv_browser_media_found',
         item: {
-          url: url,
+          url: key,
           type: type || 'video',
           format: format || 'Media Stream',
-          title: title || document.title || url,
-          thumbnail: ''
+          title: title || document.title || key,
+          thumbnail: thumb || '',
+          isStream: !!isStream
         }
       }, '*');
     } catch(e) {}
   }
 
+  // Intercept link clicks so browsing stays inside KV Download proxy
+  document.addEventListener('click', function(e) {
+    var a = e.target && e.target.closest ? e.target.closest('a[href]') : null;
+    if (!a) return;
+    var rawHref = a.getAttribute('href') || '';
+    if (!rawHref || rawHref.startsWith('#') || rawHref.startsWith('javascript:') || rawHref.startsWith('mailto:') || rawHref.startsWith('tel:') || a.hasAttribute('download')) return;
+    if (a.getAttribute('target') === '_blank' && e.ctrlKey) return;
+    try {
+      var resolved = new URL(rawHref, currentPageUrl).toString();
+      if (resolved.startsWith('http://') || resolved.startsWith('https://')) {
+        e.preventDefault();
+        window.parent.postMessage({ type: 'kv_browser_navigate', url: resolved }, '*');
+        window.location.href = '/api/browser/proxy?url=' + encodeURIComponent(resolved);
+      }
+    } catch(err) {}
+  }, true);
+
   // Hook XHR
   var origOpen = XMLHttpRequest.prototype.open;
   XMLHttpRequest.prototype.open = function(method, url) {
     if (typeof url === 'string') {
-      if (/\.m3u8/i.test(url)) report(url, 'video', 'M3U8 HLS', document.title);
-      else if (/\.mpd/i.test(url)) report(url, 'video', 'DASH Stream', document.title);
-      else if (/\.(mp4|webm|mkv)/i.test(url)) report(url, 'video', 'MP4 Video', document.title);
-      else if (/\.(mp3|m4a|aac|flac)/i.test(url)) report(url, 'audio', 'Audio Stream', document.title);
+      if (/\.m3u8/i.test(url)) report(url, 'video', 'M3U8 HLS', document.title, '', true);
+      else if (/\.mpd/i.test(url)) report(url, 'video', 'DASH Stream', document.title, '', true);
+      else if (/\.(mp4|webm|mkv)(\?|$)/i.test(url)) report(url, 'video', 'MP4 Video', document.title, '', false);
+      else if (/\.(mp3|m4a|aac|flac)(\?|$)/i.test(url)) report(url, 'audio', 'Audio Stream', document.title, '', false);
     }
     return origOpen.apply(this, arguments);
   };
@@ -389,10 +701,10 @@ func BrowserProxyHandler(w http.ResponseWriter, r *http.Request) {
     window.fetch = function(input, init) {
       var url = typeof input === 'string' ? input : (input && input.url ? input.url : '');
       if (url) {
-        if (/\.m3u8/i.test(url)) report(url, 'video', 'M3U8 HLS', document.title);
-        else if (/\.mpd/i.test(url)) report(url, 'video', 'DASH Stream', document.title);
-        else if (/\.(mp4|webm|mkv)/i.test(url)) report(url, 'video', 'MP4 Video', document.title);
-        else if (/\.(mp3|m4a|aac|flac)/i.test(url)) report(url, 'audio', 'Audio Stream', document.title);
+        if (/\.m3u8/i.test(url)) report(url, 'video', 'M3U8 HLS', document.title, '', true);
+        else if (/\.mpd/i.test(url)) report(url, 'video', 'DASH Stream', document.title, '', true);
+        else if (/\.(mp4|webm|mkv)(\?|$)/i.test(url)) report(url, 'video', 'MP4 Video', document.title, '', false);
+        else if (/\.(mp3|m4a|aac|flac)(\?|$)/i.test(url)) report(url, 'audio', 'Audio Stream', document.title, '', false);
       }
       return origFetch.apply(this, arguments);
     };
@@ -400,12 +712,75 @@ func BrowserProxyHandler(w http.ResponseWriter, r *http.Request) {
 
   // Periodic DOM Scan
   function scanDOM() {
-    document.querySelectorAll('video, audio, source').forEach(function(el) {
-      var src = el.src || el.currentSrc || el.getAttribute('data-src');
-      if (src && !src.startsWith('blob:')) {
-        var isAudio = el.tagName === 'AUDIO' || /\.(mp3|m4a|aac|flac)/i.test(src);
-        report(src, isAudio ? 'audio' : 'video', isAudio ? 'Audio Stream' : 'Video Stream', document.title);
+    var ogImage = '';
+    var metaOg = document.querySelector('meta[property="og:image"], meta[name="twitter:image"]');
+    if (metaOg) ogImage = metaOg.getAttribute('content') || '';
+
+    // 1. Direct HTML5 media elements
+    document.querySelectorAll('video').forEach(function(el, idx) {
+      var src = el.src || el.currentSrc || el.getAttribute('data-src') || el.getAttribute('data-url') || el.getAttribute('data-mp4') || el.getAttribute('data-hls');
+      if (!src) {
+        var sourceEl = el.querySelector('source');
+        if (sourceEl) src = sourceEl.src || sourceEl.getAttribute('data-src') || sourceEl.getAttribute('src');
       }
+      var poster = el.poster || el.getAttribute('poster') || el.getAttribute('data-poster') || ogImage;
+      var title = el.getAttribute('title') || el.getAttribute('aria-label') || '';
+      if (!title) {
+        var container = el.closest('figure, article, .thread-content, .video-container, div');
+        if (container) {
+          var heading = container.querySelector('h1, h2, h3, h4, figcaption, .title');
+          if (heading) title = heading.textContent.trim();
+        }
+      }
+      if (!title) title = (document.title || 'Video') + (idx > 0 ? ' #' + (idx + 1) : '');
+      if (src) {
+        var isHls = /\.m3u8/i.test(src);
+        report(src, 'video', isHls ? 'M3U8 HLS' : 'MP4 Video', title, poster, isHls);
+      }
+    });
+
+    document.querySelectorAll('audio').forEach(function(el) {
+      var src = el.src || el.currentSrc || el.getAttribute('data-src') || el.getAttribute('data-url');
+      if (!src) {
+        var sourceEl = el.querySelector('source');
+        if (sourceEl) src = sourceEl.src || sourceEl.getAttribute('data-src') || sourceEl.getAttribute('src');
+      }
+      if (src) {
+        report(src, 'audio', 'Audio Stream', document.title, ogImage, false);
+      }
+    });
+
+    // 2. Embedded Video Iframes (YouTube, Facebook, Vimeo, TikTok, etc.)
+    document.querySelectorAll('iframe').forEach(function(el) {
+      var s = el.src || el.getAttribute('data-src') || el.getAttribute('src');
+      if (!s) return;
+      if (s.indexOf('youtube.com/embed/') !== -1 || s.indexOf('youtu.be') !== -1 || s.indexOf('youtube-nocookie.com/embed/') !== -1) {
+        var m = s.match(/(?:embed\/|v=|\/vi?\/)([a-zA-Z0-9_-]{11})/);
+        if (m) {
+          var vid = m[1];
+          report('https://www.youtube.com/watch?v=' + vid, 'video', 'YouTube Embed', document.title || 'YouTube Video', 'https://i.ytimg.com/vi/' + vid + '/hqdefault.jpg', false);
+        }
+      } else if (s.indexOf('facebook.com/plugins/video.php') !== -1) {
+        var match = s.match(/href=([^&]+)/);
+        if (match) {
+          report(decodeURIComponent(match[1]), 'video', 'Facebook Video', 'Facebook Video', ogImage, false);
+        }
+      } else if (s.indexOf('player.vimeo.com') !== -1 || s.indexOf('vimeo.com') !== -1) {
+        report(s, 'video', 'Vimeo Video', document.title || 'Vimeo Video', ogImage, false);
+      } else if (s.indexOf('tiktok.com') !== -1) {
+        report(s, 'video', 'TikTok Video', document.title || 'TikTok Video', ogImage, false);
+      }
+    });
+
+    // 3. Large content images only (ignore avatars, icons, banners & feed thumbnails < 320px)
+    document.querySelectorAll('article img, figure img, .content img, .thread-content img').forEach(function(img) {
+      var isrc = img.src || img.getAttribute('data-src') || img.getAttribute('data-original');
+      if (!isrc || (!isrc.startsWith('http://') && !isrc.startsWith('https://'))) return;
+      if (/(?:icon|logo|avatar|badge|emoji|btn|button|banner|sprite|svg)/i.test(isrc)) return;
+      if (img.naturalWidth > 0 && img.naturalWidth < 320) return;
+      var fname = isrc.split('?')[0].split('/').pop() || 'Image';
+      var ititle = (img.alt && img.alt.trim()) || (img.title && img.title.trim()) || fname;
+      report(isrc, 'image', 'Image', ititle, isrc, false);
     });
   }
 
@@ -414,24 +789,45 @@ func BrowserProxyHandler(w http.ResponseWriter, r *http.Request) {
     scanDOM();
     setInterval(scanDOM, 2500);
     try {
-      window.parent.postMessage({ type: 'kv_browser_page_loaded', url: window.location.href, title: document.title }, '*');
+      window.parent.postMessage({ type: 'kv_browser_page_loaded', url: currentPageUrl, title: document.title }, '*');
     } catch(e) {}
   });
 })();
 </script>
-`, baseUrl)
+`, baseUrl, targetUrl)
 
-	html := string(bodyBytes)
-	headIdx := strings.Index(strings.ToLower(html), "<head>")
+	htmlStr := string(bodyBytes)
+	// When host required DoH fallback (ISP DNS blocked), proxy same-host images/assets via /api/browser/proxy-media
+	if isHostDNSBlocked(parsedTarget.Hostname()) {
+		subRe := regexp.MustCompile(`(?i)\b(src|poster)=["'](https?://[^"']+|/[^"']+)["']`)
+		htmlStr = subRe.ReplaceAllStringFunc(htmlStr, func(m string) string {
+			sub := subRe.FindStringSubmatch(m)
+			if len(sub) != 3 {
+				return m
+			}
+			attr := sub[1]
+			rawVal := sub[2]
+			if strings.HasPrefix(rawVal, "/api/browser/") || strings.HasPrefix(rawVal, "data:") {
+				return m
+			}
+			abs := rawVal
+			if strings.HasPrefix(rawVal, "/") {
+				abs = parsedTarget.Scheme + "://" + parsedTarget.Host + rawVal
+			}
+			return fmt.Sprintf(`%s="/api/browser/proxy-media?asset=1&url=%s"`, attr, url.QueryEscape(abs))
+		})
+	}
+
+	headIdx := strings.Index(strings.ToLower(htmlStr), "<head>")
 	if headIdx != -1 {
-		html = html[:headIdx+6] + snifferScript + html[headIdx+6:]
+		htmlStr = htmlStr[:headIdx+6] + snifferScript + htmlStr[headIdx+6:]
 	} else {
-		html = snifferScript + html
+		htmlStr = snifferScript + htmlStr
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(resp.StatusCode)
-	_, _ = w.Write([]byte(html))
+	_, _ = w.Write([]byte(htmlStr))
 }
 
 func isDirectMediaUrl(raw string) bool {
@@ -596,8 +992,8 @@ func BrowserStreamHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Direct media URL => proxy with Range forwarding (use client without timeout to allow large streams)
-	if isDirectMediaUrl(targetUrl) {
+	// Direct media/asset URL => proxy with Range forwarding and resilient DoH DNS transport
+	if r.URL.Query().Get("asset") == "1" || isDirectMediaUrl(targetUrl) {
 		ctx, cancel := context.WithTimeout(r.Context(), 120*time.Second)
 		defer cancel()
 		method := r.Method
@@ -615,16 +1011,8 @@ func BrowserStreamHandler(w http.ResponseWriter, r *http.Request) {
 		if rh := r.Header.Get("Range"); rh != "" {
 			req.Header.Set("Range", rh)
 		}
-		// Use transport with no timeout for large files
-		proxyClient := &http.Client{
-			Timeout: 0,
-			CheckRedirect: func(req *http.Request, via []*http.Request) error {
-				if len(via) >= 10 {
-					return http.ErrUseLastResponse
-				}
-				return nil
-			},
-		}
+		// Use resilient transport with no request timeout for large streams
+		proxyClient := NewResilientHTTPClient(0)
 		resp, err := proxyClient.Do(req)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadGateway)
@@ -679,6 +1067,7 @@ func BrowserStreamHandler(w http.ResponseWriter, r *http.Request) {
 		"--extractor-args", "instagram:image_persist=1;threads:app_version=30.0.0",
 		"--remux-video", "mp4",
 		"--merge-output-format", "mp4",
+		"--format-sort", "res,vcodec:avc:vp9:av1,acodec:m4a:aac:opus,ext:mp4",
 	}
 	if !strings.Contains(targetUrl, "tiktok.com") {
 		baseArgs = append(baseArgs, "--format", "b/bv*+ba/best")

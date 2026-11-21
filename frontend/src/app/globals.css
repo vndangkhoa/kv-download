@@ -1,0 +1,86 @@
+@import '@astryxdesign/theme-neutral/fonts.css';
+@import '@astryxdesign/core/reset.css';
+@import '../theme/preflight.css';
+@import '@astryxdesign/core/astryx.css';
+@import '../theme/kv-download.css';
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light dark;
+  --font-sans: "Hanken Grotesk", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  /* Bridge semantic surface and text tokens to Astryx light/dark tokens */
+  --bg-color: var(--color-background-body, light-dark(#f4f6fb, #0b0c12));
+  --bg-surface: var(--color-background-surface, light-dark(#ffffff, #131520));
+  --bg-card: var(--color-background-card, light-dark(#ffffff, #161926));
+  --bg-muted: var(--color-background-muted, light-dark(#f1f4f9, #1a1d2b));
+  --bg-popover: var(--color-background-popover, light-dark(#ffffff, #1c2030));
+  --text-primary: var(--color-text-primary, light-dark(#0f172a, #f1f5f9));
+  --text-secondary: var(--color-text-secondary, light-dark(#475569, #94a3b8));
+  --text-disabled: var(--color-text-disabled, light-dark(#94a3b8, #475569));
+  --border-subtle: var(--color-border, light-dark(rgba(15, 23, 42, 0.10), rgba(255, 255, 255, 0.09)));
+  --border-strong: var(--color-border-emphasized, light-dark(rgba(15, 23, 42, 0.22), rgba(255, 255, 255, 0.20)));
+  --accent-primary: var(--color-accent, light-dark(#6d28d9, #8b5cf6));
+  --accent-muted: var(--color-accent-muted, light-dark(rgba(109, 40, 217, 0.10), rgba(139, 92, 246, 0.16)));
+  --text-accent: var(--color-text-accent, light-dark(#5b21b6, #c4b5fd));
+}
+
+html[data-theme="light"],
+html.light {
+  color-scheme: light;
+}
+
+html[data-theme="dark"],
+html.dark {
+  color-scheme: dark;
+}
+
+html,
+body {
+  background-color: var(--bg-color);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Ensure native top-layer dialogs trap scroll properly */
+dialog:modal {
+  overscroll-behavior: contain;
+}
+
+dialog::backdrop {
+  background: var(--color-overlay, rgba(15, 23, 42, 0.55));
+}
+
+/* Custom subtle scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-secondary);
+}
+
+.scrollbar-none {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.scrollbar-none::-webkit-scrollbar {
+  display: none;
+}

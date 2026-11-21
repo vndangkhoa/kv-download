@@ -1,2 +1,10 @@
 #!/usr/bin/env bash
-go build -x -o kv-download ./src
+set -e
+
+echo "==> Building Next.js + TypeScript Frontend..."
+(cd frontend && pnpm install && pnpm build)
+
+echo "==> Building Go Binary (kv-download)..."
+go build -o kv-download src/main.go
+
+echo "==> Build complete! Run ./kv-download to start the server on port 9292."

@@ -1,0 +1,4 @@
+allowBuilds:
+  '@astryxdesign/core': true
+  '@astryxdesign/cli': true
+  sharp: true

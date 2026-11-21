@@ -447,21 +447,25 @@
 
         body.theme-light .android-play-overlay {
             background: rgba(0, 0, 0, 0.25) !important;
+        }        body.theme-light .android-play-btn-circle {
+            background: #7c3aed !important;
+            color: #ffffff !important;
+            box-shadow: 0 4px 15px rgba(124, 58, 237, 0.4) !important;
         }
-
-        body.theme-light .android-play-btn-circle {
-            background: #a078ff !important;
+        body.theme-light .android-play-btn-circle i,
+        body.theme-light .android-play-btn-circle span,
+        body.theme-light .android-play-btn-circle * {
             color: #ffffff !important;
         }
 
         body.theme-light .android-floating-player {
             background: rgba(255, 255, 255, 0.95) !important;
-            border-color: rgba(160, 120, 255, 0.35) !important;
+            border-color: rgba(124, 58, 237, 0.35) !important;
             box-shadow: 0 8px 32px rgba(0, 0, 0, 0.15) !important;
         }
 
         body.theme-light .android-floating-player .btn-action-play {
-            color: #a078ff !important;
+            color: #7c3aed !important;
         }
 
         /* Task status indicators in light theme */
@@ -472,17 +476,19 @@
         }
 
         /* Task cards progress bars */
-        body.theme-light .task-card .bg-white\\/5,
-        body.theme-light .task-card .bg-black\\/20,
-        body.theme-light .task-card .bg-black\\/40,
-        body.theme-light .task-card .bg-black\\/60 {
+        body.theme-light .task-card .bg-white\/5,
+        body.theme-light .task-card .bg-black\/20,
+        body.theme-light .task-card .bg-black\/40,
+        body.theme-light .task-card .bg-black\/60 {
             background-color: rgba(0, 0, 0, 0.05) !important;
         }
 
         /* Play button and action buttons in light theme */
-        body.theme-light .btn-action-play {
-            color: #a078ff !important;
-            border: none !important;
+        body.theme-light .btn-action-play:not(.android-play-btn-circle):not(.btn-primary-glow) {
+            color: #7c3aed !important;
+        }
+        body.theme-light .btn-action-play:not(.android-play-btn-circle):not(.btn-primary-glow):hover {
+            background-color: rgba(124, 58, 237, 0.12) !important;
         }
 
         body.theme-light .btn-action-cancel {
@@ -493,12 +499,104 @@
             color: #059669 !important;
         }
 
+        /* Task filter tabs & buttons in light theme */
+        body.theme-light .task-tab-btn {
+            background-color: rgba(0, 0, 0, 0.05) !important;
+            color: #334155 !important;
+            border: 1px solid rgba(0, 0, 0, 0.08) !important;
+        }
+        body.theme-light .task-tab-btn:hover:not(.active) {
+            background-color: rgba(0, 0, 0, 0.09) !important;
+            color: #0f172a !important;
+        }
+        body.theme-light .task-tab-btn.active {
+            background: #7c3aed !important;
+            color: #ffffff !important;
+            border-color: transparent !important;
+        }
+        body.theme-light .task-tab-btn.active .tab-badge {
+            background: rgba(255, 255, 255, 0.25) !important;
+            color: #ffffff !important;
+        }
+
+        /* 3-Mode Grid View toggles in light theme */
+        body.theme-light .grid-mode-btn,
+        body.theme-light .history-grid-mode-btn {
+            color: #64748b !important;
+        }
+        body.theme-light .grid-mode-btn.active,
+        body.theme-light .history-grid-mode-btn.active {
+            background: #ffffff !important;
+            color: #7c3aed !important;
+            box-shadow: 0 1px 4px rgba(0, 0, 0, 0.12) !important;
+        }
+        body.theme-light .grid-mode-btn:hover:not(.active),
+        body.theme-light .history-grid-mode-btn:hover:not(.active) {
+            color: #0f172a !important;
+        }
+
+        /* Top controls & action buttons in light theme */
+        body.theme-light #btnClearCompleted,
+        body.theme-light #btnRetryFailed,
+        body.theme-light #btnClearAllHistory,
+        body.theme-light #btnGalleryToggleSelectMode,
+        body.theme-light #btnGallerySelectAll,
+        body.theme-light #btnGalleryDeselectAll {
+            background-color: rgba(0, 0, 0, 0.05) !important;
+            color: #334155 !important;
+            border: 1px solid rgba(0, 0, 0, 0.08) !important;
+        }
+        body.theme-light #btnClearCompleted:hover,
+        body.theme-light #btnRetryFailed:hover,
+        body.theme-light #btnClearAllHistory:hover,
+        body.theme-light #btnGalleryToggleSelectMode:hover,
+        body.theme-light #btnGallerySelectAll:hover,
+        body.theme-light #btnGalleryDeselectAll:hover {
+            background-color: rgba(0, 0, 0, 0.09) !important;
+            color: #0f172a !important;
+        }
+
+        /* Empty state cards in light theme */
+        body.theme-light .task-items-container > .glass-panel {
+            background: #ffffff !important;
+            border: 1px solid rgba(0, 0, 0, 0.08) !important;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.04) !important;
+        }
+        body.theme-light .task-items-container > .glass-panel h4 {
+            color: #0f172a !important;
+        }
+        body.theme-light .task-items-container > .glass-panel p {
+            color: #475569 !important;
+        }
+
+        /* Sidenav bottom panels in light theme */
+        body.theme-light .app-sidenav .glass-panel {
+            background: rgba(0, 0, 0, 0.02) !important;
+            border: 1px solid rgba(0, 0, 0, 0.08) !important;
+        }
+        body.theme-light .app-sidenav .glass-panel .text-primary {
+            color: #7c3aed !important;
+        }
+        body.theme-light .app-sidenav .glass-panel p {
+            color: #475569 !important;
+        }
+        body.theme-light #btnOpenCookiesNav {
+            background: rgba(0, 0, 0, 0.03) !important;
+            border: 1px solid rgba(0, 0, 0, 0.08) !important;
+            color: #0f172a !important;
+        }
+        body.theme-light #btnOpenCookiesNav #cookieNavBadge {
+            background: rgba(0, 0, 0, 0.06) !important;
+            border-color: rgba(0, 0, 0, 0.1) !important;
+            color: #334155 !important;
+        }
+
         /* Media preview in light theme */
         body.theme-light .media-preview,
         body.theme-light .aspect-video,
-        body.theme-light .bg-black\\/60 {
+        body.theme-light .bg-black\/60 {
             background-color: rgba(0, 0, 0, 0.05) !important;
-        }
+        } 
 
         body.theme-light .bg-black\\/40 {
             background-color: rgba(0, 0, 0, 0.15) !important;
@@ -1137,9 +1235,7 @@
             overflow-x: hidden !important;
             box-sizing: border-box !important;
         }
-        /* Fix: queues / playlists / settings / api-docs were vertically sinking into the middle/bottom due to flex-1 + justify issues; keep them pinned to the top */
-        #view-queues.view-section.active,
-        #view-playlists.view-section.active,
+        /* Keep settings & api-docs pinned to the top */
         #view-settings.view-section.active,
         #view-api-docs.view-section.active {
             justify-content: flex-start !important;
@@ -1147,8 +1243,6 @@
             align-items: stretch !important;
             min-height: 0 !important;
         }
-        #view-queues > .glass-panel,
-        #view-playlists > .glass-panel,
         #view-api-docs > div,
         #view-settings > div {
             margin-top: 0 !important;
@@ -1421,12 +1515,6 @@
         </a>
         <a href="#" data-view="history" class="sidenav-link flex items-center gap-3 px-4 py-3 rounded-xl text-on-surface-variant hover:text-white hover:bg-white/5 transition-all text-[13px] font-semibold">
             <span class="material-symbols-outlined text-[20px]">movie</span> Media Gallery
-        </a>
-        <a href="#" data-view="queues" class="sidenav-link flex items-center gap-3 px-4 py-3 rounded-xl text-on-surface-variant hover:text-white hover:bg-white/5 transition-all text-[13px] font-semibold">
-            <span class="material-symbols-outlined text-[20px]">view_list</span> Queues
-        </a>
-        <a href="#" data-view="playlists" class="sidenav-link flex items-center gap-3 px-4 py-3 rounded-xl text-on-surface-variant hover:text-white hover:bg-white/5 transition-all text-[13px] font-semibold">
-            <span class="material-symbols-outlined text-[20px]">playlist_play</span> Playlists
         </a>
         <a href="#" data-view="settings" class="sidenav-link flex items-center gap-3 px-4 py-3 rounded-xl text-on-surface-variant hover:text-white hover:bg-white/5 transition-all text-[13px] font-semibold">
             <span class="material-symbols-outlined text-[20px]">settings</span> Settings
@@ -1775,6 +1863,7 @@
         </section>
 
         <!-- ========================================== -->
+        <!-- ========================================== -->
         <!-- VIEW 2: MEDIA GALLERY / HISTORY            -->
         <!-- ========================================== -->
         <section id="view-history" class="view-section">
@@ -1786,9 +1875,23 @@
                             <h3 class="text-[18px] font-bold text-white flex items-center gap-2">
                                 <span class="material-symbols-outlined text-primary text-[22px]">movie</span> Media Gallery
                             </h3>
-                            <p class="text-[12px] text-on-surface-variant">Android Material You Gallery • PWA Lockscreen Control • Instant Playback</p>
+                            <p class="text-[12px] text-on-surface-variant">Android Material You Gallery • Instant Playback • Local Storage</p>
                         </div>
-                        <div class="flex items-center gap-2 w-full sm:w-auto">
+                        <div class="flex items-center gap-2 w-full sm:w-auto flex-wrap">
+                            <!-- Selection Mode Toolbar -->
+                            <div id="gallerySelectToolbar" class="d-none flex items-center gap-1.5 flex-wrap">
+                                <span id="gallerySelectedCountBadge" class="text-[11px] font-bold text-primary px-2.5 py-1 rounded-lg bg-primary/15 border border-primary/25">0 selected</span>
+                                <button type="button" id="btnGallerySelectAll" class="px-2.5 py-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-on-surface-variant hover:text-white text-[11px] font-semibold transition-all">Select All</button>
+                                <button type="button" id="btnGalleryDeselectAll" class="px-2.5 py-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-on-surface-variant hover:text-white text-[11px] font-semibold transition-all">Deselect</button>
+                                <button type="button" id="btnGalleryDeleteSelected" class="px-3 py-1.5 rounded-lg bg-red-500/15 hover:bg-red-500/25 border border-red-500/30 text-red-300 hover:text-red-200 text-[11px] font-bold transition-all flex items-center gap-1">
+                                    <i class="bi bi-trash3-fill"></i> Delete Selected
+                                </button>
+                            </div>
+
+                            <button type="button" id="btnGalleryToggleSelectMode" class="px-3 py-1.5 rounded-xl bg-white/5 hover:bg-white/10 text-[12px] font-semibold text-on-surface-variant hover:text-white transition-all flex items-center gap-1.5">
+                                <i class="bi bi-check2-square text-primary"></i> <span id="btnGalleryToggleSelectModeText">Select</span>
+                            </button>
+
                             <!-- 3 Mode Grid Views Toggle for History -->
                             <div class="flex items-center gap-1 p-1 rounded-xl bg-black/50 border border-white/10">
                                 <button type="button" class="history-grid-mode-btn p-1.5 rounded-lg text-on-surface-variant hover:text-white transition-all" data-mode="compact" title="Gallery Grid">
@@ -1845,64 +1948,7 @@
         </section>
 
         <!-- ========================================== -->
-        <!-- VIEW 4: QUEUES                             -->
-        <!-- ========================================== -->
-        <section id="view-queues" class="view-section">
-            <div class="glass-panel p-5 flex flex-col gap-4">
-                <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
-                    <div>
-                        <h3 class="text-[18px] font-bold text-white">Queue Manager</h3>
-                        <p class="text-[12px] text-on-surface-variant">Monitor active worker threads and manage queued tasks.</p>
-                    </div>
-                    <div class="flex gap-2">
-                        <button type="button" id="btnQueueStartAll" class="btn-primary-glow px-4 py-2 rounded-xl text-[12px] font-semibold flex items-center gap-1.5"><span class="material-symbols-outlined text-[16px]">play_arrow</span> Retry All</button>
-                    </div>
-                </div>
-                <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                    <div class="p-4 rounded-xl bg-white/5 border border-white/5 flex items-center justify-between">
-                        <div><p class="text-[22px] font-extrabold text-primary" id="queueActiveCount">0</p><p class="text-[11px] font-semibold text-on-surface-variant uppercase">Active Tasks</p></div>
-                        <div class="w-9 h-9 rounded-lg bg-primary/10 flex items-center justify-center text-primary"><span class="material-symbols-outlined text-[18px]">downloading</span></div>
-                    </div>
-                    <div class="p-4 rounded-xl bg-white/5 border border-white/5 flex items-center justify-between">
-                        <div><p class="text-[22px] font-extrabold text-amber-400" id="queuePendingCount">0</p><p class="text-[11px] font-semibold text-on-surface-variant uppercase">Pending Queue</p></div>
-                        <div class="w-9 h-9 rounded-lg bg-amber-500/10 flex items-center justify-center text-amber-400"><span class="material-symbols-outlined text-[18px]">hourglass_top</span></div>
-                    </div>
-                    <div class="p-4 rounded-xl bg-white/5 border border-white/5 flex items-center justify-between">
-                        <div><p class="text-[22px] font-extrabold text-emerald-400" id="queueDoneCount">0</p><p class="text-[11px] font-semibold text-on-surface-variant uppercase">Finished</p></div>
-                        <div class="w-9 h-9 rounded-lg bg-emerald-500/10 flex items-center justify-center text-emerald-400"><span class="material-symbols-outlined text-[18px]">done_all</span></div>
-                    </div>
-                </div>
-                <div id="queueList" class="task-items-container view-standard">
-                    <!-- Active and queued tasks rendered here -->
-                </div>
-            </div>
-        </section>
-
-        <!-- ========================================== -->
-        <!-- VIEW 5: PLAYLISTS & ALBUMS                 -->
-        <!-- ========================================== -->
-        <section id="view-playlists" class="view-section">
-            <div class="glass-panel p-5 flex flex-col gap-4">
-                <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 pb-2 border-b border-white/5">
-                    <div>
-                        <h3 class="text-[18px] font-bold text-white flex items-center gap-2">
-                            <span class="material-symbols-outlined text-primary text-[22px]">playlist_play</span> Channels, Playlists & Albums
-                        </h3>
-                        <p class="text-[12px] text-on-surface-variant">Grouped Collections • TikTok Creators • YouTube Albums • 1-Click Batch Playback</p>
-                    </div>
-                    <button type="button" class="btn-primary-glow px-4 py-2 rounded-xl text-[12px] font-bold flex items-center gap-1.5 shrink-0" onclick="document.querySelector('[data-view=download-center]').click()">
-                        <span class="material-symbols-outlined text-[16px]">add_link</span> Scan New Channel / Playlist
-                    </button>
-                </div>
-
-                <div id="playlistsContainer" class="task-items-container view-standard">
-                    <!-- Rendered dynamically by renderPlaylists() -->
-                </div>
-            </div>
-        </section>
-
-        <!-- ========================================== -->
-        <!-- VIEW 6: SETTINGS (RESPONSIVE, SPEED, YT-DLP) -->
+        <!-- VIEW 3: SETTINGS (RESPONSIVE, SPEED, YT-DLP) -->
         <!-- ========================================== -->
         <section id="view-settings" class="view-section">
             <div class="flex flex-col gap-5 max-w-[900px] mx-auto w-full">
@@ -1910,7 +1956,7 @@
                     <h3 class="text-[18px] font-bold text-white flex items-center gap-2">
                         <span class="material-symbols-outlined text-primary text-[22px]">tune</span> Application Settings
                     </h3>
-                    <p class="text-[12px] text-on-surface-variant">Manage yt-dlp release channels, speed limits, visual themes, and system preferences.</p>
+                    <p class="text-[12px] text-on-surface-variant">Manage yt-dlp release channels, speed limits, storage destination, visual themes, and system preferences.</p>
                 </div>
 
                 <div class="glass-panel overflow-hidden flex flex-col">
@@ -1997,14 +2043,43 @@
                         </button>
                     </div>
 
-                    <!-- Storage Location -->
+                    <!-- Storage Location (Configurable) -->
                     <div class="p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 sm:gap-4">
                         <div class="flex-1 min-w-0">
                             <div class="text-[13px] font-bold text-white flex items-center gap-1.5"><i class="bi bi-folder2 text-blue-400"></i> Storage Destination</div>
-                            <div class="text-[11px] text-on-surface-variant">Server filesystem directory managed by container mount</div>
+                            <div class="text-[11px] text-on-surface-variant">Server filesystem directory for saving downloaded media files</div>
                         </div>
-                        <div class="bg-black/40 border border-white/10 rounded-xl px-3.5 py-2 text-[12px] font-mono text-primary shrink-0 self-start sm:self-auto">~/downloads/</div>
+                        <div class="flex items-center gap-2 w-full sm:w-auto">
+                            <input type="text" id="storagePathInput" class="bg-black/60 border border-white/15 rounded-xl px-3.5 py-2 text-white text-[12px] font-mono focus:outline-none w-full sm:w-72" placeholder="downloads/">
+                            <button type="button" id="btnSaveStoragePath" class="btn-primary-glow px-4 py-2 rounded-xl text-[12px] font-bold shrink-0 flex items-center gap-1.5"><i class="bi bi-check2"></i> Save</button>
+                            <button type="button" id="btnResetStoragePath" class="px-3 py-2 rounded-xl bg-white/5 hover:bg-white/10 text-on-surface-variant hover:text-white text-[12px] font-semibold shrink-0" title="Reset to default">Reset</button>
+                        </div>
                     </div>
+                </div>
+
+                <!-- Engine Profile & Cookie Shortcut Card -->
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div class="glass-panel p-4 flex items-center gap-3">
+                        <div class="w-11 h-11 rounded-xl bg-gradient-to-br from-primary-container to-secondary-container flex items-center justify-center text-white font-extrabold text-[15px] shadow-sm">KV</div>
+                        <div class="flex-1 min-w-0">
+                            <div class="flex items-center gap-2">
+                                <h4 class="text-[13px] font-bold text-white">KV Engine</h4>
+                                <span class="bg-primary/20 text-primary text-[10px] font-bold px-2 py-0.5 rounded-full border border-primary/30">Active</span>
+                            </div>
+                            <p class="text-[11px] text-on-surface-variant truncate">yt-dlp <span id="settingsYtDlpVer">{{ $.ytDlpVersion }}</span> • Anpan Engine</p>
+                        </div>
+                    </div>
+
+                    <div class="glass-panel p-4 flex items-center justify-between gap-3">
+                        <div>
+                            <h4 class="text-[13px] font-bold text-white flex items-center gap-1.5"><i class="bi bi-cookie text-amber-400"></i> Cookie Vault</h4>
+                            <p class="text-[11px] text-on-surface-variant">Private device-only storage</p>
+                        </div>
+                        <button type="button" class="btn-primary-glow px-3.5 py-1.5 rounded-xl text-[11px] font-bold" onclick="document.getElementById('btnOpenCookiesNav').click()">Manage</button>
+                    </div>
+                </div>
+            </div>
+        </section>
                 </div>
 
                 <!-- Engine Profile & Cookie Shortcut Card -->

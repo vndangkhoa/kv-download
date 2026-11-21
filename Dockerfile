@@ -1,4 +1,12 @@
 # syntax=docker/dockerfile:1
+FROM --platform=$BUILDPLATFORM node:22-alpine AS frontend-builder
+WORKDIR /app/frontend
+RUN corepack enable && corepack prepare pnpm@latest --activate
+COPY frontend/package.json frontend/pnpm-lock.yaml frontend/pnpm-workspace.yaml ./
+RUN pnpm install --frozen-lockfile
+COPY frontend/ ./
+RUN pnpm build
+
 FROM --platform=$BUILDPLATFORM golang:1.25.3-alpine3.22 AS builder
 
 ARG TARGETOS
@@ -39,6 +47,7 @@ RUN apk add --update --no-cache \
 COPY --from=mwader/static-ffmpeg:8.0 /ffmpeg  /usr/local/bin/
 COPY --from=mwader/static-ffmpeg:8.0 /ffprobe /usr/local/bin/
 COPY --from=builder /app/kv-download /app/kv-download
+COPY --from=frontend-builder /app/frontend/out /app/frontend/out
 COPY templates /app/templates
 COPY static /app/static
 

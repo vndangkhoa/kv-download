@@ -64,6 +64,13 @@ func ExtractThumbnailFromAudio(audioPath, thumbPath string) error {
 // It checks for existing image files in the media folder or dynamically generates
 // a thumbnail frame via ffmpeg if missing. It also proxies remote image URLs.
 func ServeThumbnailHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS")
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
 	remoteURL := strings.TrimSpace(r.URL.Query().Get("url"))
 	if remoteURL != "" && (strings.HasPrefix(remoteURL, "http://") || strings.HasPrefix(remoteURL, "https://")) {
 		req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, remoteURL, nil)
@@ -89,15 +96,67 @@ func ServeThumbnailHandler(w http.ResponseWriter, r *http.Request) {
 		relPath = strings.TrimSpace(r.URL.Query().Get("file"))
 	}
 	if relPath != "" {
-		if !strings.Contains(relPath, "..") && !strings.HasPrefix(relPath, "/") {
+		if !hasPathTraversal(relPath) && !strings.HasPrefix(relPath, "/") {
 			fullPath := filepath.Join(getDownloadDir(), relPath)
 			ext := strings.ToLower(filepath.Ext(fullPath))
-			if ext == ".jpg" || ext == ".jpeg" || ext == ".png" || ext == ".webp" {
+			if isImageExt(ext) {
 				if fi, err := os.Stat(fullPath); err == nil && fi.Size() > 0 {
 					w.Header().Set("Cache-Control", "public, max-age=86400")
 					w.Header().Set("Content-Type", getMimeType(fullPath))
 					http.ServeFile(w, r, fullPath)
 					return
+				}
+			}
+
+			// If relPath is a video or audio, look for matching thumb or extract frame
+			if isVideoExt(ext) || isAudioExt(ext) {
+				baseName := strings.TrimSuffix(filepath.Base(fullPath), filepath.Ext(fullPath))
+				dirPath := filepath.Dir(fullPath)
+				parentDirName := filepath.Base(dirPath)
+
+				// Look for matching thumbnail file on disk
+				checkThumbs := []string{
+					filepath.Join(getDownloadDir(), CategoryThumbnails, parentDirName, baseName+".jpg"),
+					filepath.Join(getDownloadDir(), CategoryThumbnails, parentDirName, baseName+".webp"),
+					filepath.Join(getDownloadDir(), CategoryThumbnails, parentDirName, baseName+".png"),
+					filepath.Join(getDownloadDir(), CategoryThumbnails, parentDirName, "thumb.jpg"),
+					filepath.Join(getDownloadDir(), CategoryThumbnails, baseName+".jpg"),
+					filepath.Join(dirPath, baseName+".jpg"),
+					filepath.Join(dirPath, baseName+".webp"),
+					filepath.Join(dirPath, "thumb.jpg"),
+					filepath.Join(dirPath, "thumb.webp"),
+					filepath.Join(dirPath, "thumb.png"),
+				}
+				for _, tp := range checkThumbs {
+					if fi, err := os.Stat(tp); err == nil && fi.Size() > 0 {
+						w.Header().Set("Cache-Control", "public, max-age=86400")
+						w.Header().Set("Content-Type", getMimeType(tp))
+						http.ServeFile(w, r, tp)
+						return
+					}
+				}
+
+				// Extract dynamically if needed
+				if isVideoExt(ext) {
+					thumbDir := filepath.Join(getDownloadDir(), CategoryThumbnails, parentDirName)
+					_ = os.MkdirAll(thumbDir, 0o755)
+					thumbOut := filepath.Join(thumbDir, baseName+".jpg")
+					if err := ExtractThumbnailFromVideo(fullPath, thumbOut); err == nil {
+						w.Header().Set("Cache-Control", "public, max-age=86400")
+						w.Header().Set("Content-Type", "image/jpeg")
+						http.ServeFile(w, r, thumbOut)
+						return
+					}
+				} else if isAudioExt(ext) {
+					thumbDir := filepath.Join(getDownloadDir(), CategoryThumbnails, parentDirName)
+					_ = os.MkdirAll(thumbDir, 0o755)
+					thumbOut := filepath.Join(thumbDir, baseName+".jpg")
+					if err := ExtractThumbnailFromAudio(fullPath, thumbOut); err == nil {
+						w.Header().Set("Cache-Control", "public, max-age=86400")
+						w.Header().Set("Content-Type", "image/jpeg")
+						http.ServeFile(w, r, thumbOut)
+						return
+					}
 				}
 			}
 		}
@@ -111,11 +170,31 @@ func ServeThumbnailHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Clean path and prevent directory traversal
 	id = strings.ReplaceAll(id, "\\", "/")
-	parts := strings.Split(id, "/")
-	dirID := parts[0]
-	if dirID == "" || strings.Contains(dirID, "..") {
+	if hasPathTraversal(id) {
 		http.Redirect(w, r, "/static/logo.svg", http.StatusTemporaryRedirect)
 		return
+	}
+	parts := strings.Split(id, "/")
+	dirID := parts[0]
+	if dirID == "" {
+		http.Redirect(w, r, "/static/logo.svg", http.StatusTemporaryRedirect)
+		return
+	}
+
+	// If id includes an image filename (e.g. "<hash>/<title>.jpg"), check candidateFilePaths first
+	// so thumbnails organized into downloads/thumbnails/<Channel>/<title>.jpg are served directly.
+	if len(parts) > 1 {
+		lastExt := strings.ToLower(filepath.Ext(parts[len(parts)-1]))
+		if isImageExt(lastExt) {
+			for _, cand := range candidateFilePaths(id) {
+				if fi, err := os.Stat(cand); err == nil && !fi.IsDir() && fi.Size() > 0 {
+					w.Header().Set("Cache-Control", "public, max-age=86400")
+					w.Header().Set("Content-Type", getMimeType(cand))
+					http.ServeFile(w, r, cand)
+					return
+				}
+			}
+		}
 	}
 
 	// If the id is a Task ID, check if Queue has it

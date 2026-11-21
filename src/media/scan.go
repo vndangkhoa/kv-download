@@ -27,33 +27,38 @@ type ScanThumbnail struct {
 }
 
 type ScanEntry struct {
-	Id          string          `json:"id"`
-	Title       string          `json:"title"`
-	Description string          `json:"description,omitempty"`
-	Track       string          `json:"track,omitempty"`
-	Url         string          `json:"url"`
-	Thumbnail   string          `json:"thumbnail"`
-	Thumbnails  []ScanThumbnail `json:"thumbnails,omitempty"`
-	Duration    float64         `json:"duration,omitempty"`
-	Uploader    string          `json:"uploader,omitempty"`
-	Channel     string          `json:"channel,omitempty"`
-	ViewCount   int64           `json:"view_count,omitempty"`
-	Category    string          `json:"category,omitempty"`
+	Id           string          `json:"id"`
+	Title        string          `json:"title"`
+	Description  string          `json:"description,omitempty"`
+	Track        string          `json:"track,omitempty"`
+	Url          string          `json:"url"`
+	WebpageUrl   string          `json:"webpage_url,omitempty"`
+	Thumbnail    string          `json:"thumbnail"`
+	Thumbnails   []ScanThumbnail `json:"thumbnails,omitempty"`
+	Duration     float64         `json:"duration,omitempty"`
+	Uploader     string          `json:"uploader,omitempty"`
+	Channel      string          `json:"channel,omitempty"`
+	ViewCount    int64           `json:"view_count,omitempty"`
+	Category     string          `json:"category,omitempty"`
+	Formats      []FormatChoice  `json:"formats,omitempty"`
+	InfoJSONPath string          `json:"infoJsonPath,omitempty"`
 }
 
 type ScanInfo struct {
-	Title      string      `json:"title"`
-	Count      int         `json:"count"`
-	TotalCount int         `json:"totalCount,omitempty"`
-	IsPlaylist bool        `json:"isPlaylist"`
-	Entries    []ScanEntry `json:"entries"`
-	Thumbnail  string      `json:"thumbnail"`
-	Channel    string      `json:"channel,omitempty"`
-	Uploader   string      `json:"uploader,omitempty"`
-	Start      int         `json:"start,omitempty"`
-	Limit      int         `json:"limit,omitempty"`
-	HasMore    bool        `json:"hasMore"`
-	NextStart  int         `json:"nextStart,omitempty"`
+	Title        string         `json:"title"`
+	Count        int            `json:"count"`
+	TotalCount   int            `json:"totalCount,omitempty"`
+	IsPlaylist   bool           `json:"isPlaylist"`
+	Entries      []ScanEntry    `json:"entries"`
+	Thumbnail    string         `json:"thumbnail"`
+	Channel      string         `json:"channel,omitempty"`
+	Uploader     string         `json:"uploader,omitempty"`
+	Start        int            `json:"start,omitempty"`
+	Limit        int            `json:"limit,omitempty"`
+	HasMore      bool           `json:"hasMore"`
+	NextStart    int            `json:"nextStart,omitempty"`
+	Formats      []FormatChoice `json:"formats,omitempty"`
+	InfoJSONPath string         `json:"infoJsonPath,omitempty"`
 }
 
 type RawScanInfo struct {
@@ -68,6 +73,7 @@ type RawScanInfo struct {
 	Thumbnails []ScanThumbnail `json:"thumbnails"`
 	Url        string          `json:"url"`
 	WebpageUrl string          `json:"webpage_url"`
+	Formats    []RawFormat     `json:"formats"`
 }
 
 // ScanUrl inspects a URL with default pagination (batch of 24)
@@ -91,9 +97,12 @@ func ScanUrlWithPagination(inputUrl string, cookies string, start int, limit int
 	if IsFacebookShareURL(url) {
 		resolved := resolveFbShareURL(url, cookies)
 		if resolved != "" && IsFacebookVideoURL(resolved) {
+			if canon := fbCanonicalVideoUrl(resolved); canon != "" {
+				resolved = canon
+			}
 			log.Info().Msgf("Resolved Facebook share link to single video: %s -> %s", url, resolved)
 			url = resolved
-		} else {
+		} else if !strings.Contains(strings.ToLower(url), "/share/r/") && !strings.Contains(strings.ToLower(url), "/share/v/") {
 			profileHandle, normalizedURL := extractFbProfileFromShareURL(url, cookies)
 			if profileHandle != "Facebook" && normalizedURL != "" {
 				log.Info().Msgf("Resolved Facebook share link: %s -> profile=%s, URL=%s", url, profileHandle, normalizedURL)
@@ -317,19 +326,41 @@ func runScanAttempt(url string, cookies string, flatPlaylist bool, start int, li
 		return nil, "error parsing media scan data", err
 	}
 
+	// Cache info JSON for single video/media if valid formats are present
+	var cachedJSONPath string
+	if raw.Type != "playlist" && len(raw.Entries) <= 1 {
+		if p, err := SaveCachedInfoJSON(cleanURL, stdout.Bytes()); err == nil {
+			cachedJSONPath = p
+			if raw.WebpageUrl != "" && raw.WebpageUrl != cleanURL {
+				_, _ = SaveCachedInfoJSON(raw.WebpageUrl, stdout.Bytes())
+			}
+			if raw.Url != "" && raw.Url != cleanURL {
+				_, _ = SaveCachedInfoJSON(raw.Url, stdout.Bytes())
+			}
+			log.Info().Msgf("[InfoCache] Cached probe info-json for %s -> %s", cleanURL, p)
+		}
+	}
+
+	var formatChoices []FormatChoice
+	if len(raw.Formats) > 0 {
+		formatChoices = BuildFormatChoices(raw.Formats)
+	}
+
 	info := &ScanInfo{
-		Title:      raw.Title,
-		Count:      len(raw.Entries),
-		TotalCount: raw.Count,
-		IsPlaylist: raw.Type == "playlist" || len(raw.Entries) > 0,
-		Entries:    raw.Entries,
-		Thumbnail:  raw.Thumbnail,
-		Channel:    raw.Channel,
-		Uploader:   raw.Uploader,
-		Start:      start,
-		Limit:      limit,
-		HasMore:    len(raw.Entries) >= limit && (raw.Count == 0 || (start+len(raw.Entries)-1) < raw.Count),
-		NextStart:  start + len(raw.Entries),
+		Title:        raw.Title,
+		Count:        len(raw.Entries),
+		TotalCount:   raw.Count,
+		IsPlaylist:   raw.Type == "playlist" || len(raw.Entries) > 0,
+		Entries:      raw.Entries,
+		Thumbnail:    raw.Thumbnail,
+		Channel:      raw.Channel,
+		Uploader:     raw.Uploader,
+		Start:        start,
+		Limit:        limit,
+		HasMore:      len(raw.Entries) >= limit && (raw.Count == 0 || (start+len(raw.Entries)-1) < raw.Count),
+		NextStart:    start + len(raw.Entries),
+		Formats:      formatChoices,
+		InfoJSONPath: cachedJSONPath,
 	}
 
 	if info.IsPlaylist {
@@ -355,6 +386,9 @@ func runScanAttempt(url string, cookies string, flatPlaylist bool, start int, li
 				e.Title = "TikTok video #" + e.Id
 			}
 		}
+		if e.Url == "" && e.WebpageUrl != "" {
+			e.Url = e.WebpageUrl
+		}
 		if e.Url == "" && e.Id != "" {
 			if tiktokUser != "" || strings.Contains(cleanURL, "tiktok.com") {
 				user := tiktokUser
@@ -367,6 +401,8 @@ func runScanAttempt(url string, cookies string, flatPlaylist bool, start int, li
 				e.Url = "https://www.tiktok.com/@" + user + "/video/" + e.Id
 			} else if len(e.Id) == 11 {
 				e.Url = "https://www.youtube.com/watch?v=" + e.Id
+			} else if strings.Contains(cleanURL, "facebook.com") || strings.Contains(cleanURL, "fb.com") || strings.Contains(cleanURL, "fb.watch") {
+				e.Url = "https://www.facebook.com/watch/?v=" + e.Id
 			} else {
 				e.Url = e.Id
 			}
@@ -427,12 +463,14 @@ func runScanAttempt(url string, cookies string, flatPlaylist bool, start int, li
 		}
 		info.Entries = []ScanEntry{
 			{
-				Id:        raw.Id,
-				Title:     info.Title,
-				Url:       videoUrl,
-				Thumbnail: thumb,
-				Uploader:  raw.Uploader,
-				Channel:   raw.Channel,
+				Id:           raw.Id,
+				Title:        info.Title,
+				Url:          videoUrl,
+				Thumbnail:    thumb,
+				Uploader:     raw.Uploader,
+				Channel:      raw.Channel,
+				Formats:      formatChoices,
+				InfoJSONPath: cachedJSONPath,
 			},
 		}
 		if info.Thumbnail == "" {
@@ -441,9 +479,13 @@ func runScanAttempt(url string, cookies string, flatPlaylist bool, start int, li
 	} else {
 		for i := range info.Entries {
 			if info.Entries[i].Url == "" {
-				if info.Entries[i].Id != "" {
+				if info.Entries[i].WebpageUrl != "" {
+					info.Entries[i].Url = info.Entries[i].WebpageUrl
+				} else if info.Entries[i].Id != "" {
 					if tiktokUser != "" {
 						info.Entries[i].Url = "https://www.tiktok.com/@" + tiktokUser + "/video/" + info.Entries[i].Id
+					} else if strings.Contains(cleanURL, "facebook.com") || strings.Contains(cleanURL, "fb.com") || strings.Contains(cleanURL, "fb.watch") {
+						info.Entries[i].Url = "https://www.facebook.com/watch/?v=" + info.Entries[i].Id
 					} else {
 						info.Entries[i].Url = "https://www.youtube.com/watch?v=" + info.Entries[i].Id
 					}
@@ -453,6 +495,14 @@ func runScanAttempt(url string, cookies string, flatPlaylist bool, start int, li
 			}
 			if info.Entries[i].Title == "" {
 				info.Entries[i].Title = info.Title
+			}
+			if len(info.Entries) == 1 {
+				if len(info.Entries[i].Formats) == 0 && len(formatChoices) > 0 {
+					info.Entries[i].Formats = formatChoices
+				}
+				if info.Entries[i].InfoJSONPath == "" && cachedJSONPath != "" {
+					info.Entries[i].InfoJSONPath = cachedJSONPath
+				}
 			}
 		}
 	}
@@ -475,6 +525,7 @@ type RawScanEntry struct {
 	ViewCount     int64           `json:"view_count,omitempty"`
 	PlaylistTitle string          `json:"playlist_title,omitempty"`
 	PlaylistCount int             `json:"playlist_count,omitempty"`
+	Formats       []RawFormat     `json:"formats"`
 }
 
 // StreamScanUrl runs yt-dlp flat-playlist extraction and emits each entry live as it arrives
@@ -489,9 +540,12 @@ func StreamScanUrl(ctx context.Context, inputUrl string, cookies string, onEntry
 	if IsFacebookShareURL(cleanURL) {
 		resolved := resolveFbShareURL(cleanURL, cookies)
 		if resolved != "" && IsFacebookVideoURL(resolved) {
+			if canon := fbCanonicalVideoUrl(resolved); canon != "" {
+				resolved = canon
+			}
 			log.Info().Msgf("Resolved Facebook share link to single video for stream: %s -> %s", cleanURL, resolved)
 			cleanURL = resolved
-		} else {
+		} else if !strings.Contains(strings.ToLower(cleanURL), "/share/r/") && !strings.Contains(strings.ToLower(cleanURL), "/share/v/") {
 			profileHandle, normalizedURL := extractFbProfileFromShareURL(cleanURL, cookies)
 			if profileHandle != "Facebook" && normalizedURL != "" {
 				log.Info().Msgf("Resolved Facebook share link for stream: %s -> profile=%s, URL=%s", cleanURL, profileHandle, normalizedURL)
@@ -600,6 +654,14 @@ func StreamScanUrl(ctx context.Context, inputUrl string, cookies string, onEntry
 		}
 
 		targetUrl := raw.Url
+		if targetUrl == "" && raw.WebpageUrl != "" {
+			targetUrl = raw.WebpageUrl
+			if strings.Contains(targetUrl, "facebook.com") || strings.Contains(targetUrl, "fb.com") {
+				if canon := fbCanonicalVideoUrl(targetUrl); canon != "" {
+					targetUrl = canon
+				}
+			}
+		}
 		if targetUrl == "" && raw.Id != "" {
 			if strings.Contains(cleanURL, "tiktok.com") {
 				if raw.Uploader != "" {
@@ -609,23 +671,44 @@ func StreamScanUrl(ctx context.Context, inputUrl string, cookies string, onEntry
 				}
 			} else if strings.Contains(cleanURL, "youtube.com") || strings.Contains(cleanURL, "youtu.be") {
 				targetUrl = fmt.Sprintf("https://www.youtube.com/watch?v=%s", raw.Id)
+			} else if strings.Contains(cleanURL, "facebook.com") || strings.Contains(cleanURL, "fb.com") || strings.Contains(cleanURL, "fb.watch") {
+				targetUrl = fmt.Sprintf("https://www.facebook.com/watch/?v=%s", raw.Id)
+			} else if strings.HasPrefix(cleanURL, "http://") || strings.HasPrefix(cleanURL, "https://") {
+				targetUrl = cleanURL
 			} else {
 				targetUrl = raw.Id
 			}
 		}
 
 		entry := ScanEntry{
-			Id:         raw.Id,
-			Title:      title,
+			Id:          raw.Id,
+			Title:       title,
 			Description: raw.Description,
-			Track:      raw.Track,
-			Url:        targetUrl,
-			Thumbnail:  thumb,
-			Thumbnails: raw.Thumbnails,
-			Duration:   raw.Duration,
-			Uploader:   raw.Uploader,
-			Channel:    raw.Channel,
-			ViewCount:  raw.ViewCount,
+			Track:       raw.Track,
+			Url:         targetUrl,
+			WebpageUrl:  raw.WebpageUrl,
+			Thumbnail:   thumb,
+			Thumbnails:  raw.Thumbnails,
+			Duration:    raw.Duration,
+			Uploader:    raw.Uploader,
+			Channel:     raw.Channel,
+			ViewCount:   raw.ViewCount,
+		}
+
+		if len(raw.Formats) > 0 {
+			entry.Formats = BuildFormatChoices(raw.Formats)
+			if entry.Url != "" {
+				if p, err := SaveCachedInfoJSON(entry.Url, line); err == nil {
+					entry.InfoJSONPath = p
+				}
+			}
+			if cleanURL != "" && cleanURL != entry.Url {
+				_, _ = SaveCachedInfoJSON(cleanURL, line)
+			}
+			trimmedInput := strings.TrimSpace(inputUrl)
+			if trimmedInput != "" && trimmedInput != cleanURL && trimmedInput != entry.Url {
+				_, _ = SaveCachedInfoJSON(trimmedInput, line)
+			}
 		}
 
 		count++

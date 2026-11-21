@@ -108,6 +108,8 @@ func resolveFbShareURL(inputURL, cookieHeader string) string {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
+	cookieHeader = fbCookieHeader(cookieHeader, inputURL)
+
 	// 1. Try curl_cffi first (handles desktop 302 redirects and JS redirects best)
 	result, err := resolveShareCurlCffi(ctx, inputURL, cookieHeader)
 	if err == nil && result != "" && !IsFacebookShareURL(result) && !strings.Contains(result, "/share/") {
@@ -348,16 +350,25 @@ except ImportError:
 url = sys.argv[1]
 cookies_str = sys.argv[2] if len(sys.argv) > 2 else ""
 
-# Parse cookies string into a dict
+# Parse cookies string into a dict (supports Netscape tab-separated lines or 'k=v; k2=v2' header format)
 cookies = {}
 if cookies_str:
-    for line in cookies_str.split("\n"):
-        line = line.strip()
-        if line and not line.startswith("#"):
-            parts = line.split("\t")
-            if len(parts) >= 7:
-                name = parts[5]
-                value = parts[6]
+    if "\t" in cookies_str:
+        for line in cookies_str.split("\n"):
+            line = line.strip()
+            if line and not line.startswith("#"):
+                parts = line.split("\t")
+                if len(parts) >= 7:
+                    name = parts[5]
+                    value = parts[6]
+                    if name and value:
+                        cookies[name] = value
+    else:
+        for pair in cookies_str.split(";"):
+            pair = pair.strip()
+            if "=" in pair:
+                name, value = pair.split("=", 1)
+                name, value = name.strip(), value.strip()
                 if name and value:
                     cookies[name] = value
 
@@ -1115,7 +1126,7 @@ func findEntryByVid(entries []ScanEntry, vid string) int {
 }
 
 var (
-	fbThumbRe = regexp.MustCompile(`(?i)(?:first_frame_thumbnail|thumbnailImage|preferred_thumbnail|image|"uri")[:\s"\{]+(https://scontent[^"\\]+)`)
+	fbThumbRe = regexp.MustCompile(`(?i)(?:first_frame_thumbnail|thumbnailImage|preferred_thumbnail|thumbnail_url|thumbnail_src|image|large_share_image|"uri"|src|data-src)[:\s"'{=]+(https?://[^\s"'<>\\]+fbcdn\.net[^\s"'<>\\]+|https?://scontent[^\s"'<>\\]+)`)
 	fbTextRe  = regexp.MustCompile(`"text":"([^"]+)"`)
 )
 
@@ -1141,8 +1152,10 @@ func fbExtractReelMeta(fullText, vid string) (title, thumbnail string) {
 			matches := fbThumbRe.FindAllStringSubmatch(chunk, -1)
 			for _, m := range matches {
 				if len(m) > 1 {
-					u := m[1]
-					if strings.Contains(u, "t15") || strings.Contains(u, "dst-jpg") || strings.Contains(u, "p960x960") || strings.Contains(u, "s960x960") {
+					u := strings.ReplaceAll(m[1], `\/`, `/`)
+					u = html.UnescapeString(u)
+					u = strings.Trim(u, `"'`)
+					if strings.Contains(u, "t15") || strings.Contains(u, "dst-jpg") || strings.Contains(u, "p960x960") || strings.Contains(u, "s960x960") || strings.Contains(u, "p480x480") || strings.Contains(u, "s480x480") {
 						thumbnail = u
 						break
 					} else if thumbnail == "" && !strings.Contains(u, "t39.30808-1") {

@@ -343,4 +343,48 @@ func TestStreamFacebookBaoNgocShareLink(t *testing.T) {
 	t.Logf("Successfully streamed %d items for %s", len(items), metaTitle)
 }
 
+func TestHasPathTraversalAndSanitizeCaption(t *testing.T) {
+	if hasPathTraversal("videos/Marcin AI/Grab the repo from my profile 👆 It hasn’t even been 72 hours since Je....mp4") {
+		t.Errorf("expected false for filename containing ellipsis '....mp4'")
+	}
+	if !hasPathTraversal("../etc/passwd") {
+		t.Errorf("expected true for '../etc/passwd'")
+	}
+	if !hasPathTraversal("videos/../secret.mp4") {
+		t.Errorf("expected true for 'videos/../secret.mp4'")
+	}
 
+	got := sanitizeCaptionFilename("Grab the repo...   ")
+	if strings.HasSuffix(got, ".") {
+		t.Errorf("expected trailing dots to be trimmed from stem, got %q", got)
+	}
+}
+
+func TestResolveAndStreamFbReelShareLink(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping live test in short mode")
+	}
+	shareURL := "https://www.facebook.com/share/r/1C436bBqPR/"
+	resolved := resolveFbShareURL(shareURL, "")
+	if resolved == "" || !IsFacebookVideoURL(resolved) {
+		t.Fatalf("expected %s to resolve to a single Facebook video URL, got %q", shareURL, resolved)
+	}
+	t.Logf("Resolved %s -> %s", shareURL, resolved)
+
+	var items []ScanEntry
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+	defer cancel()
+	err := StreamScanUrl(ctx, shareURL, "", func(entry ScanEntry, count int) {
+		items = append(items, entry)
+	}, func(title, uploader, channel, thumbnail string, total int) {})
+	if err != nil {
+		t.Fatalf("StreamScanUrl error: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("expected 1 item from single reel share URL, got %d", len(items))
+	}
+	if !strings.HasPrefix(items[0].Url, "https://") {
+		t.Fatalf("expected full https:// URL for streamed reel item, got %q", items[0].Url)
+	}
+	t.Logf("Streamed single reel item URL: %s", items[0].Url)
+}

@@ -60,3 +60,43 @@ func TestScanGalleryAndFolders(t *testing.T) {
 		t.Errorf("expected 2 items after delete, got %d", resp2.Total)
 	}
 }
+
+func TestExcludeThumbnailsFromGallery(t *testing.T) {
+	tempDir := t.TempDir()
+	t.Setenv("MR_DOWNLOAD_DIR", tempDir)
+
+	// Create a video with thumbnail in the same video folder
+	vid1 := filepath.Join(tempDir, "videos", "MyChannel", "clip1.mp4")
+	thumb1 := filepath.Join(tempDir, "videos", "MyChannel", "thumb.jpg")
+	thumb2 := filepath.Join(tempDir, "videos", "MyChannel", "clip1.jpg")
+
+	// Create a folder in root with both video and thumb.webp
+	legacyVid := filepath.Join(tempDir, "task_12345", "funny_video.mp4")
+	legacyThumb := filepath.Join(tempDir, "task_12345", "thumb.webp")
+
+	// Create a standalone photo
+	photo1 := filepath.Join(tempDir, "photos", "Nature", "sunset.jpg")
+
+	for _, p := range []string{vid1, thumb1, thumb2, legacyVid, legacyThumb, photo1} {
+		_ = os.MkdirAll(filepath.Dir(p), 0o755)
+		_ = os.WriteFile(p, []byte("data"), 0o644)
+	}
+
+	resp, err := ScanGallery()
+	if err != nil {
+		t.Fatalf("ScanGallery failed: %v", err)
+	}
+
+	// Should only have: clip1.mp4 (video), funny_video.mp4 (video), sunset.jpg (photo)
+	// Thumbnails must be excluded!
+	if resp.Total != 3 {
+		t.Fatalf("expected exactly 3 items, got %d: %+v", resp.Total, resp.Items)
+	}
+
+	for _, item := range resp.Items {
+		if isThumbnailFilename(item.Name) || item.Name == "thumb.jpg" || item.Name == "clip1.jpg" || item.Name == "thumb.webp" {
+			t.Errorf("found thumbnail item in gallery: %+v", item)
+		}
+	}
+}
+
