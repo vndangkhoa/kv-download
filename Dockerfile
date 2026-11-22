@@ -27,7 +27,7 @@ RUN GOOS=$TARGETOS GOARCH=$TARGETARCH go build -o kv-download ./src
 FROM --platform=$TARGETPLATFORM python:3.13.7-alpine3.22
 
 ARG TARGETARCH
-ARG IMAGE_TAG="1.0.45"
+ARG IMAGE_TAG="1.0.46"
 ENV APP_VERSION=$IMAGE_TAG
 ENV CHROMIUM_BIN="/usr/bin/chromium-browser"
 
@@ -41,6 +41,7 @@ ENV MR_IMPERSONATE="chrome"
 
 RUN apk add --update --no-cache \
     # https://github.com/yt-dlp/yt-dlp/issues/14404 \
+    tini \
     deno \
     curl \
     aria2 \
@@ -83,4 +84,4 @@ EXPOSE 9292
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:9292/ || exit 1
 
-ENTRYPOINT ["/app/kv-download"]
+ENTRYPOINT ["/sbin/tini", "--", "/app/kv-download"]

@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestNormalizeOmniboxURL(t *testing.T) {
@@ -81,5 +82,62 @@ func TestFormatNetscapeCookiesAndStatusHandler(t *testing.T) {
 	}
 	if st.Running {
 		t.Fatal("Chromium should not be running before a session is started")
+	}
+}
+
+func TestBuildChromiumArgsLowCPU(t *testing.T) {
+	args := buildChromiumArgs(1360, 780, 9222, "/tmp/prof", "https://www.youtube.com")
+	joined := strings.Join(args, " ")
+
+	if strings.Contains(joined, "--autoplay-policy=no-user-gesture-required") {
+		t.Fatal("expected Chromium args NOT to auto-play video without user activation")
+	}
+	required := []string{
+		"--autoplay-policy=document-user-activation-required",
+		"--renderer-process-limit=1",
+		"--num-raster-threads=1",
+		"--disable-webgl",
+		"--disable-webgl2",
+		"--disable-3d-apis",
+		"--disable-software-rasterizer",
+		"--disable-crash-reporter",
+		"--disable-breakpad",
+		"--window-size=1360,780",
+	}
+	for _, flag := range required {
+		if !strings.Contains(joined, flag) {
+			t.Fatalf("expected Chromium args to contain %q, got: %s", flag, joined)
+		}
+	}
+}
+
+func TestClampChromiumViewportAndAckPacing(t *testing.T) {
+	w, h := clampChromiumViewport(0, -10)
+	if w != defaultChromiumWidth || h != defaultChromiumHeight {
+		t.Fatalf("clampChromiumViewport(0,-10) = %dx%d, want %dx%d", w, h, defaultChromiumWidth, defaultChromiumHeight)
+	}
+	w, h = clampChromiumViewport(100, 100)
+	if w != minChromiumWidth || h != minChromiumHeight {
+		t.Fatalf("clampChromiumViewport(100,100) = %dx%d, want %dx%d", w, h, minChromiumWidth, minChromiumHeight)
+	}
+	w, h = clampChromiumViewport(4000, 3000)
+	if w != maxChromiumWidth || h != maxChromiumHeight {
+		t.Fatalf("clampChromiumViewport(4000,3000) = %dx%d, want %dx%d", w, h, maxChromiumWidth, maxChromiumHeight)
+	}
+	w, h = clampChromiumViewport(1360, 780)
+	if w != 1360 || h != 780 {
+		t.Fatalf("clampChromiumViewport(1360,780) = %dx%d, want 1360x780", w, h)
+	}
+
+	base := time.Unix(1700000000, 0)
+	if d := nextScreencastAckDelay(base, time.Time{}, screencastMinInterval); d != 0 {
+		t.Fatalf("expected zero delay when lastAck is zero, got %v", d)
+	}
+	if d := nextScreencastAckDelay(base.Add(200*time.Millisecond), base, screencastMinInterval); d != 0 {
+		t.Fatalf("expected zero delay after interval elapsed, got %v", d)
+	}
+	d := nextScreencastAckDelay(base.Add(40*time.Millisecond), base, screencastMinInterval)
+	if d != 100*time.Millisecond {
+		t.Fatalf("nextScreencastAckDelay(+40ms) = %v, want 100ms", d)
 	}
 }

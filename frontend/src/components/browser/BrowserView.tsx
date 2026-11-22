@@ -21,7 +21,6 @@ import { TextInput } from '@astryxdesign/core/TextInput';
 import { Selector } from '@astryxdesign/core/Selector';
 import { TabList, Tab } from '@astryxdesign/core/TabList';
 import { Badge } from '@astryxdesign/core/Badge';
-import { Card } from '@astryxdesign/core/Card';
 import { Banner } from '@astryxdesign/core/Banner';
 import {
   ArrowLeft,
@@ -38,6 +37,8 @@ import {
   Keyboard,
   ListChecks,
   Loader2,
+  Maximize2,
+  Minimize2,
   Music,
   Play,
   Power,
@@ -115,6 +116,7 @@ export function BrowserView({ onOpenAlbumModal, onQueued }: BrowserViewProps) {
   const [reloadNonce, setReloadNonce] = useState(0);
 
   const [isLoadingPage, setIsLoadingPage] = useState(false);
+  const [isMaximized, setIsMaximized] = useState(false);
   const [isSniffing, setIsSniffing] = useState(false);
   const [isSnifferOpen, setIsSnifferOpen] = useState(false);
   const [sniffFilter, setSniffFilter] = useState<SniffFilter>('video');
@@ -128,6 +130,8 @@ export function BrowserView({ onOpenAlbumModal, onQueued }: BrowserViewProps) {
   const lastSniffedPageRef = useRef<string>('');
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const viewportContainerRef = useRef<HTMLDivElement | null>(null);
+  const canvasStageRef = useRef<HTMLDivElement | null>(null);
+  const lastRequestedSizeRef = useRef<{ width: number; height: number } | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const sseRef = useRef<EventSource | null>(null);
   const lastMoveSentRef = useRef<number>(0);
@@ -266,13 +270,32 @@ export function BrowserView({ onOpenAlbumModal, onQueued }: BrowserViewProps) {
     setChromiumTransport(null);
   }, []);
 
+  const measureStageSize = useCallback(() => {
+    const el = canvasStageRef.current ?? viewportContainerRef.current;
+    if (!el) return { width: 1280, height: 800 };
+    const rect = el.getBoundingClientRect();
+    if (rect.width < 200 || rect.height < 200) return { width: 1280, height: 800 };
+    const width = Math.min(1920, Math.max(360, Math.round(rect.width)));
+    const height = Math.min(1200, Math.max(320, Math.round(rect.height)));
+    return { width, height };
+  }, []);
+
+  const buildStreamQuery = useCallback((startUrl?: string, width?: number, height?: number) => {
+    const params = new URLSearchParams();
+    if (startUrl) params.set('url', startUrl);
+    if (width && width > 0) params.set('width', String(width));
+    if (height && height > 0) params.set('height', String(height));
+    const qs = params.toString();
+    return qs ? `?${qs}` : '';
+  }, []);
+
   const connectChromiumSSE = useCallback(
-    (startUrl?: string) => {
+    (startUrl?: string, width?: number, height?: number) => {
       if (sseRef.current) {
         sseRef.current.close();
         sseRef.current = null;
       }
-      const qs = startUrl ? `?url=${encodeURIComponent(startUrl)}` : '';
+      const qs = buildStreamQuery(startUrl, width, height);
       const es = new EventSource(`/api/browser/chromium/events${qs}`);
       sseRef.current = es;
       setChromiumTransport('sse');
@@ -286,11 +309,11 @@ export function BrowserView({ onOpenAlbumModal, onQueued }: BrowserViewProps) {
         // EventSource automatically retries on transient network hiccups
       };
     },
-    [handleChromiumEvent]
+    [buildStreamQuery, handleChromiumEvent]
   );
 
   const ensureChromiumConnected = useCallback(
-    (startUrl?: string) => {
+    (startUrl?: string, width?: number, height?: number) => {
       if (typeof window === 'undefined') return;
       if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
         if (startUrl) {
@@ -306,7 +329,7 @@ export function BrowserView({ onOpenAlbumModal, onQueued }: BrowserViewProps) {
       }
 
       const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const qs = startUrl ? `?url=${encodeURIComponent(startUrl)}` : '';
+      const qs = buildStreamQuery(startUrl, width, height);
       let opened = false;
       try {
         const ws = new WebSocket(`${proto}//${window.location.host}/api/browser/chromium/ws${qs}`);
@@ -324,22 +347,22 @@ export function BrowserView({ onOpenAlbumModal, onQueued }: BrowserViewProps) {
         ws.onerror = () => {
           if (!opened) {
             wsRef.current = null;
-            connectChromiumSSE(startUrl);
+            connectChromiumSSE(startUrl, width, height);
           }
         };
         ws.onclose = () => {
           wsRef.current = null;
           if (!opened) {
-            connectChromiumSSE(startUrl);
+            connectChromiumSSE(startUrl, width, height);
           } else {
             setChromiumTransport(null);
           }
         };
       } catch {
-        connectChromiumSSE(startUrl);
+        connectChromiumSSE(startUrl, width, height);
       }
     },
-    [connectChromiumSSE, handleChromiumEvent]
+    [buildStreamQuery, connectChromiumSSE, handleChromiumEvent]
   );
 
   const dispatchChromiumAction = useCallback(async (action: ChromiumActionPayload) => {
@@ -368,7 +391,10 @@ export function BrowserView({ onOpenAlbumModal, onQueued }: BrowserViewProps) {
         } else if (st.running && st.currentUrl) {
           setActiveUrl(st.currentUrl);
           setUrlInput(st.currentUrl);
-          ensureChromiumConnected();
+          const { width, height } = measureStageSize();
+          setViewportSize({ width, height });
+          lastRequestedSizeRef.current = { width, height };
+          ensureChromiumConnected(undefined, width, height);
         }
       })
       .catch(() => {
@@ -382,31 +408,52 @@ export function BrowserView({ onOpenAlbumModal, onQueued }: BrowserViewProps) {
       cancelled = true;
       disconnectChromiumStream();
     };
-  }, [disconnectChromiumStream, ensureChromiumConnected]);
+  }, [disconnectChromiumStream, ensureChromiumConnected, measureStageSize]);
 
-  // Keep Chromium viewport aligned with panel dimensions
+  // Keep Chromium viewport aligned 1:1 with actual inner stage dimensions
   useEffect(() => {
     if (engineMode !== 'chromium' || !activeUrl || !chromiumRunning) return;
-    const el = viewportContainerRef.current;
+    const el = canvasStageRef.current ?? viewportContainerRef.current;
     if (!el || typeof ResizeObserver === 'undefined') return;
 
     let timer: ReturnType<typeof setTimeout> | null = null;
-    const ro = new ResizeObserver((entries) => {
-      const rect = entries[0]?.contentRect;
-      if (!rect || rect.width < 320 || rect.height < 280) return;
-      const targetW = Math.min(1440, Math.max(640, Math.round(rect.width)));
-      const targetH = Math.min(900, Math.max(480, Math.round(rect.height)));
+    const syncSize = () => {
+      const rect = el.getBoundingClientRect();
+      if (!rect || rect.width < 200 || rect.height < 200) return;
+      const targetW = Math.min(1920, Math.max(360, Math.round(rect.width)));
+      const targetH = Math.min(1200, Math.max(320, Math.round(rect.height)));
+      const prev = lastRequestedSizeRef.current;
+      if (prev && Math.abs(prev.width - targetW) < 4 && Math.abs(prev.height - targetH) < 4) {
+        return;
+      }
+      lastRequestedSizeRef.current = { width: targetW, height: targetH };
+      dispatchChromiumAction({ type: 'resize', width: targetW, height: targetH });
+    };
+
+    const immediateTimer = setTimeout(syncSize, 40);
+    const ro = new ResizeObserver(() => {
       if (timer) clearTimeout(timer);
-      timer = setTimeout(() => {
-        dispatchChromiumAction({ type: 'resize', width: targetW, height: targetH });
-      }, 350);
+      timer = setTimeout(syncSize, 180);
     });
     ro.observe(el);
     return () => {
+      clearTimeout(immediateTimer);
       if (timer) clearTimeout(timer);
       ro.disconnect();
     };
-  }, [activeUrl, chromiumRunning, dispatchChromiumAction, engineMode]);
+  }, [activeUrl, chromiumRunning, dispatchChromiumAction, engineMode, isMaximized, isSnifferOpen]);
+
+  // Allow Escape to exit maximized browser mode when focus isn't inside page canvas
+  useEffect(() => {
+    if (!isMaximized) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && document.activeElement !== canvasRef.current) {
+        setIsMaximized(false);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [isMaximized]);
 
   const runServerSniff = useCallback(
     async (targetUrl: string) => {
@@ -445,7 +492,10 @@ export function BrowserView({ onOpenAlbumModal, onQueued }: BrowserViewProps) {
         if (wsRef.current?.readyState === WebSocket.OPEN || sseRef.current) {
           dispatchChromiumAction({ type: 'navigate', url: target });
         } else {
-          startChromiumSession(target)
+          const { width, height } = measureStageSize();
+          setViewportSize({ width, height });
+          lastRequestedSizeRef.current = { width, height };
+          startChromiumSession(target, width, height)
             .then((res) => {
               if (!res.ok) {
                 setStatusNotice(
@@ -458,7 +508,7 @@ export function BrowserView({ onOpenAlbumModal, onQueued }: BrowserViewProps) {
                 return;
               }
               setChromiumRunning(true);
-              ensureChromiumConnected(target);
+              ensureChromiumConnected(target, width, height);
             })
             .catch(() => {
               setEngineMode('proxy');
@@ -486,6 +536,7 @@ export function BrowserView({ onOpenAlbumModal, onQueued }: BrowserViewProps) {
       engineMode,
       ensureChromiumConnected,
       historyIndex,
+      measureStageSize,
       runServerSniff,
     ]
   );
@@ -560,11 +611,14 @@ export function BrowserView({ onOpenAlbumModal, onQueued }: BrowserViewProps) {
       setEngineMode('chromium');
       if (activeUrl) {
         setIsLoadingPage(true);
-        startChromiumSession(activeUrl)
+        const { width, height } = measureStageSize();
+        setViewportSize({ width, height });
+        lastRequestedSizeRef.current = { width, height };
+        startChromiumSession(activeUrl, width, height)
           .then((res) => {
             if (res.ok) {
               setChromiumRunning(true);
-              ensureChromiumConnected(activeUrl);
+              ensureChromiumConnected(activeUrl, width, height);
             } else {
               setEngineMode('proxy');
             }
@@ -880,146 +934,198 @@ export function BrowserView({ onOpenAlbumModal, onQueued }: BrowserViewProps) {
   const canGoForward =
     engineMode === 'chromium' ? chromiumCanForward : historyIndex < history.length - 1;
 
+  const engineStatusTitle =
+    engineMode === 'chromium'
+      ? `Chromium Core ${chromiumTransport ? `(${chromiumTransport.toUpperCase()})` : ''} · ${chromiumRunning ? 'Active — click canvas to interact · auto-stops when idle' : 'On-demand · launches when navigating'}`
+      : 'Fast Proxy Mode · DNS-resilient server proxy';
+
   return (
-    <div className="max-w-7xl mx-auto flex flex-col gap-3 h-[calc(100dvh-10.5rem)] min-h-[540px]">
-      {/* Browser Address & Control Bar */}
-      <Card padding={3} elevation="low">
-        <div className="flex flex-col lg:flex-row lg:items-center gap-2">
-          <div className="flex items-center gap-1 shrink-0">
-            <IconButton
-              label="Back"
-              size="sm"
-              variant="secondary"
-              isDisabled={!canGoBack}
-              icon={<ArrowLeft className="w-4 h-4" />}
-              onClick={handleBack}
+    <div
+      className={cn(
+        'flex flex-col gap-1.5 min-h-0',
+        isMaximized
+          ? 'fixed inset-0 z-40 bg-[var(--color-background-body)] p-1.5 sm:p-2'
+          : 'w-full h-full flex-1'
+      )}
+    >
+      {/* Unified Slim Browser Chrome Bar */}
+      <div className="rounded-xl border border-[var(--color-border)] bg-[var(--color-background-surface)] px-2 py-1.5 flex items-center gap-1.5 flex-wrap lg:flex-nowrap shrink-0 shadow-xs">
+        <div className="flex items-center gap-0.5 shrink-0">
+          <IconButton
+            label="Back"
+            size="sm"
+            variant="ghost"
+            isDisabled={!canGoBack}
+            icon={<ArrowLeft className="w-4 h-4" />}
+            onClick={handleBack}
+          />
+          <IconButton
+            label="Forward"
+            size="sm"
+            variant="ghost"
+            isDisabled={!canGoForward}
+            icon={<ArrowRight className="w-4 h-4" />}
+            onClick={handleForward}
+          />
+          <IconButton
+            label="Reload page"
+            size="sm"
+            variant="ghost"
+            isDisabled={!activeUrl}
+            icon={
+              isLoadingPage ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <RotateCw className="w-4 h-4" />
+              )
+            }
+            onClick={handleReload}
+          />
+          <IconButton
+            label="Home bookmarks"
+            size="sm"
+            variant="ghost"
+            icon={<Home className="w-4 h-4" />}
+            onClick={handleHome}
+          />
+        </div>
+
+        <div className="flex-1 min-w-[200px] flex items-center gap-1.5">
+          <span
+            title={engineStatusTitle}
+            aria-label={engineStatusTitle}
+            className="inline-flex items-center justify-center w-6 h-7 rounded-md bg-[var(--color-background-muted)] border border-[var(--color-border)] shrink-0"
+          >
+            <span
+              className={cn(
+                'w-2 h-2 rounded-full',
+                engineMode === 'proxy'
+                  ? 'bg-[var(--color-accent)]'
+                  : chromiumRunning
+                    ? 'bg-[var(--color-text-success)]'
+                    : 'bg-amber-500'
+              )}
             />
-            <IconButton
-              label="Forward"
+          </span>
+          <div className="flex-1 min-w-0">
+            <TextInput
+              label="Web URL or Search"
+              isLabelHidden
+              type="text"
               size="sm"
-              variant="secondary"
-              isDisabled={!canGoForward}
-              icon={<ArrowRight className="w-4 h-4" />}
-              onClick={handleForward}
+              width="100%"
+              startIcon={Globe}
+              value={urlInput}
+              onChange={(val) => setUrlInput(val)}
+              onEnter={() => navigateTo(urlInput)}
+              enterKeyHint="go"
+              hasClear
+              placeholder="Search Google or enter URL (youtube.com, tiktok.com, av01.media)..."
             />
-            <IconButton
-              label="Home bookmarks"
+          </div>
+          <Button
+            label="Go"
+            size="sm"
+            variant="primary"
+            isDisabled={!urlInput.trim()}
+            onClick={() => navigateTo(urlInput)}
+          />
+        </div>
+
+        <div className="flex items-center gap-1 shrink-0 flex-wrap">
+          {chromiumAvailable && (
+            <Button
+              label={engineMode === 'chromium' ? 'Chromium' : 'Proxy'}
               size="sm"
               variant="secondary"
-              icon={<Home className="w-4 h-4" />}
-              onClick={handleHome}
-            />
-            <IconButton
-              label="Reload page"
-              size="sm"
-              variant="secondary"
-              isDisabled={!activeUrl}
               icon={
-                isLoadingPage ? (
-                  <Loader2 className="w-4 h-4 animate-spin" />
+                engineMode === 'chromium' ? (
+                  <Chrome className="w-3.5 h-3.5" />
                 ) : (
-                  <RotateCw className="w-4 h-4" />
+                  <Shield className="w-3.5 h-3.5" />
                 )
               }
-              onClick={handleReload}
+              onClick={() =>
+                handleSwitchEngine(engineMode === 'chromium' ? 'proxy' : 'chromium')
+              }
             />
-          </div>
+          )}
 
-          <div className="flex-1 min-w-0 flex items-center gap-2">
-            <div className="flex-1 min-w-0">
-              <TextInput
-                label="Web URL or Search"
-                isLabelHidden
-                type="text"
-                size="sm"
-                width="100%"
-                startIcon={Globe}
-                value={urlInput}
-                onChange={(val) => setUrlInput(val)}
-                onEnter={() => navigateTo(urlInput)}
-                enterKeyHint="go"
-                hasClear
-                placeholder="Search Google or enter URL (youtube.com, tiktok.com, av01.media)..."
-              />
-            </div>
+          {activeUrl && (
             <Button
-              label="Go"
+              label="Download"
               size="sm"
               variant="primary"
-              isDisabled={!urlInput.trim()}
-              onClick={() => navigateTo(urlInput)}
+              isLoading={isEnqueuing}
+              icon={<Download className="w-3.5 h-3.5" />}
+              onClick={handleDownloadCurrentPage}
             />
-          </div>
+          )}
 
-          <div className="flex flex-wrap items-center gap-1.5 shrink-0">
-            {chromiumAvailable && (
-              <Button
-                label={engineMode === 'chromium' ? 'Chromium Core' : 'Fast Proxy'}
-                size="sm"
-                variant={engineMode === 'chromium' ? 'primary' : 'secondary'}
-                icon={
-                  engineMode === 'chromium' ? (
-                    <Chrome className="w-3.5 h-3.5" />
-                  ) : (
-                    <Shield className="w-3.5 h-3.5" />
-                  )
-                }
-                onClick={() =>
-                  handleSwitchEngine(engineMode === 'chromium' ? 'proxy' : 'chromium')
-                }
-              />
-            )}
+          <Button
+            label={`Sniffer (${sniffedItems.length})`}
+            size="sm"
+            variant={isSnifferOpen ? 'primary' : 'secondary'}
+            isLoading={isSniffing}
+            icon={<Radar className="w-3.5 h-3.5" />}
+            onClick={() => {
+              const nextOpen = !isSnifferOpen;
+              setIsSnifferOpen(nextOpen);
+              if (nextOpen && engineMode === 'chromium' && activeUrl) {
+                dispatchChromiumAction({ type: 'extract' });
+              }
+            }}
+          />
 
-            {engineMode === 'chromium' && activeUrl && (
-              <IconButton
-                label="Toggle virtual text input for mobile"
-                size="sm"
-                variant={showMobileTypeBar ? 'primary' : 'secondary'}
-                icon={<Keyboard className="w-3.5 h-3.5" />}
-                onClick={() => setShowMobileTypeBar((v) => !v)}
-              />
-            )}
-
-            {activeUrl && onOpenAlbumModal && (
-              <Button
-                label="Scan Page"
-                size="sm"
-                variant="secondary"
-                icon={<ListChecks className="w-3.5 h-3.5" />}
-                onClick={() => onOpenAlbumModal(activeUrl)}
-              />
-            )}
-            <Button
-              label={`Sniffer (${sniffedItems.length})`}
+          {activeUrl && onOpenAlbumModal && (
+            <IconButton
+              label="Scan page or playlist"
+              tooltip="Scan page / playlist for batch download"
               size="sm"
-              variant={isSnifferOpen ? 'primary' : 'secondary'}
-              isLoading={isSniffing}
-              icon={<Radar className="w-3.5 h-3.5" />}
-              onClick={() => setIsSnifferOpen((o) => !o)}
+              variant="secondary"
+              icon={<ListChecks className="w-3.5 h-3.5" />}
+              onClick={() => onOpenAlbumModal(activeUrl)}
             />
-            {activeUrl && (
-              <Button
-                label="Download Video"
-                size="sm"
-                variant="secondary"
-                isLoading={isEnqueuing}
-                icon={<Download className="w-3.5 h-3.5" />}
-                onClick={handleDownloadCurrentPage}
-              />
-            )}
-            {engineMode === 'chromium' && chromiumRunning && (
-              <IconButton
-                label="Stop Chromium engine"
-                tooltip="Stop Chromium to free NAS resources"
-                size="sm"
-                variant="ghost"
-                icon={<Power className="w-3.5 h-3.5 text-[var(--color-text-error)]" />}
-                onClick={handleStopChromium}
-              />
-            )}
-          </div>
+          )}
+
+          {engineMode === 'chromium' && activeUrl && (
+            <IconButton
+              label="Toggle virtual text input for mobile"
+              tooltip="Virtual text input bar"
+              size="sm"
+              variant={showMobileTypeBar ? 'primary' : 'secondary'}
+              icon={<Keyboard className="w-3.5 h-3.5" />}
+              onClick={() => setShowMobileTypeBar((v) => !v)}
+            />
+          )}
+
+          <IconButton
+            label={isMaximized ? 'Restore browser view' : 'Maximize browser view'}
+            tooltip={isMaximized ? 'Restore view (Esc)' : 'Maximize browser view'}
+            size="sm"
+            variant={isMaximized ? 'primary' : 'ghost'}
+            icon={
+              isMaximized ? (
+                <Minimize2 className="w-4 h-4" />
+              ) : (
+                <Maximize2 className="w-4 h-4" />
+              )
+            }
+            onClick={() => setIsMaximized((m) => !m)}
+          />
+
+          {engineMode === 'chromium' && chromiumRunning && (
+            <IconButton
+              label="Stop Chromium engine"
+              tooltip="Stop Chromium to free NAS CPU & RAM"
+              size="sm"
+              variant="ghost"
+              icon={<Power className="w-3.5 h-3.5 text-[var(--color-text-error)]" />}
+              onClick={handleStopChromium}
+            />
+          )}
         </div>
-      </Card>
+      </div>
 
       {statusNotice && (
         <Banner
@@ -1030,11 +1136,11 @@ export function BrowserView({ onOpenAlbumModal, onQueued }: BrowserViewProps) {
         />
       )}
 
-      {/* Workspace Split: Chromium/Proxy Viewport + Collapsible Sniffer Panel */}
-      <div className="flex-1 min-h-0 flex gap-3 relative overflow-hidden">
+      {/* Workspace Split: Edge-to-Edge Viewport + Collapsible Sniffer Panel */}
+      <div className="flex-1 min-h-0 flex gap-2 relative overflow-hidden">
         <div
           ref={viewportContainerRef}
-          className="flex-1 min-w-0 rounded-xl border border-[var(--color-border)] bg-[var(--color-background-card)] overflow-hidden flex flex-col"
+          className="flex-1 min-w-0 min-h-0 rounded-xl border border-[var(--color-border)] bg-[var(--color-background-surface)] overflow-hidden flex flex-col"
         >
           {!activeUrl ? (
             <div className="flex-1 overflow-y-auto p-6 flex flex-col items-center justify-center">
@@ -1054,7 +1160,7 @@ export function BrowserView({ onOpenAlbumModal, onQueued }: BrowserViewProps) {
                   </h2>
                   <p className="text-sm text-[var(--color-text-secondary)]">
                     {chromiumAvailable
-                      ? 'On-demand headless Chromium 142 with live interactive rendering & network stream capture. Surf Google, YouTube, TikTok & AV01 directly, or tap Download Video anytime.'
+                      ? 'On-demand headless Chromium 142 with live interactive 1:1 viewport rendering & network stream capture. Surf Google, YouTube, TikTok & AV01 directly, or tap Download anytime.'
                       : 'Browse pages through the built-in Cloudflare/Google DoH fallback proxy, capture HLS/MP4/MPD video streams live, preview in-app, or batch-download into groups.'}
                   </p>
                 </div>
@@ -1065,7 +1171,7 @@ export function BrowserView({ onOpenAlbumModal, onQueued }: BrowserViewProps) {
                       key={site.url}
                       type="button"
                       onClick={() => navigateTo(site.url)}
-                      className="p-3.5 rounded-xl border border-[var(--color-border)] bg-[var(--color-background-surface)] hover:border-[var(--color-accent)] hover:bg-[var(--color-accent-muted)] text-left transition-colors space-y-1"
+                      className="p-3.5 rounded-xl border border-[var(--color-border)] bg-[var(--color-background-card)] hover:border-[var(--color-accent)] hover:bg-[var(--color-accent-muted)] text-left transition-colors space-y-1"
                     >
                       <div className="flex items-center justify-between gap-2">
                         <span className="text-sm font-semibold text-[var(--color-text-primary)]">
@@ -1082,40 +1188,20 @@ export function BrowserView({ onOpenAlbumModal, onQueued }: BrowserViewProps) {
                     </button>
                   ))}
                 </div>
+
+                {chromiumAvailable && (
+                  <p className="text-center text-xs text-[var(--color-text-secondary)]">
+                    Low-CPU mode active · Chromium stays off at 0% idle until you open a site and shuts down automatically when idle.
+                  </p>
+                )}
               </div>
             </div>
           ) : engineMode === 'chromium' ? (
-            <div className="relative flex-1 w-full h-full bg-black flex flex-col overflow-hidden">
-              <div className="px-3 py-1.5 border-b border-[var(--color-border)] bg-[var(--color-background-surface)] flex items-center justify-between gap-2 text-xs">
-                <div className="flex items-center gap-2 min-w-0">
-                  <span
-                    className={cn(
-                      'w-2 h-2 rounded-full shrink-0',
-                      chromiumRunning ? 'bg-[var(--color-text-success)]' : 'bg-amber-500'
-                    )}
-                  />
-                  <span className="font-semibold text-[var(--color-text-primary)] truncate">
-                    Chromium Core {chromiumTransport ? `(${chromiumTransport.toUpperCase()})` : ''}
-                  </span>
-                  <span className="text-[var(--color-text-secondary)] hidden sm:inline">
-                    Click canvas to focus & type · Auto-stops when idle
-                  </span>
-                </div>
-                <div className="flex items-center gap-1.5 shrink-0">
-                  <Button
-                    label="Detect Streams"
-                    size="sm"
-                    variant="secondary"
-                    icon={<Radar className="w-3 h-3" />}
-                    onClick={() => {
-                      dispatchChromiumAction({ type: 'extract' });
-                      setIsSnifferOpen(true);
-                    }}
-                  />
-                </div>
-              </div>
-
-              <div className="relative flex-1 min-h-0 flex items-center justify-center bg-black overflow-hidden">
+            <div className="relative flex-1 min-h-0 w-full h-full flex flex-col overflow-hidden">
+              <div
+                ref={canvasStageRef}
+                className="relative flex-1 min-h-0 w-full h-full bg-[var(--color-background-surface)] overflow-hidden"
+              >
                 <canvas
                   ref={canvasRef}
                   width={viewportSize.width}
@@ -1133,10 +1219,10 @@ export function BrowserView({ onOpenAlbumModal, onQueued }: BrowserViewProps) {
                   onTouchMove={handleCanvasTouchMove}
                   onTouchEnd={handleCanvasTouchEnd}
                   onContextMenu={(e) => e.preventDefault()}
-                  className="max-w-full max-h-full w-full h-full object-contain outline-none cursor-default focus:ring-1 focus:ring-[var(--color-accent)]"
+                  className="block w-full h-full outline-none cursor-default focus:ring-1 focus:ring-inset focus:ring-[var(--color-accent)]"
                 />
                 {isLoadingPage && (
-                  <div className="absolute top-3 right-3 px-2.5 py-1 rounded-full bg-black/75 text-white text-xs flex items-center gap-1.5 pointer-events-none">
+                  <div className="absolute top-2.5 right-2.5 px-2.5 py-1 rounded-full bg-black/75 text-white text-xs flex items-center gap-1.5 pointer-events-none">
                     <Loader2 className="w-3.5 h-3.5 animate-spin" />
                     Rendering...
                   </div>
@@ -1144,7 +1230,7 @@ export function BrowserView({ onOpenAlbumModal, onQueued }: BrowserViewProps) {
               </div>
 
               {showMobileTypeBar && (
-                <div className="px-3 py-2 border-t border-[var(--color-border)] bg-[var(--color-background-surface)] flex items-center gap-2">
+                <div className="px-3 py-2 border-t border-[var(--color-border)] bg-[var(--color-background-surface)] flex items-center gap-2 shrink-0">
                   <div className="flex-1 min-w-0">
                     <TextInput
                       label="Send text to page"

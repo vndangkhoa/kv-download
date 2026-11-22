@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -25,13 +26,18 @@ import (
 )
 
 const (
-	defaultChromiumWidth        = 1280
-	defaultChromiumHeight       = 800
-	chromiumIdleNoClients       = 60 * time.Second
-	chromiumIdleWithClients     = 5 * time.Minute
-	chromiumWatchdogInterval    = 20 * time.Second
-	defaultChromiumStartPage    = "https://www.google.com"
-	chromiumDesktopUserAgent    = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36"
+	defaultChromiumWidth     = 1280
+	defaultChromiumHeight    = 800
+	minChromiumWidth         = 360
+	maxChromiumWidth         = 1920
+	minChromiumHeight        = 320
+	maxChromiumHeight        = 1200
+	screencastMinInterval    = 140 * time.Millisecond
+	chromiumIdleNoClients    = 45 * time.Second
+	chromiumIdleWithClients  = 3 * time.Minute
+	chromiumWatchdogInterval = 15 * time.Second
+	defaultChromiumStartPage = "https://www.google.com"
+	chromiumDesktopUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36"
 )
 
 type ChromiumAction struct {
@@ -110,23 +116,26 @@ type chromiumManager struct {
 	cdpWriteMu sync.Mutex
 	pendingMu  sync.Mutex
 	subsMu     sync.Mutex
+	ackMu      sync.Mutex
 
-	running      bool
-	cmd          *exec.Cmd
-	pgid         int
-	profileDir   string
-	debugPort    int
-	cdpConn      *websocket.Conn
-	stopCh       chan struct{}
-	currentURL   string
-	pageTitle    string
-	canGoBack    bool
-	canGoForward bool
-	width        int
-	height       int
-	lastFrame    string
-	lastActivity time.Time
-	watchdogOnce sync.Once
+	running           bool
+	cmd               *exec.Cmd
+	pgid              int
+	profileDir        string
+	debugPort         int
+	cdpConn           *websocket.Conn
+	stopCh            chan struct{}
+	currentURL        string
+	pageTitle         string
+	canGoBack         bool
+	canGoForward      bool
+	width             int
+	height            int
+	screencastPaused  bool
+	lastScreencastAck time.Time
+	lastFrame         string
+	lastActivity      time.Time
+	watchdogOnce      sync.Once
 
 	msgSeq  atomic.Int64
 	pending map[int64]chan cdpRPCResult
@@ -232,18 +241,27 @@ func (m *chromiumManager) subscribe() (int64, chan chromiumEvent) {
 	ch := make(chan chromiumEvent, 32)
 	m.subsMu.Lock()
 	m.subscribers[id] = ch
+	count := len(m.subscribers)
 	m.subsMu.Unlock()
 	m.touchActivity()
+	if count == 1 {
+		go m.resumeScreencastIfPaused()
+	}
 	return id, ch
 }
 
 func (m *chromiumManager) unsubscribe(id int64) {
 	m.subsMu.Lock()
+	remaining := len(m.subscribers)
 	if ch, ok := m.subscribers[id]; ok {
 		delete(m.subscribers, id)
 		close(ch)
+		remaining = len(m.subscribers)
 	}
 	m.subsMu.Unlock()
+	if remaining == 0 {
+		go m.pauseScreencast()
+	}
 }
 
 func (m *chromiumManager) broadcast(ev chromiumEvent) {
@@ -307,6 +325,92 @@ func (m *chromiumManager) ensureWatchdog() {
 	})
 }
 
+func clampChromiumViewport(w, h int) (int, int) {
+	if w <= 0 {
+		w = defaultChromiumWidth
+	} else if w < minChromiumWidth {
+		w = minChromiumWidth
+	} else if w > maxChromiumWidth {
+		w = maxChromiumWidth
+	}
+	if h <= 0 {
+		h = defaultChromiumHeight
+	} else if h < minChromiumHeight {
+		h = minChromiumHeight
+	} else if h > maxChromiumHeight {
+		h = maxChromiumHeight
+	}
+	return w, h
+}
+
+func nextScreencastAckDelay(now, lastAck time.Time, minInterval time.Duration) time.Duration {
+	if minInterval <= 0 || lastAck.IsZero() {
+		return 0
+	}
+	nextAllowed := lastAck.Add(minInterval)
+	if !now.Before(nextAllowed) {
+		return 0
+	}
+	delay := nextAllowed.Sub(now)
+	if delay > minInterval*2 {
+		return minInterval
+	}
+	return delay
+}
+
+func parseQueryViewport(r *http.Request) (int, int) {
+	if r == nil {
+		return 0, 0
+	}
+	q := r.URL.Query()
+	w, wErr := strconv.Atoi(strings.TrimSpace(q.Get("width")))
+	h, hErr := strconv.Atoi(strings.TrimSpace(q.Get("height")))
+	if wErr != nil || hErr != nil || w <= 0 || h <= 0 {
+		return 0, 0
+	}
+	return clampChromiumViewport(w, h)
+}
+
+func buildChromiumArgs(width, height, port int, profileDir, target string) []string {
+	w, h := clampChromiumViewport(width, height)
+	return []string{
+		"--headless=new",
+		"--no-sandbox",
+		"--disable-setuid-sandbox",
+		"--disable-gpu",
+		"--disable-software-rasterizer",
+		"--disable-webgl",
+		"--disable-webgl2",
+		"--disable-3d-apis",
+		"--disable-dev-shm-usage",
+		"--disable-background-networking",
+		"--disable-component-update",
+		"--disable-domain-reliability",
+		"--disable-crash-reporter",
+		"--disable-breakpad",
+		"--disable-extensions",
+		"--disable-sync",
+		"--disable-translate",
+		"--no-first-run",
+		"--no-default-browser-check",
+		"--mute-audio",
+		"--autoplay-policy=document-user-activation-required",
+		"--renderer-process-limit=1",
+		"--num-raster-threads=1",
+		"--js-flags=--max-old-space-size=160",
+		"--disk-cache-size=33554432",
+		"--disable-features=AudioServiceOutOfProcess,IsolateOrigins,site-per-process,Translate,BackForwardCache,MediaRouter,OptimizationHints,PaintHolding,InterestFeedContentSuggestions",
+		fmt.Sprintf("--window-size=%d,%d", w, h),
+		"--remote-debugging-address=127.0.0.1",
+		fmt.Sprintf("--remote-debugging-port=%d", port),
+		"--remote-allow-origins=*",
+		"--user-data-dir=" + profileDir,
+		"--disable-blink-features=AutomationControlled",
+		"--user-agent=" + chromiumDesktopUserAgent,
+		target,
+	}
+}
+
 func (m *chromiumManager) ensureStarted(initialURL string) error {
 	m.ensureWatchdog()
 	m.startMu.Lock()
@@ -349,41 +453,14 @@ func (m *chromiumManager) ensureStarted(initialURL string) error {
 	if target == "" {
 		target = defaultChromiumStartPage
 	}
-	if width <= 0 {
-		width = defaultChromiumWidth
-	}
-	if height <= 0 {
-		height = defaultChromiumHeight
-	}
+	width, height = clampChromiumViewport(width, height)
 
-	chromeArgs := []string{
-		"--headless=new",
-		"--no-sandbox",
-		"--disable-setuid-sandbox",
-		"--disable-gpu",
-		"--disable-dev-shm-usage",
-		"--disable-background-networking",
-		"--disable-extensions",
-		"--disable-sync",
-		"--disable-translate",
-		"--no-first-run",
-		"--no-default-browser-check",
-		"--mute-audio",
-		"--autoplay-policy=no-user-gesture-required",
-		fmt.Sprintf("--window-size=%d,%d", width, height),
-		"--remote-debugging-address=127.0.0.1",
-		fmt.Sprintf("--remote-debugging-port=%d", port),
-		"--remote-allow-origins=*",
-		"--user-data-dir=" + profileDir,
-		"--disable-blink-features=AutomationControlled",
-		"--user-agent=" + chromiumDesktopUserAgent,
-		target,
-	}
+	chromeArgs := buildChromiumArgs(width, height, port, profileDir, target)
 
 	var stderrBuf bytes.Buffer
 	var cmd *exec.Cmd
 	if nicePath, nErr := exec.LookPath("nice"); nErr == nil && nicePath != "" {
-		cmd = exec.Command(nicePath, append([]string{"-n", "10", bin}, chromeArgs...)...)
+		cmd = exec.Command(nicePath, append([]string{"-n", "15", bin}, chromeArgs...)...)
 	} else {
 		cmd = exec.Command(bin, chromeArgs...)
 	}
@@ -478,11 +555,18 @@ func (m *chromiumManager) ensureStarted(initialURL string) error {
 	m.pageTitle = ""
 	m.canGoBack = false
 	m.canGoForward = false
+	m.width = width
+	m.height = height
+	m.screencastPaused = false
 	m.lastFrame = ""
 	m.lastActivity = time.Now()
 	m.mediaMap = make(map[string]SniffedMediaItem)
 	m.mediaList = nil
 	m.stateMu.Unlock()
+
+	m.ackMu.Lock()
+	m.lastScreencastAck = time.Time{}
+	m.ackMu.Unlock()
 
 	go m.cdpReadLoop(cdpConn, stopCh)
 
@@ -530,20 +614,41 @@ func (m *chromiumManager) ensureStarted(initialURL string) error {
 }
 
 func (m *chromiumManager) startScreencast(w, h int) error {
-	if w <= 0 {
-		w = defaultChromiumWidth
-	}
-	if h <= 0 {
-		h = defaultChromiumHeight
-	}
+	w, h = clampChromiumViewport(w, h)
+	m.stateMu.Lock()
+	m.screencastPaused = false
+	m.stateMu.Unlock()
 	_, err := m.callCDP("Page.startScreencast", map[string]interface{}{
 		"format":        "jpeg",
-		"quality":       72,
+		"quality":       60,
 		"maxWidth":      w,
 		"maxHeight":     h,
-		"everyNthFrame": 2,
+		"everyNthFrame": 5,
 	})
 	return err
+}
+
+func (m *chromiumManager) pauseScreencast() {
+	m.stateMu.Lock()
+	if !m.running || m.screencastPaused {
+		m.stateMu.Unlock()
+		return
+	}
+	m.screencastPaused = true
+	m.stateMu.Unlock()
+	m.sendCDPAsync("Page.stopScreencast", nil)
+}
+
+func (m *chromiumManager) resumeScreencastIfPaused() {
+	m.stateMu.RLock()
+	running := m.running
+	paused := m.screencastPaused
+	w, h := m.width, m.height
+	m.stateMu.RUnlock()
+	if !running || !paused {
+		return
+	}
+	_ = m.startScreencast(w, h)
 }
 
 func (m *chromiumManager) stop() {
@@ -724,9 +829,29 @@ func (m *chromiumManager) cdpReadLoop(conn *websocket.Conn, stopCh chan struct{}
 				} `json:"metadata"`
 			}
 			if json.Unmarshal(msg.Params, &ev) == nil && ev.Data != "" {
-				m.sendCDPAsync("Page.screencastFrameAck", map[string]interface{}{
+				now := time.Now()
+				m.ackMu.Lock()
+				delay := nextScreencastAckDelay(now, m.lastScreencastAck, screencastMinInterval)
+				m.lastScreencastAck = now.Add(delay)
+				m.ackMu.Unlock()
+
+				ackParams := map[string]interface{}{
 					"sessionId": ev.SessionID,
-				})
+				}
+				if delay <= 0 {
+					m.sendCDPAsync("Page.screencastFrameAck", ackParams)
+				} else {
+					go func(d time.Duration, stop <-chan struct{}, params map[string]interface{}) {
+						timer := time.NewTimer(d)
+						defer timer.Stop()
+						select {
+						case <-timer.C:
+							m.sendCDPAsync("Page.screencastFrameAck", params)
+						case <-stop:
+						}
+					}(delay, stopCh, ackParams)
+				}
+
 				w := ev.Metadata.DeviceWidth
 				h := ev.Metadata.DeviceHeight
 				if w <= 0 || h <= 0 {
@@ -1409,42 +1534,7 @@ func (m *chromiumManager) handleAction(act ChromiumAction) error {
 		m.sendCDPAsync("Input.dispatchKeyEvent", params)
 		return nil
 	case "resize":
-		w, h := act.Width, act.Height
-		if w < 480 {
-			w = 480
-		} else if w > 1600 {
-			w = 1600
-		}
-		if h < 360 {
-			h = 360
-		} else if h > 1000 {
-			h = 1000
-		}
-		m.stateMu.Lock()
-		diffW := m.width - w
-		if diffW < 0 {
-			diffW = -diffW
-		}
-		diffH := m.height - h
-		if diffH < 0 {
-			diffH = -diffH
-		}
-		if diffW < 12 && diffH < 12 {
-			m.stateMu.Unlock()
-			return nil
-		}
-		m.width = w
-		m.height = h
-		m.stateMu.Unlock()
-
-		_, _ = m.callCDP("Emulation.setDeviceMetricsOverride", map[string]interface{}{
-			"width":             w,
-			"height":            h,
-			"deviceScaleFactor": 1,
-			"mobile":            false,
-		})
-		_ = m.startScreencast(w, h)
-		return nil
+		return m.resizeViewport(act.Width, act.Height)
 	case "extract":
 		go func() {
 			m.syncNavMetadata()
@@ -1511,6 +1601,52 @@ func (m *chromiumManager) exportNetscapeCookies() (string, error) {
 	return formatNetscapeCookies(parsed.Cookies), nil
 }
 
+func (m *chromiumManager) resizeViewport(rawW, rawH int) error {
+	w, h := clampChromiumViewport(rawW, rawH)
+	m.stateMu.Lock()
+	diffW := m.width - w
+	if diffW < 0 {
+		diffW = -diffW
+	}
+	diffH := m.height - h
+	if diffH < 0 {
+		diffH = -diffH
+	}
+	if diffW < 4 && diffH < 4 {
+		m.stateMu.Unlock()
+		return nil
+	}
+	m.width = w
+	m.height = h
+	running := m.running
+	m.stateMu.Unlock()
+
+	if !running {
+		return nil
+	}
+	_, _ = m.callCDP("Emulation.setDeviceMetricsOverride", map[string]interface{}{
+		"width":             w,
+		"height":            h,
+		"deviceScaleFactor": 1,
+		"mobile":            false,
+	})
+	_ = m.startScreencast(w, h)
+	return nil
+}
+
+func applyInitialViewport(w, h int) {
+	if w <= 0 || h <= 0 {
+		return
+	}
+	cw, ch := clampChromiumViewport(w, h)
+	globalChromium.stateMu.Lock()
+	if !globalChromium.running {
+		globalChromium.width = cw
+		globalChromium.height = ch
+	}
+	globalChromium.stateMu.Unlock()
+}
+
 // --- HTTP & WebSocket Handlers ---
 
 func ChromiumStatusHandler(w http.ResponseWriter, r *http.Request) {
@@ -1528,12 +1664,7 @@ func ChromiumSessionStartHandler(w http.ResponseWriter, r *http.Request) {
 	if body.URL == "" {
 		body.URL = strings.TrimSpace(r.URL.Query().Get("url"))
 	}
-	if body.Width >= 480 && body.Width <= 1600 && body.Height >= 360 && body.Height <= 1000 {
-		globalChromium.stateMu.Lock()
-		globalChromium.width = body.Width
-		globalChromium.height = body.Height
-		globalChromium.stateMu.Unlock()
-	}
+	applyInitialViewport(body.Width, body.Height)
 
 	w.Header().Set("Content-Type", "application/json")
 	if err := globalChromium.ensureStarted(body.URL); err != nil {
@@ -1544,6 +1675,9 @@ func ChromiumSessionStartHandler(w http.ResponseWriter, r *http.Request) {
 			"status": globalChromium.getStatus(),
 		})
 		return
+	}
+	if body.Width > 0 && body.Height > 0 {
+		_ = globalChromium.resizeViewport(body.Width, body.Height)
 	}
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
 		"ok":     true,
@@ -1657,12 +1791,17 @@ func ChromiumEventsHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 
+	qw, qh := parseQueryViewport(r)
+	applyInitialViewport(qw, qh)
 	if autoURL := strings.TrimSpace(r.URL.Query().Get("url")); autoURL != "" {
 		if err := globalChromium.ensureStarted(autoURL); err != nil {
 			b, _ := json.Marshal(chromiumEvent{Type: "error", Error: err.Error()})
 			_, _ = fmt.Fprintf(w, "data: %s\n\n", b)
 			flusher.Flush()
 		}
+	}
+	if qw > 0 && qh > 0 {
+		_ = globalChromium.resizeViewport(qw, qh)
 	}
 
 	subID, ch := globalChromium.subscribe()
@@ -1702,10 +1841,15 @@ func ChromiumWSHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	defer wsConn.Close()
 
+	qw, qh := parseQueryViewport(r)
+	applyInitialViewport(qw, qh)
 	if autoURL := strings.TrimSpace(r.URL.Query().Get("url")); autoURL != "" {
 		if startErr := globalChromium.ensureStarted(autoURL); startErr != nil {
 			_ = wsConn.WriteJSON(chromiumEvent{Type: "error", Error: startErr.Error()})
 		}
+	}
+	if qw > 0 && qh > 0 {
+		_ = globalChromium.resizeViewport(qw, qh)
 	}
 
 	subID, ch := globalChromium.subscribe()

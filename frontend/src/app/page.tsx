@@ -61,7 +61,13 @@ export default function App() {
           />
 
           {/* Scrollable View Container */}
-          <main className="flex-1 overflow-y-auto px-3.5 py-4 sm:px-6 sm:py-6 pb-32 md:pb-24">
+          <main
+            className={
+              activeTab === 'browser'
+                ? 'flex-1 min-h-0 overflow-hidden p-1.5 sm:p-2 pb-16 md:pb-2 flex flex-col'
+                : 'flex-1 overflow-y-auto px-3.5 py-4 sm:px-6 sm:py-6 pb-32 md:pb-24'
+            }
+          >
             {activeTab === 'download-center' && (
               <DownloadCenterView
                 tasks={taskList}
