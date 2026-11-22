@@ -306,3 +306,77 @@ export async function scanMediaUrl(
   if (!res.ok) throw new Error('Failed to scan URL');
   return res.json();
 }
+
+export interface ChromiumStatus {
+  available: boolean;
+  binaryPath?: string;
+  running: boolean;
+  currentUrl?: string;
+  pageTitle?: string;
+  canGoBack: boolean;
+  canGoForward: boolean;
+  width: number;
+  height: number;
+  clientCount: number;
+  mediaCount: number;
+}
+
+export interface ChromiumActionPayload {
+  type: string;
+  url?: string;
+  x?: number;
+  y?: number;
+  button?: string;
+  clickCount?: number;
+  deltaX?: number;
+  deltaY?: number;
+  key?: string;
+  code?: string;
+  keyCode?: number;
+  text?: string;
+  modifiers?: number;
+  width?: number;
+  height?: number;
+}
+
+export async function fetchChromiumStatus(): Promise<ChromiumStatus> {
+  const res = await fetch(`${BASE_API}/api/browser/chromium/status`);
+  if (!res.ok) throw new Error('Failed to query Chromium status');
+  return res.json();
+}
+
+export async function startChromiumSession(
+  url?: string,
+  width?: number,
+  height?: number
+): Promise<{ ok: boolean; status?: ChromiumStatus; error?: string }> {
+  const res = await fetch(`${BASE_API}/api/browser/chromium/session`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ url, width, height }),
+  });
+  return res.json();
+}
+
+export async function stopChromiumSession(): Promise<void> {
+  await fetch(`${BASE_API}/api/browser/chromium/session`, { method: 'DELETE' });
+}
+
+export async function sendChromiumAction(action: ChromiumActionPayload): Promise<void> {
+  await fetch(`${BASE_API}/api/browser/chromium/action`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(action),
+  });
+}
+
+export async function fetchChromiumCookies(): Promise<string> {
+  try {
+    const res = await fetch(`${BASE_API}/api/browser/chromium/cookies`);
+    if (!res.ok) return '';
+    const data = await res.json();
+    return typeof data.cookies === 'string' ? data.cookies : '';
+  } catch {
+    return '';
+  }
+}

@@ -1,16 +1,19 @@
 package media
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/rs/zerolog/log"
 )
+
+var thumbExtractSem = make(chan struct{}, 2)
 
 // ExtractThumbnailFromVideo uses ffmpeg to capture a crisp video frame at 0.5s or 0.0s.
 func ExtractThumbnailFromVideo(videoPath, thumbPath string) error {
@@ -18,8 +21,19 @@ func ExtractThumbnailFromVideo(videoPath, thumbPath string) error {
 		return err
 	}
 
-	// Try at 0.5s with scale filter
-	cmd := exec.Command("ffmpeg", "-y", "-ss", "00:00:00.500", "-i", videoPath, "-vframes", "1", "-vf", "scale=640:-2:force_original_aspect_ratio=decrease", "-q:v", "2", thumbPath)
+	waitCtx, waitCancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer waitCancel()
+	select {
+	case thumbExtractSem <- struct{}{}:
+		defer func() { <-thumbExtractSem }()
+	case <-waitCtx.Done():
+		return fmt.Errorf("thumbnail extractor busy: %w", waitCtx.Err())
+	}
+
+	// Try at 0.5s with scale filter (bounded to 1 thread and 15s timeout)
+	runCtx1, cancel1 := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel1()
+	cmd := execLowPriorityCommand(runCtx1, "ffmpeg", "-y", "-threads", "1", "-ss", "00:00:00.500", "-i", videoPath, "-vframes", "1", "-vf", "scale=640:-2:force_original_aspect_ratio=decrease", "-q:v", "2", thumbPath)
 	if err := cmd.Run(); err == nil {
 		if fi, errStat := os.Stat(thumbPath); errStat == nil && fi.Size() > 0 {
 			return nil
@@ -27,7 +41,9 @@ func ExtractThumbnailFromVideo(videoPath, thumbPath string) error {
 	}
 
 	// Fallback to 0.0s if video is very short
-	cmd = exec.Command("ffmpeg", "-y", "-ss", "00:00:00.000", "-i", videoPath, "-vframes", "1", "-vf", "scale=640:-2:force_original_aspect_ratio=decrease", "-q:v", "2", thumbPath)
+	runCtx2, cancel2 := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel2()
+	cmd = execLowPriorityCommand(runCtx2, "ffmpeg", "-y", "-threads", "1", "-ss", "00:00:00.000", "-i", videoPath, "-vframes", "1", "-vf", "scale=640:-2:force_original_aspect_ratio=decrease", "-q:v", "2", thumbPath)
 	if err := cmd.Run(); err == nil {
 		if fi, errStat := os.Stat(thumbPath); errStat == nil && fi.Size() > 0 {
 			return nil
@@ -35,7 +51,9 @@ func ExtractThumbnailFromVideo(videoPath, thumbPath string) error {
 	}
 
 	// Ultra fallback without scale filter
-	cmd = exec.Command("ffmpeg", "-y", "-i", videoPath, "-vframes", "1", "-q:v", "2", thumbPath)
+	runCtx3, cancel3 := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel3()
+	cmd = execLowPriorityCommand(runCtx3, "ffmpeg", "-y", "-threads", "1", "-i", videoPath, "-vframes", "1", "-q:v", "2", thumbPath)
 	if err := cmd.Run(); err == nil {
 		if fi, errStat := os.Stat(thumbPath); errStat == nil && fi.Size() > 0 {
 			return nil
@@ -51,7 +69,18 @@ func ExtractThumbnailFromAudio(audioPath, thumbPath string) error {
 		return err
 	}
 
-	cmd := exec.Command("ffmpeg", "-y", "-i", audioPath, "-an", "-vcodec", "copy", thumbPath)
+	waitCtx, waitCancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer waitCancel()
+	select {
+	case thumbExtractSem <- struct{}{}:
+		defer func() { <-thumbExtractSem }()
+	case <-waitCtx.Done():
+		return fmt.Errorf("thumbnail extractor busy: %w", waitCtx.Err())
+	}
+
+	runCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	cmd := execLowPriorityCommand(runCtx, "ffmpeg", "-y", "-threads", "1", "-i", audioPath, "-an", "-vcodec", "copy", thumbPath)
 	if err := cmd.Run(); err == nil {
 		if fi, errStat := os.Stat(thumbPath); errStat == nil && fi.Size() > 0 {
 			return nil

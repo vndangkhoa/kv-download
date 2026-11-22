@@ -147,9 +147,49 @@ var (
 	ogVideoRegex    = regexp.MustCompile(`(?i)<meta\s+[^>]*?(?:property|name)=["'](?:og:video(?::url|:secure_url)?|twitter:player:stream)["'][^>]*?content=["']([^"']+)["']`)
 	jsonLdScriptRe  = regexp.MustCompile(`(?is)<script[^>]*type=["']application/ld\+json["'][^>]*>([\s\S]*?)</script>`)
 	titleRegex      = regexp.MustCompile(`(?i)<title[^>]*>([^<]+)</title>`)
-	ytEmbedRegex    = regexp.MustCompile(`(?:youtube\.com/(?:embed/|v/|watch\?v=|shorts/)|youtu\.be/)([a-zA-Z0-9_-]{11})`)
-	vimeoEmbedRegex = regexp.MustCompile(`(?:vimeo\.com/(?:video/)?|player\.vimeo\.com/video/)(\d+)`)
+	ytEmbedRegex       = regexp.MustCompile(`(?:youtube\.com/(?:embed/|v/|watch\?v=|shorts/)|youtu\.be/)([a-zA-Z0-9_-]{11})`)
+	vimeoEmbedRegex    = regexp.MustCompile(`(?:vimeo\.com/(?:video/)?|player\.vimeo\.com/video/)(\d+)`)
+	browserSniffScanSem = make(chan struct{}, 2)
 )
+
+func isSupportedHTTPURL(raw string) bool {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return false
+	}
+	lower := strings.ToLower(trimmed)
+	if idx := strings.Index(lower, "://"); idx != -1 {
+		scheme := lower[:idx]
+		if scheme != "http" && scheme != "https" {
+			return false
+		}
+		rest := lower[idx+3:]
+		if sIdx := strings.Index(rest, "://"); sIdx != -1 {
+			qIdx := strings.Index(rest, "?")
+			if qIdx == -1 || sIdx < qIdx {
+				return false
+			}
+		}
+	}
+	u, err := url.Parse(trimmed)
+	if err != nil {
+		return false
+	}
+	if u.Scheme != "" && u.Scheme != "http" && u.Scheme != "https" {
+		return false
+	}
+	host := strings.ToLower(strings.TrimSpace(u.Hostname()))
+	return host != "" && !strings.HasSuffix(host, ":")
+}
+
+func isBareRootHomepage(raw string) bool {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return false
+	}
+	p := strings.TrimSpace(u.Path)
+	return (p == "" || p == "/") && strings.TrimSpace(u.RawQuery) == ""
+}
 
 // BrowserSniffHandler deeply analyzes any URL and extracts all playable videos, m3u8 streams, audio, and photos.
 func BrowserSniffHandler(w http.ResponseWriter, r *http.Request) {
@@ -159,8 +199,17 @@ func BrowserSniffHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !strings.HasPrefix(targetUrl, "http://") && !strings.HasPrefix(targetUrl, "https://") {
+	if strings.Contains(targetUrl, "://") {
+		if !isSupportedHTTPURL(targetUrl) {
+			http.Error(w, `{"error":"Unsupported URL scheme"}`, http.StatusBadRequest)
+			return
+		}
+	} else {
 		targetUrl = "https://" + targetUrl
+		if !isSupportedHTTPURL(targetUrl) {
+			http.Error(w, `{"error":"Unsupported or invalid URL"}`, http.StatusBadRequest)
+			return
+		}
 	}
 	normalizedTarget := normalizeSniffUrl(targetUrl)
 
@@ -493,35 +542,45 @@ func BrowserSniffHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// 3. Scan with yt-dlp metadata engine — ignore generic fallback entry where entry.Url == targetUrl with no formats
-	if scanInfo, _, errScan := ScanUrl(targetUrl, ""); errScan == nil && scanInfo != nil {
-		if (result.PageTitle == "" || result.PageTitle == targetUrl) && scanInfo.Title != "" && scanInfo.Title != targetUrl {
-			result.PageTitle = scanInfo.Title
-		}
-		for _, entry := range scanInfo.Entries {
-			if entry.Url == "" {
-				continue
-			}
-			isSameDummy := normalizeSniffUrl(entry.Url) == normalizedTarget &&
-				len(entry.Formats) == 0 && entry.Duration <= 0 && !scanInfo.IsPlaylist &&
-				(entry.Title == "" || entry.Title == targetUrl)
-			if isSameDummy {
-				continue
-			}
-			thumb := entry.Thumbnail
-			if thumb == "" && len(entry.Thumbnails) > 0 {
-				thumb = entry.Thumbnails[len(entry.Thumbnails)-1].URL
-			}
-			addItem(SniffedMediaItem{
-				Type:      "video",
-				Format:    "Best Quality Video",
-				Title:     entry.Title,
-				URL:       entry.Url,
-				Thumbnail: thumb,
-				Duration:  formatDurationFloat(entry.Duration),
-				Channel:   entry.Channel,
-				Source:    "ytdlp_engine",
-			})
+	// 3. Scan with yt-dlp metadata engine (skipped on bare root homepages & capped at 2 concurrent scans)
+	if !isBareRootHomepage(targetUrl) {
+		select {
+		case browserSniffScanSem <- struct{}{}:
+			func() {
+				defer func() { <-browserSniffScanSem }()
+				if scanInfo, _, errScan := ScanUrl(targetUrl, ""); errScan == nil && scanInfo != nil {
+					if (result.PageTitle == "" || result.PageTitle == targetUrl) && scanInfo.Title != "" && scanInfo.Title != targetUrl {
+						result.PageTitle = scanInfo.Title
+					}
+					for _, entry := range scanInfo.Entries {
+						if entry.Url == "" {
+							continue
+						}
+						isSameDummy := normalizeSniffUrl(entry.Url) == normalizedTarget &&
+							len(entry.Formats) == 0 && entry.Duration <= 0 && !scanInfo.IsPlaylist &&
+							(entry.Title == "" || entry.Title == targetUrl)
+						if isSameDummy {
+							continue
+						}
+						thumb := entry.Thumbnail
+						if thumb == "" && len(entry.Thumbnails) > 0 {
+							thumb = entry.Thumbnails[len(entry.Thumbnails)-1].URL
+						}
+						addItem(SniffedMediaItem{
+							Type:      "video",
+							Format:    "Best Quality Video",
+							Title:     entry.Title,
+							URL:       entry.Url,
+							Thumbnail: thumb,
+							Duration:  formatDurationFloat(entry.Duration),
+							Channel:   entry.Channel,
+							Source:    "ytdlp_engine",
+						})
+					}
+				}
+			}()
+		default:
+			log.Warn().Msgf("[BrowserSniff] Skipping yt-dlp scan for %s (workers busy)", targetUrl)
 		}
 	}
 

@@ -27,8 +27,9 @@ RUN GOOS=$TARGETOS GOARCH=$TARGETARCH go build -o kv-download ./src
 FROM --platform=$TARGETPLATFORM python:3.13.7-alpine3.22
 
 ARG TARGETARCH
-ARG IMAGE_TAG="1.0.43"
+ARG IMAGE_TAG="1.0.45"
 ENV APP_VERSION=$IMAGE_TAG
+ENV CHROMIUM_BIN="/usr/bin/chromium-browser"
 
 LABEL org.opencontainers.image.source="https://git.khoavo.myds.me/vndangkhoa/kv-download"
 LABEL org.opencontainers.image.description="KV Download - Mobile friendly video downloader"
@@ -42,7 +43,14 @@ RUN apk add --update --no-cache \
     # https://github.com/yt-dlp/yt-dlp/issues/14404 \
     deno \
     curl \
-    aria2
+    aria2 \
+    chromium \
+    nss \
+    freetype \
+    harfbuzz \
+    ca-certificates \
+    font-dejavu \
+    font-noto
 
 # https://hub.docker.com/r/mwader/static-ffmpeg/tags
 # https://github.com/wader/static-ffmpeg

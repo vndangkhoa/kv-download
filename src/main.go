@@ -78,6 +78,13 @@ func main() {
 	router.Get("/api/browser/proxy-media", media.BrowserProxyMediaHandler)
 	router.Head("/api/browser/stream", media.BrowserStreamHandler)
 	router.Head("/api/browser/proxy-media", media.BrowserProxyMediaHandler)
+	router.Get("/api/browser/chromium/status", media.ChromiumStatusHandler)
+	router.Post("/api/browser/chromium/session", media.ChromiumSessionStartHandler)
+	router.Delete("/api/browser/chromium/session", media.ChromiumSessionStopHandler)
+	router.Get("/api/browser/chromium/cookies", media.ChromiumCookiesHandler)
+	router.Post("/api/browser/chromium/action", media.ChromiumActionHandler)
+	router.Get("/api/browser/chromium/events", media.ChromiumEventsHandler)
+	router.Get("/api/browser/chromium/ws", media.ChromiumWSHandler)
 	router.HandleFunc("/jsonrpc", media.Aria2JsonRpcHandler)
 	router.HandleFunc("/rpc", media.Aria2JsonRpcHandler)
 	fileServer(router, "/static", "static/")
@@ -126,6 +133,7 @@ func main() {
 		log.Panic().Msgf("%s\n", err.Error())
 	}
 
+	media.CleanupCompatCache()
 	media.GetInstalledVersion()
 	go startYtDlpUpdater()
 	go startCookieRefresher()
@@ -168,6 +176,7 @@ func main() {
 		}()
 
 		// Trigger graceful shutdown
+		media.ShutdownChromiumBrowser()
 		err := server.Shutdown(shutdownCtx)
 		if err != nil {
 			log.Fatal().Err(err)

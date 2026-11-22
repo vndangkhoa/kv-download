@@ -212,3 +212,87 @@ func TestServeMediaByQueueTaskUUIDAndReorganizedModes(t *testing.T) {
 		t.Fatalf("unexpected apkUrl: %q", verInfo.ApkURL)
 	}
 }
+
+func TestCPUProtectionCompatPolicyCacheCleanupAndSniffGuard(t *testing.T) {
+	chromeUA := "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36"
+	edgeUA := "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36 Edg/130.0.0.0"
+	firefoxUA := "Mozilla/5.0 (X11; Linux x86_64; rv:131.0) Gecko/20100101 Firefox/131.0"
+	safariUA := "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.6 Safari/605.1.15"
+	exoUA := "KVDownloadAndroid/1.0.44 okhttp/4.12.0 ExoPlayerLib/2.19"
+
+	// 1. Browser-aware compat rules
+	if needsBrowserCompatTranscodeForUA(chromeUA, ".mp4", "vp9", "aac", false) {
+		t.Fatal("Chrome should play VP9+AAC MP4 natively without CPU transcode")
+	}
+	if needsBrowserCompatTranscodeForUA(chromeUA, ".mp4", "av1", "opus", false) {
+		t.Fatal("Chrome should play AV1+Opus MP4 natively without CPU transcode")
+	}
+	if needsBrowserCompatTranscodeForUA(edgeUA, ".mp4", "hevc", "aac", false) {
+		t.Fatal("Edge should attempt direct MP4 playback before compat fallback")
+	}
+	if !needsBrowserCompatTranscodeForUA(chromeUA, ".mp4", "vp9", "aac", true) {
+		t.Fatal("forceCompat=true should enable compat transcode even on Chrome")
+	}
+	if !needsBrowserCompatTranscodeForUA(firefoxUA, ".mp4", "vp9", "aac", false) {
+		t.Fatal("Firefox must receive compat transcode for VP9 inside MP4")
+	}
+	if !needsBrowserCompatTranscodeForUA(safariUA, ".mp4", "vp9", "aac", false) {
+		t.Fatal("Safari must receive compat transcode for VP9 inside MP4")
+	}
+	if needsBrowserCompatTranscodeForUA(exoUA, ".mkv", "hevc", "eac3", false) {
+		t.Fatal("ExoPlayer/Android native player should not be transcoded unless forced")
+	}
+
+	// 2. Bounded ffmpeg args (-threads 2 and <=720p scale for live fragmented streams)
+	argsSync := strings.Join(buildCompatFFmpegArgs("/tmp/in.mp4", "vp9", "aac", false, "/tmp/out.mp4"), " ")
+	if !strings.Contains(argsSync, "-threads 2") || !strings.Contains(argsSync, "threads=2") {
+		t.Fatalf("expected bounded threads in sync ffmpeg args, got: %s", argsSync)
+	}
+	argsFrag := strings.Join(buildCompatFFmpegArgs("/tmp/in.mp4", "vp9", "aac", true, "pipe:1"), " ")
+	if !strings.Contains(argsFrag, "-threads 2") || !strings.Contains(argsFrag, "min(1280,iw)") {
+		t.Fatalf("expected bounded threads + min(1280,iw) downscale in fragmented args, got: %s", argsFrag)
+	}
+
+	// 3. CleanupCompatCache deletes .tmp.mp4 files while keeping valid .mp4 files
+	tmpDir := t.TempDir()
+	t.Setenv("MR_DOWNLOAD_DIR", tmpDir)
+	cacheDir := filepath.Join(tmpDir, ".compat_cache")
+	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	tmpArtifact := filepath.Join(cacheDir, "stale.tmp.mp4")
+	goodArtifact := filepath.Join(cacheDir, "valid.mp4")
+	if err := os.WriteFile(tmpArtifact, []byte("incomplete"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(goodArtifact, []byte("valid-mp4"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	CleanupCompatCache()
+	if _, err := os.Stat(tmpArtifact); !os.IsNotExist(err) {
+		t.Fatalf("expected CleanupCompatCache to remove %s", tmpArtifact)
+	}
+	if _, err := os.Stat(goodArtifact); err != nil {
+		t.Fatalf("expected CleanupCompatCache to preserve %s: %v", goodArtifact, err)
+	}
+
+	// 4. BrowserSniffHandler rejects custom URI schemes immediately without spawning yt-dlp
+	for _, bad := range []string{
+		"snssdk1180://aweme/detail/123",
+		"https://snssdk1180://aweme/detail/7705854963582389522?refer=web",
+		"intent://scan/#Intent;end",
+	} {
+		sReq := httptest.NewRequest(http.MethodGet, "/api/browser/sniff?url="+url.QueryEscape(bad), nil)
+		sRec := httptest.NewRecorder()
+		BrowserSniffHandler(sRec, sReq)
+		if sRec.Code != http.StatusBadRequest {
+			t.Fatalf("BrowserSniffHandler(%q) HTTP = %d, want 400", bad, sRec.Code)
+		}
+	}
+	if !isBareRootHomepage("https://tinhte.vn") || !isBareRootHomepage("https://www.tiktok.com/") {
+		t.Fatal("expected bare root homepages to match isBareRootHomepage")
+	}
+	if isBareRootHomepage("https://av01.media/jp/video/226601") {
+		t.Fatal("video path should not be treated as bare root homepage")
+	}
+}

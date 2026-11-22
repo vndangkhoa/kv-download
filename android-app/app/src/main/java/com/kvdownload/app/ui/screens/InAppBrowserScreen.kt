@@ -1,6 +1,7 @@
 package com.kvdownload.app.ui.screens
 
 import android.annotation.SuppressLint
+import android.net.Uri
 import android.webkit.CookieManager
 import android.webkit.JavascriptInterface
 import android.webkit.WebChromeClient
@@ -34,6 +35,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
+import androidx.compose.material.icons.filled.DesktopWindows
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Image
@@ -97,11 +99,102 @@ import com.kvdownload.app.ui.theme.LocalAstryxPalette
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import org.json.JSONObject
+import java.net.URLDecoder
+import java.net.URLEncoder
+
+internal fun normalizeBrowserOmniboxUrl(raw: String): String {
+    val trimmed = raw.trim()
+    if (trimmed.isBlank()) return "https://www.google.com"
+    val lower = trimmed.lowercase()
+    if (lower.startsWith("http://") || lower.startsWith("https://")) return trimmed
+    if (trimmed.contains(" ") || (!trimmed.contains(".") && !lower.startsWith("localhost"))) {
+        return "https://www.google.com/search?q=" + URLEncoder.encode(trimmed, "UTF-8")
+    }
+    return "https://$trimmed"
+}
+
+/**
+ * Resolves custom non-HTTP URL schemes inside Android WebView so TikTok / YouTube intent links
+ * never crash with ERR_UNKNOWN_URL_SCHEME. Returns:
+ * - null -> regular HTTP(S) URL, let WebView proceed normally
+ * - non-empty HTTP(S) string -> extracted intent fallback URL to load inside WebView
+ * - "" (empty string) -> blocked custom scheme (handle with return true)
+ */
+internal fun resolveSafeWebNavigationUrl(rawUrl: String?): String? {
+    val u = rawUrl?.trim().orEmpty()
+    if (u.isEmpty()) return ""
+    val lower = u.lowercase()
+    if (lower.startsWith("http://") || lower.startsWith("https://") || lower.startsWith("about:blank")) {
+        return null
+    }
+    if (lower.startsWith("intent://")) {
+        val marker = "S.browser_fallback_url="
+        val idx = u.indexOf(marker)
+        if (idx >= 0) {
+            val encoded = u.substring(idx + marker.length).substringBefore(";")
+            val decoded = runCatching { URLDecoder.decode(encoded, "UTF-8") }.getOrDefault("")
+            if (decoded.startsWith("http://") || decoded.startsWith("https://")) {
+                return decoded
+            }
+        }
+    }
+    return ""
+}
+
+private val ANDROID_YT_RE = Regex("""(?:youtube\.com/watch\?[^#]*v=|youtu\.be/|youtube\.com/shorts/)([a-zA-Z0-9_-]{11})""")
+private val ANDROID_TT_RE = Regex("""tiktok\.com/(?:@[^/?#]+/video/\d+|t/[a-zA-Z0-9]+)""", RegexOption.IGNORE_CASE)
+
+internal fun detectPlayablePageItem(rawUrl: String, pageTitle: String?): SniffedMedia? {
+    val trimmed = rawUrl.trim()
+    if (!trimmed.startsWith("http://") && !trimmed.startsWith("https://")) return null
+    val ytMatch = ANDROID_YT_RE.find(trimmed)
+    if (ytMatch != null) {
+        val vid = ytMatch.groupValues[1]
+        val title = pageTitle?.takeIf { it.isNotBlank() && !it.equals("YouTube", ignoreCase = true) }
+            ?: "YouTube Video $vid"
+        return SniffedMedia(
+            id = "yt_$vid",
+            url = "https://www.youtube.com/watch?v=$vid",
+            type = "video",
+            format = "YOUTUBE",
+            title = title,
+            thumbnail = "https://i.ytimg.com/vi/$vid/hqdefault.jpg",
+            source = "webview_page",
+            channel = "YouTube"
+        )
+    }
+    if (ANDROID_TT_RE.containsMatchIn(trimmed)) {
+        return SniffedMedia(
+            id = "tt_${trimmed.hashCode()}",
+            url = trimmed,
+            type = "video",
+            format = "TIKTOK",
+            title = pageTitle?.takeIf { it.isNotBlank() } ?: "TikTok Video",
+            source = "webview_page",
+            channel = "TikTok"
+        )
+    }
+    return null
+}
+
+private const val DESKTOP_CHROME_UA =
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 
 private const val INJECTED_SNIFFER_JS = """
 (function() {
   if (window.__kvAndroidSnifferInstalled) return;
   window.__kvAndroidSnifferInstalled = true;
+
+  try {
+    var origOpenWin = window.open;
+    window.open = function(u) {
+      if (u && typeof u === 'string' && /^https?:/i.test(u)) {
+        location.href = u;
+        return window;
+      }
+      return origOpenWin ? origOpenWin.apply(this, arguments) : null;
+    };
+  } catch (e) {}
 
   function emit(url, type, fmt, thumb, title) {
     if (!url || typeof url !== 'string') return;
@@ -189,6 +282,8 @@ fun InAppBrowserScreen(
     var addressInput by remember { mutableStateOf("") }
     var currentUrl by remember { mutableStateOf("") }
     var useServerProxy by remember { mutableStateOf(false) }
+    var desktopMode by remember { mutableStateOf(false) }
+    var defaultMobileUa by remember { mutableStateOf<String?>(null) }
     var isLoadingPage by remember { mutableStateOf(false) }
     var isSniffingServer by remember { mutableStateOf(false) }
 
@@ -269,15 +364,14 @@ fun InAppBrowserScreen(
     }
 
     fun loadTarget(raw: String, forceProxy: Boolean = useServerProxy) {
-        val clean = raw.trim().let {
-            if (it.startsWith("http://") || it.startsWith("https://")) it else "https://$it"
-        }
+        val clean = normalizeBrowserOmniboxUrl(raw)
         addressInput = clean
         currentUrl = clean
         sniffedItems.clear()
         resolvedAV01 = null
         selectedUrls = emptySet()
 
+        detectPlayablePageItem(clean, null)?.let { mergeSniffed(listOf(it)) }
         if (AV01Resolver.isAV01Url(clean)) {
             resolveAV01DirectOnPhone(clean)
         } else {
@@ -586,6 +680,9 @@ fun InAppBrowserScreen(
                             onClick = {
                                 currentUrl = ""
                                 addressInput = ""
+                                webViewRef = null
+                                canGoBack = false
+                                canGoForward = false
                                 sniffedItems.clear()
                                 resolvedAV01 = null
                             }
@@ -598,7 +695,7 @@ fun InAppBrowserScreen(
                             onValueChange = { addressInput = it },
                             modifier = Modifier.weight(1f),
                             singleLine = true,
-                            placeholder = { Text("Enter URL or av01.media/jp/video/...") },
+                            placeholder = { Text("Search Google or enter URL (youtube.com, tiktok.com)...") },
                             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
                             keyboardActions = KeyboardActions(
                                 onGo = { if (addressInput.isNotBlank()) loadTarget(addressInput) }
@@ -621,6 +718,24 @@ fun InAppBrowserScreen(
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
+                        FilterChip(
+                            selected = desktopMode,
+                            onClick = {
+                                val next = !desktopMode
+                                desktopMode = next
+                                webViewRef?.let { wv ->
+                                    wv.settings.userAgentString = if (next) DESKTOP_CHROME_UA else defaultMobileUa
+                                    wv.settings.useWideViewPort = true
+                                    wv.settings.loadWithOverviewMode = true
+                                    if (currentUrl.isNotBlank()) {
+                                        wv.reload()
+                                    }
+                                }
+                            },
+                            leadingIcon = { Icon(Icons.Default.DesktopWindows, contentDescription = null, modifier = Modifier.size(16.dp)) },
+                            label = { Text(if (desktopMode) "Desktop UA" else "Mobile Chrome") }
+                        )
+
                         FilterChip(
                             selected = useServerProxy,
                             onClick = {
@@ -788,11 +903,12 @@ fun InAppBrowserScreen(
                     }
 
                     val bookmarks = listOf(
+                        Triple("Google Search", "https://www.google.com", false),
+                        Triple("YouTube", "https://m.youtube.com", false),
+                        Triple("TikTok", "https://www.tiktok.com", false),
                         Triple("AV01 Media", "https://av01.media", false),
-                        Triple("YouTube Mobile", "https://m.youtube.com", false),
                         Triple("Tinhte.vn", "https://tinhte.vn", false),
-                        Triple("SoundCloud", "https://soundcloud.com", false),
-                        Triple("TikTok", "https://www.tiktok.com", false)
+                        Triple("SoundCloud", "https://soundcloud.com", false)
                     )
 
                     items(bookmarks) { (title, url, proxyRecommended) ->
@@ -827,20 +943,38 @@ fun InAppBrowserScreen(
                         factory = { ctx ->
                             configureWebView(
                                 WebView(ctx),
+                                desktopMode = desktopMode,
+                                onInitMobileUa = { defaultMobileUa = it },
                                 onPageStarted = { pageUrl ->
                                     isLoadingPage = true
                                     if (!pageUrl.contains("/api/browser/proxy")) {
                                         currentUrl = pageUrl
                                         addressInput = pageUrl
+                                        detectPlayablePageItem(pageUrl, null)?.let { mergeSniffed(listOf(it)) }
                                         if (AV01Resolver.isAV01Url(pageUrl) && resolvedAV01?.videoId != AV01Resolver.parseVideoIdAndSlug(pageUrl)?.first) {
                                             resolveAV01DirectOnPhone(pageUrl)
                                         }
+                                    }
+                                },
+                                onVisitedUrl = { view, updatedUrl ->
+                                    canGoBack = view.canGoBack()
+                                    canGoForward = view.canGoForward()
+                                    if (updatedUrl.startsWith("http") && !updatedUrl.contains("/api/browser/proxy")) {
+                                        currentUrl = updatedUrl
+                                        addressInput = updatedUrl
+                                        detectPlayablePageItem(updatedUrl, view.title)?.let { mergeSniffed(listOf(it)) }
+                                        view.evaluateJavascript(INJECTED_SNIFFER_JS, null)
                                     }
                                 },
                                 onPageFinished = { view ->
                                     isLoadingPage = false
                                     canGoBack = view.canGoBack()
                                     canGoForward = view.canGoForward()
+                                    view.title?.let { t ->
+                                        view.url?.let { u ->
+                                            detectPlayablePageItem(u, t)?.let { mergeSniffed(listOf(it)) }
+                                        }
+                                    }
                                     view.evaluateJavascript(INJECTED_SNIFFER_JS, null)
                                 },
                                 onMediaDetected = { item ->
@@ -907,7 +1041,10 @@ fun InAppBrowserScreen(
 @SuppressLint("SetJavaScriptEnabled")
 private fun configureWebView(
     webView: WebView,
+    desktopMode: Boolean,
+    onInitMobileUa: (String) -> Unit,
     onPageStarted: (String) -> Unit,
+    onVisitedUrl: (WebView, String) -> Unit,
     onPageFinished: (WebView) -> Unit,
     onMediaDetected: (SniffedMedia) -> Unit
 ): WebView {
@@ -921,6 +1058,10 @@ private fun configureWebView(
         mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
         loadWithOverviewMode = true
         useWideViewPort = true
+        // Remove "; wv" token so Google, YouTube, and TikTok treat this as standard Chrome
+        val cleanMobileUa = userAgentString.replace("; wv)", ")").replace("; wv", "")
+        onInitMobileUa(cleanMobileUa)
+        userAgentString = if (desktopMode) DESKTOP_CHROME_UA else cleanMobileUa
     }
 
     webView.addJavascriptInterface(
@@ -961,29 +1102,48 @@ private fun configureWebView(
     webView.webChromeClient = WebChromeClient()
     webView.webViewClient = object : WebViewClient() {
         override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
-            return false
+            val safe = resolveSafeWebNavigationUrl(request?.url?.toString())
+            return when {
+                safe == null -> false
+                safe.isNotEmpty() -> {
+                    view?.loadUrl(safe)
+                    true
+                }
+                else -> true
+            }
+        }
+
+        override fun doUpdateVisitedHistory(view: WebView?, url: String?, isReload: Boolean) {
+            super.doUpdateVisitedHistory(view, url, isReload)
+            if (view != null && url != null) {
+                onVisitedUrl(view, url)
+            }
         }
 
         override fun shouldInterceptRequest(view: WebView?, request: WebResourceRequest?): WebResourceResponse? {
             val reqUrl = request?.url?.toString()
-            if (!reqUrl.isNullOrBlank() && streamInterceptRe.containsMatchIn(reqUrl)) {
-                val lower = reqUrl.substringBefore('?').lowercase()
-                if (!lower.endsWith(".m4s") && !lower.endsWith(".ts")) {
-                    val isAudio = lower.endsWith(".mp3") || lower.endsWith(".m4a") || lower.endsWith(".aac") || lower.endsWith(".flac")
-                    val isHls = lower.endsWith(".m3u8") || lower.endsWith(".mpd")
-                    val ref = request.requestHeaders?.get("Referer")
-                    onMediaDetected(
-                        SniffedMedia(
-                            id = "net_${reqUrl.hashCode()}",
-                            url = reqUrl,
-                            type = if (isAudio) "audio" else "video",
-                            format = if (isHls) "M3U8 HLS" else if (isAudio) "AUDIO" else "MP4",
-                            title = reqUrl.substringBefore('?').substringAfterLast('/').ifBlank { "Captured Stream" },
-                            source = "webview_net",
-                            isStream = isHls,
-                            referer = ref
+            if (!reqUrl.isNullOrBlank()) {
+                val lowerFull = reqUrl.lowercase()
+                val isTikTokMp4 = lowerFull.contains("tiktokcdn") && lowerFull.contains("mime_type=video_mp4")
+                if (streamInterceptRe.containsMatchIn(reqUrl) || isTikTokMp4) {
+                    val lower = reqUrl.substringBefore('?').lowercase()
+                    if (!lower.endsWith(".m4s") && !lower.endsWith(".ts") && !lowerFull.contains("googlevideo.com/videoplayback")) {
+                        val isAudio = lower.endsWith(".mp3") || lower.endsWith(".m4a") || lower.endsWith(".aac") || lower.endsWith(".flac")
+                        val isHls = lower.endsWith(".m3u8") || lower.endsWith(".mpd")
+                        val ref = request.requestHeaders?.get("Referer")
+                        onMediaDetected(
+                            SniffedMedia(
+                                id = "net_${reqUrl.hashCode()}",
+                                url = reqUrl,
+                                type = if (isAudio) "audio" else "video",
+                                format = if (isHls) "M3U8 HLS" else if (isAudio) "AUDIO" else "MP4",
+                                title = reqUrl.substringBefore('?').substringAfterLast('/').ifBlank { "Captured Stream" },
+                                source = "webview_net",
+                                isStream = isHls,
+                                referer = ref
+                            )
                         )
-                    )
+                    }
                 }
             }
             return super.shouldInterceptRequest(view, request)

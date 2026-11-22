@@ -2,7 +2,18 @@
 
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { SniffedMedia } from '@/types';
-import { enqueueItems, enqueueUrls, fetchBrowserSniff } from '@/lib/api';
+import {
+  ChromiumActionPayload,
+  enqueueItems,
+  enqueueUrls,
+  fetchBrowserSniff,
+  fetchChromiumCookies,
+  fetchChromiumStatus,
+  getSavedCookies,
+  sendChromiumAction,
+  startChromiumSession,
+  stopChromiumSession,
+} from '@/lib/api';
 import { usePlayer } from '@/context/PlayerContext';
 import { Button } from '@astryxdesign/core/Button';
 import { IconButton } from '@astryxdesign/core/IconButton';
@@ -16,6 +27,7 @@ import {
   ArrowLeft,
   ArrowRight,
   Check,
+  Chrome,
   Compass,
   Download,
   ExternalLink,
@@ -23,12 +35,15 @@ import {
   Globe,
   Home,
   Image as ImageIcon,
+  Keyboard,
   ListChecks,
   Loader2,
   Music,
   Play,
+  Power,
   Radar,
   RotateCw,
+  Shield,
   Video,
   X,
 } from 'lucide-react';
@@ -40,6 +55,7 @@ interface BrowserViewProps {
 }
 
 type SniffFilter = 'video' | 'audio' | 'image' | 'all';
+type EngineMode = 'chromium' | 'proxy';
 
 const QUALITY_OPTIONS = [
   { label: 'Highest Quality', value: 'highest' },
@@ -49,23 +65,48 @@ const QUALITY_OPTIONS = [
 ];
 
 const QUICK_BOOKMARKS = [
-  { name: 'YouTube', url: 'https://www.youtube.com', desc: 'Videos, playlists & channels' },
+  { name: 'Google', url: 'https://www.google.com', desc: 'Search & open any website in Chromium Core' },
+  { name: 'YouTube', url: 'https://www.youtube.com', desc: 'Browse & download HD/4K videos & shorts' },
+  { name: 'TikTok', url: 'https://www.tiktok.com', desc: 'Browse creator feeds & grab clean videos' },
+  { name: 'AV01 Media', url: 'https://av01.media', desc: 'DNS-resilient proxy & HLS M3U8 streams' },
   { name: 'Tinhte.vn', url: 'https://tinhte.vn', desc: 'Tech news & embedded videos' },
-  { name: 'AV01 Media', url: 'https://av01.media', desc: 'DNS-resilient proxy stream host' },
   { name: 'SoundCloud', url: 'https://soundcloud.com', desc: 'Audio tracks & albums' },
-  { name: 'TikTok', url: 'https://www.tiktok.com', desc: 'Short-form feeds' },
-  { name: 'Vimeo', url: 'https://vimeo.com', desc: 'Studio & HD reels' },
 ];
 
 function normalizeInputUrl(raw: string): string {
   const trimmed = raw.trim();
   if (!trimmed) return '';
   if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) return trimmed;
+  if (
+    /\s/.test(trimmed) ||
+    (!trimmed.includes('.') && !trimmed.toLowerCase().startsWith('localhost'))
+  ) {
+    return `https://www.google.com/search?q=${encodeURIComponent(trimmed)}`;
+  }
   return `https://${trimmed}`;
+}
+
+function getKeyModifiers(e: React.KeyboardEvent): number {
+  let m = 0;
+  if (e.altKey) m |= 1;
+  if (e.ctrlKey) m |= 2;
+  if (e.metaKey) m |= 4;
+  if (e.shiftKey) m |= 8;
+  return m;
 }
 
 export function BrowserView({ onOpenAlbumModal, onQueued }: BrowserViewProps) {
   const { playStream } = usePlayer();
+
+  const [engineMode, setEngineMode] = useState<EngineMode>('chromium');
+  const [chromiumAvailable, setChromiumAvailable] = useState<boolean>(true);
+  const [chromiumRunning, setChromiumRunning] = useState<boolean>(false);
+  const [chromiumTransport, setChromiumTransport] = useState<'ws' | 'sse' | null>(null);
+  const [chromiumCanBack, setChromiumCanBack] = useState(false);
+  const [chromiumCanForward, setChromiumCanForward] = useState(false);
+  const [viewportSize, setViewportSize] = useState({ width: 1280, height: 800 });
+  const [showMobileTypeBar, setShowMobileTypeBar] = useState(false);
+  const [mobileTypeInput, setMobileTypeInput] = useState('');
 
   const [urlInput, setUrlInput] = useState('');
   const [activeUrl, setActiveUrl] = useState('');
@@ -85,6 +126,18 @@ export function BrowserView({ onOpenAlbumModal, onQueued }: BrowserViewProps) {
 
   const seenUrlsRef = useRef<Set<string>>(new Set());
   const lastSniffedPageRef = useRef<string>('');
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const viewportContainerRef = useRef<HTMLDivElement | null>(null);
+  const wsRef = useRef<WebSocket | null>(null);
+  const sseRef = useRef<EventSource | null>(null);
+  const lastMoveSentRef = useRef<number>(0);
+  const touchPosRef = useRef<{ x: number; y: number; startY: number; moved: boolean } | null>(null);
+  const frameImgRef = useRef<HTMLImageElement | null>(null);
+  const activeUrlRef = useRef<string>('');
+
+  useEffect(() => {
+    activeUrlRef.current = activeUrl;
+  }, [activeUrl]);
 
   const mergeSniffedItems = useCallback((incoming: SniffedMedia[]) => {
     if (!incoming || incoming.length === 0) return;
@@ -97,7 +150,6 @@ export function BrowserView({ onOpenAlbumModal, onQueued }: BrowserViewProps) {
         if (!item?.url) continue;
         const idx = byUrl.get(item.url);
         if (idx !== undefined) {
-          // Prefer higher-confidence metadata if updating existing URL
           const existing = next[idx];
           next[idx] = {
             ...existing,
@@ -114,7 +166,6 @@ export function BrowserView({ onOpenAlbumModal, onQueued }: BrowserViewProps) {
         }
       }
 
-      // Sort videos and streams before audio and images
       next.sort((a, b) => {
         const rank = (m: SniffedMedia) =>
           m.type === 'video' ? (m.isStream ? 0 : 1) : m.type === 'audio' ? 2 : 3;
@@ -123,6 +174,239 @@ export function BrowserView({ onOpenAlbumModal, onQueued }: BrowserViewProps) {
       return next;
     });
   }, []);
+
+  const drawFrameToCanvas = useCallback((base64Jpeg: string, w?: number, h?: number) => {
+    const canvas = canvasRef.current;
+    if (!canvas || !base64Jpeg) return;
+    if (w && h && (w !== canvas.width || h !== canvas.height)) {
+      canvas.width = w;
+      canvas.height = h;
+      setViewportSize({ width: w, height: h });
+    }
+    if (!frameImgRef.current) {
+      frameImgRef.current = new Image();
+    }
+    const img = frameImgRef.current;
+    img.onload = () => {
+      const ctx = canvasRef.current?.getContext('2d');
+      if (ctx && canvasRef.current) {
+        ctx.drawImage(img, 0, 0, canvasRef.current.width, canvasRef.current.height);
+      }
+    };
+    img.src = `data:image/jpeg;base64,${base64Jpeg}`;
+  }, []);
+
+  const handleChromiumEvent = useCallback(
+    (raw: any) => {
+      if (!raw || typeof raw !== 'object') return;
+      switch (raw.type) {
+        case 'frame':
+          setIsLoadingPage(false);
+          setChromiumRunning(true);
+          if (typeof raw.data === 'string') {
+            drawFrameToCanvas(raw.data, raw.width, raw.height);
+          }
+          break;
+        case 'status':
+          if (typeof raw.available === 'boolean') setChromiumAvailable(raw.available);
+          if (typeof raw.running === 'boolean') setChromiumRunning(raw.running);
+          if (raw.width && raw.height) {
+            setViewportSize({ width: raw.width, height: raw.height });
+          }
+          break;
+        case 'nav':
+          setIsLoadingPage(false);
+          if (typeof raw.canGoBack === 'boolean') setChromiumCanBack(raw.canGoBack);
+          if (typeof raw.canGoForward === 'boolean') setChromiumCanForward(raw.canGoForward);
+          if (typeof raw.url === 'string' && raw.url.startsWith('http')) {
+            const changed = raw.url !== activeUrlRef.current;
+            setUrlInput(raw.url);
+            setActiveUrl(raw.url);
+            if (changed) {
+              setSniffedItems([]);
+              setSelectedUrls(new Set());
+              seenUrlsRef.current.clear();
+            }
+          }
+          break;
+        case 'media_list':
+          if (Array.isArray(raw.items)) {
+            mergeSniffedItems(raw.items);
+          }
+          break;
+        case 'media':
+          if (raw.item) {
+            mergeSniffedItems([raw.item]);
+          }
+          break;
+        case 'error':
+          setIsLoadingPage(false);
+          if (typeof raw.error === 'string' && raw.error) {
+            setStatusNotice(`Chromium Core: ${raw.error}`);
+          }
+          break;
+      }
+    },
+    [drawFrameToCanvas, mergeSniffedItems]
+  );
+
+  const disconnectChromiumStream = useCallback(() => {
+    if (wsRef.current) {
+      try {
+        wsRef.current.close();
+      } catch (_) {}
+      wsRef.current = null;
+    }
+    if (sseRef.current) {
+      try {
+        sseRef.current.close();
+      } catch (_) {}
+      sseRef.current = null;
+    }
+    setChromiumTransport(null);
+  }, []);
+
+  const connectChromiumSSE = useCallback(
+    (startUrl?: string) => {
+      if (sseRef.current) {
+        sseRef.current.close();
+        sseRef.current = null;
+      }
+      const qs = startUrl ? `?url=${encodeURIComponent(startUrl)}` : '';
+      const es = new EventSource(`/api/browser/chromium/events${qs}`);
+      sseRef.current = es;
+      setChromiumTransport('sse');
+
+      es.onmessage = (event) => {
+        try {
+          handleChromiumEvent(JSON.parse(event.data));
+        } catch (_) {}
+      };
+      es.onerror = () => {
+        // EventSource automatically retries on transient network hiccups
+      };
+    },
+    [handleChromiumEvent]
+  );
+
+  const ensureChromiumConnected = useCallback(
+    (startUrl?: string) => {
+      if (typeof window === 'undefined') return;
+      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+        if (startUrl) {
+          wsRef.current.send(JSON.stringify({ type: 'navigate', url: startUrl }));
+        }
+        return;
+      }
+      if (sseRef.current) {
+        if (startUrl) {
+          sendChromiumAction({ type: 'navigate', url: startUrl }).catch(() => {});
+        }
+        return;
+      }
+
+      const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const qs = startUrl ? `?url=${encodeURIComponent(startUrl)}` : '';
+      let opened = false;
+      try {
+        const ws = new WebSocket(`${proto}//${window.location.host}/api/browser/chromium/ws${qs}`);
+        wsRef.current = ws;
+
+        ws.onopen = () => {
+          opened = true;
+          setChromiumTransport('ws');
+        };
+        ws.onmessage = (ev) => {
+          try {
+            handleChromiumEvent(JSON.parse(ev.data));
+          } catch (_) {}
+        };
+        ws.onerror = () => {
+          if (!opened) {
+            wsRef.current = null;
+            connectChromiumSSE(startUrl);
+          }
+        };
+        ws.onclose = () => {
+          wsRef.current = null;
+          if (!opened) {
+            connectChromiumSSE(startUrl);
+          } else {
+            setChromiumTransport(null);
+          }
+        };
+      } catch {
+        connectChromiumSSE(startUrl);
+      }
+    },
+    [connectChromiumSSE, handleChromiumEvent]
+  );
+
+  const dispatchChromiumAction = useCallback(async (action: ChromiumActionPayload) => {
+    const ws = wsRef.current;
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify(action));
+      return;
+    }
+    try {
+      await sendChromiumAction(action);
+    } catch (_) {}
+  }, []);
+
+  // Probe Chromium availability on mount without spinning up Chromium
+  useEffect(() => {
+    let cancelled = false;
+    fetchChromiumStatus()
+      .then((st) => {
+        if (cancelled) return;
+        setChromiumAvailable(st.available);
+        setChromiumRunning(st.running);
+        setChromiumCanBack(st.canGoBack);
+        setChromiumCanForward(st.canGoForward);
+        if (!st.available) {
+          setEngineMode('proxy');
+        } else if (st.running && st.currentUrl) {
+          setActiveUrl(st.currentUrl);
+          setUrlInput(st.currentUrl);
+          ensureChromiumConnected();
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setChromiumAvailable(false);
+          setEngineMode('proxy');
+        }
+      });
+
+    return () => {
+      cancelled = true;
+      disconnectChromiumStream();
+    };
+  }, [disconnectChromiumStream, ensureChromiumConnected]);
+
+  // Keep Chromium viewport aligned with panel dimensions
+  useEffect(() => {
+    if (engineMode !== 'chromium' || !activeUrl || !chromiumRunning) return;
+    const el = viewportContainerRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const ro = new ResizeObserver((entries) => {
+      const rect = entries[0]?.contentRect;
+      if (!rect || rect.width < 320 || rect.height < 280) return;
+      const targetW = Math.min(1440, Math.max(640, Math.round(rect.width)));
+      const targetH = Math.min(900, Math.max(480, Math.round(rect.height)));
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => {
+        dispatchChromiumAction({ type: 'resize', width: targetW, height: targetH });
+      }, 350);
+    });
+    ro.observe(el);
+    return () => {
+      if (timer) clearTimeout(timer);
+      ro.disconnect();
+    };
+  }, [activeUrl, chromiumRunning, dispatchChromiumAction, engineMode]);
 
   const runServerSniff = useCallback(
     async (targetUrl: string) => {
@@ -157,6 +441,33 @@ export function BrowserView({ onOpenAlbumModal, onQueued }: BrowserViewProps) {
       seenUrlsRef.current.clear();
       lastSniffedPageRef.current = target;
 
+      if (engineMode === 'chromium' && chromiumAvailable) {
+        if (wsRef.current?.readyState === WebSocket.OPEN || sseRef.current) {
+          dispatchChromiumAction({ type: 'navigate', url: target });
+        } else {
+          startChromiumSession(target)
+            .then((res) => {
+              if (!res.ok) {
+                setStatusNotice(
+                  res.error
+                    ? `Chromium Core unavailable (${res.error}); using Fast Proxy.`
+                    : 'Chromium Core unavailable; using Fast Proxy.'
+                );
+                setEngineMode('proxy');
+                runServerSniff(target);
+                return;
+              }
+              setChromiumRunning(true);
+              ensureChromiumConnected(target);
+            })
+            .catch(() => {
+              setEngineMode('proxy');
+              runServerSniff(target);
+            });
+        }
+        return;
+      }
+
       if (pushHistory) {
         setHistory((prev) => {
           const sliced = historyIndex >= 0 ? prev.slice(0, historyIndex + 1) : prev;
@@ -169,10 +480,21 @@ export function BrowserView({ onOpenAlbumModal, onQueued }: BrowserViewProps) {
 
       runServerSniff(target);
     },
-    [historyIndex, runServerSniff]
+    [
+      chromiumAvailable,
+      dispatchChromiumAction,
+      engineMode,
+      ensureChromiumConnected,
+      historyIndex,
+      runServerSniff,
+    ]
   );
 
   const handleBack = () => {
+    if (engineMode === 'chromium') {
+      dispatchChromiumAction({ type: 'back' });
+      return;
+    }
     if (historyIndex <= 0) return;
     const prevIdx = historyIndex - 1;
     const target = history[prevIdx];
@@ -181,6 +503,10 @@ export function BrowserView({ onOpenAlbumModal, onQueued }: BrowserViewProps) {
   };
 
   const handleForward = () => {
+    if (engineMode === 'chromium') {
+      dispatchChromiumAction({ type: 'forward' });
+      return;
+    }
     if (historyIndex >= history.length - 1) return;
     const nextIdx = historyIndex + 1;
     const target = history[nextIdx];
@@ -189,6 +515,7 @@ export function BrowserView({ onOpenAlbumModal, onQueued }: BrowserViewProps) {
   };
 
   const handleHome = () => {
+    disconnectChromiumStream();
     setActiveUrl('');
     setUrlInput('');
     setSniffedItems([]);
@@ -197,16 +524,60 @@ export function BrowserView({ onOpenAlbumModal, onQueued }: BrowserViewProps) {
     setStatusNotice(null);
   };
 
+  const handleStopChromium = async () => {
+    disconnectChromiumStream();
+    try {
+      await stopChromiumSession();
+    } catch (_) {}
+    setChromiumRunning(false);
+    setActiveUrl('');
+    setUrlInput('');
+    setStatusNotice('Chromium Core stopped to free NAS CPU & RAM.');
+  };
+
   const handleReload = () => {
     if (!activeUrl) return;
     setIsLoadingPage(true);
+    if (engineMode === 'chromium') {
+      dispatchChromiumAction({ type: 'reload' });
+      return;
+    }
     setReloadNonce((n) => n + 1);
     runServerSniff(activeUrl);
+  };
+
+  const handleSwitchEngine = (nextMode: EngineMode) => {
+    if (nextMode === engineMode) return;
+    if (nextMode === 'proxy') {
+      disconnectChromiumStream();
+      setEngineMode('proxy');
+      if (activeUrl) {
+        setIsLoadingPage(true);
+        setReloadNonce((n) => n + 1);
+        runServerSniff(activeUrl);
+      }
+    } else if (chromiumAvailable) {
+      setEngineMode('chromium');
+      if (activeUrl) {
+        setIsLoadingPage(true);
+        startChromiumSession(activeUrl)
+          .then((res) => {
+            if (res.ok) {
+              setChromiumRunning(true);
+              ensureChromiumConnected(activeUrl);
+            } else {
+              setEngineMode('proxy');
+            }
+          })
+          .catch(() => setEngineMode('proxy'));
+      }
+    }
   };
 
   // Listen to proxy iframe messages for link navigation & live DOM/fetch/XHR media capture
   useEffect(() => {
     const onMessage = (event: MessageEvent) => {
+      if (engineMode !== 'proxy') return;
       const data = event.data;
       if (!data || typeof data !== 'object') return;
 
@@ -258,7 +629,133 @@ export function BrowserView({ onOpenAlbumModal, onQueued }: BrowserViewProps) {
 
     window.addEventListener('message', onMessage);
     return () => window.removeEventListener('message', onMessage);
-  }, [mergeSniffedItems, runServerSniff]);
+  }, [engineMode, mergeSniffedItems, runServerSniff]);
+
+  const toCanvasCoords = (clientX: number, clientY: number) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return { x: 0, y: 0 };
+    const rect = canvas.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return { x: 0, y: 0 };
+    const x = Math.round(((clientX - rect.left) / rect.width) * viewportSize.width);
+    const y = Math.round(((clientY - rect.top) / rect.height) * viewportSize.height);
+    return {
+      x: Math.max(0, Math.min(viewportSize.width, x)),
+      y: Math.max(0, Math.min(viewportSize.height, y)),
+    };
+  };
+
+  const handleCanvasMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    e.currentTarget.focus();
+    const { x, y } = toCanvasCoords(e.clientX, e.clientY);
+    const button = e.button === 2 ? 'right' : e.button === 1 ? 'middle' : 'left';
+    dispatchChromiumAction({ type: 'mousedown', x, y, button, clickCount: 1 });
+  };
+
+  const handleCanvasMouseUp = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    const { x, y } = toCanvasCoords(e.clientX, e.clientY);
+    const button = e.button === 2 ? 'right' : e.button === 1 ? 'middle' : 'left';
+    dispatchChromiumAction({ type: 'mouseup', x, y, button, clickCount: 1 });
+  };
+
+  const handleCanvasMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    const now = performance.now();
+    if (now - lastMoveSentRef.current < 45) return;
+    lastMoveSentRef.current = now;
+    const { x, y } = toCanvasCoords(e.clientX, e.clientY);
+    dispatchChromiumAction({ type: 'mousemove', x, y });
+  };
+
+  const handleCanvasWheel = (e: React.WheelEvent<HTMLCanvasElement>) => {
+    e.preventDefault();
+    const { x, y } = toCanvasCoords(e.clientX, e.clientY);
+    dispatchChromiumAction({
+      type: 'wheel',
+      x,
+      y,
+      deltaX: Math.round(e.deltaX),
+      deltaY: Math.round(e.deltaY),
+    });
+  };
+
+  const handleCanvasKeyDown = (e: React.KeyboardEvent<HTMLCanvasElement>) => {
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'v') {
+      return; // Handled via onPaste so clipboard inserts cleanly
+    }
+    if (
+      [' ', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Backspace', 'Tab', 'Enter'].includes(
+        e.key
+      )
+    ) {
+      e.preventDefault();
+    }
+    const modifiers = getKeyModifiers(e);
+    dispatchChromiumAction({
+      type: 'keydown',
+      key: e.key,
+      code: e.code,
+      keyCode: e.keyCode,
+      modifiers,
+    });
+  };
+
+  const handleCanvasKeyUp = (e: React.KeyboardEvent<HTMLCanvasElement>) => {
+    dispatchChromiumAction({
+      type: 'keyup',
+      key: e.key,
+      code: e.code,
+      keyCode: e.keyCode,
+      modifiers: getKeyModifiers(e),
+    });
+  };
+
+  const handleCanvasPaste = (e: React.ClipboardEvent<HTMLCanvasElement>) => {
+    const pasted = e.clipboardData?.getData('text');
+    if (pasted) {
+      e.preventDefault();
+      dispatchChromiumAction({ type: 'text', text: pasted });
+    }
+  };
+
+  const handleCanvasTouchStart = (e: React.TouchEvent<HTMLCanvasElement>) => {
+    const t = e.touches[0];
+    if (!t) return;
+    const { x, y } = toCanvasCoords(t.clientX, t.clientY);
+    touchPosRef.current = { x, y, startY: y, moved: false };
+  };
+
+  const handleCanvasTouchMove = (e: React.TouchEvent<HTMLCanvasElement>) => {
+    const t = e.touches[0];
+    const prev = touchPosRef.current;
+    if (!t || !prev) return;
+    const { x, y } = toCanvasCoords(t.clientX, t.clientY);
+    const dy = prev.y - y;
+    if (Math.abs(y - prev.startY) > 10) {
+      prev.moved = true;
+    }
+    if (Math.abs(dy) >= 6) {
+      dispatchChromiumAction({ type: 'wheel', x, y, deltaX: 0, deltaY: dy * 2 });
+      prev.x = x;
+      prev.y = y;
+    }
+  };
+
+  const handleCanvasTouchEnd = () => {
+    const prev = touchPosRef.current;
+    touchPosRef.current = null;
+    if (prev && !prev.moved) {
+      dispatchChromiumAction({ type: 'click', x: prev.x, y: prev.y, button: 'left', clickCount: 1 });
+    }
+  };
+
+  const resolveEffectiveCookies = async (): Promise<string | undefined> => {
+    const saved = getSavedCookies();
+    if (saved) return saved;
+    if (engineMode === 'chromium' && chromiumRunning) {
+      const liveCookies = await fetchChromiumCookies();
+      if (liveCookies) return liveCookies;
+    }
+    return undefined;
+  };
 
   const counts = useMemo(() => {
     let video = 0;
@@ -307,6 +804,7 @@ export function BrowserView({ onOpenAlbumModal, onQueued }: BrowserViewProps) {
   const handleDownloadSingle = async (item: SniffedMedia) => {
     setIsEnqueuing(true);
     try {
+      const cookies = await resolveEffectiveCookies();
       await enqueueItems(
         [
           {
@@ -320,6 +818,7 @@ export function BrowserView({ onOpenAlbumModal, onQueued }: BrowserViewProps) {
         item.type === 'audio' ? 'audio' : quality,
         {
           channel: item.channel || getHostLabel(activeUrl),
+          cookies,
         }
       );
       setStatusNotice(`Queued "${item.title}" for download.`);
@@ -335,6 +834,7 @@ export function BrowserView({ onOpenAlbumModal, onQueued }: BrowserViewProps) {
 
     setIsEnqueuing(true);
     try {
+      const cookies = await resolveEffectiveCookies();
       const host = getHostLabel(activeUrl) || 'Browser';
       await enqueueItems(
         selected.map((it) => ({
@@ -349,6 +849,7 @@ export function BrowserView({ onOpenAlbumModal, onQueued }: BrowserViewProps) {
           groupTitle: `${host} (${selected.length} detected)`,
           groupType: selected.length > 1 ? 'batch' : 'single',
           channel: host,
+          cookies,
         }
       );
       setStatusNotice(`Queued ${selected.length} selected items as a download group.`);
@@ -363,8 +864,10 @@ export function BrowserView({ onOpenAlbumModal, onQueued }: BrowserViewProps) {
     if (!activeUrl) return;
     setIsEnqueuing(true);
     try {
+      const cookies = await resolveEffectiveCookies();
       await enqueueUrls([activeUrl], quality, {
         channel: getHostLabel(activeUrl),
+        cookies,
       });
       setStatusNotice(`Sent ${activeUrl} to download queue.`);
       onQueued?.();
@@ -372,6 +875,10 @@ export function BrowserView({ onOpenAlbumModal, onQueued }: BrowserViewProps) {
       setIsEnqueuing(false);
     }
   };
+
+  const canGoBack = engineMode === 'chromium' ? chromiumCanBack : historyIndex > 0;
+  const canGoForward =
+    engineMode === 'chromium' ? chromiumCanForward : historyIndex < history.length - 1;
 
   return (
     <div className="max-w-7xl mx-auto flex flex-col gap-3 h-[calc(100dvh-10.5rem)] min-h-[540px]">
@@ -383,7 +890,7 @@ export function BrowserView({ onOpenAlbumModal, onQueued }: BrowserViewProps) {
               label="Back"
               size="sm"
               variant="secondary"
-              isDisabled={historyIndex <= 0}
+              isDisabled={!canGoBack}
               icon={<ArrowLeft className="w-4 h-4" />}
               onClick={handleBack}
             />
@@ -391,7 +898,7 @@ export function BrowserView({ onOpenAlbumModal, onQueued }: BrowserViewProps) {
               label="Forward"
               size="sm"
               variant="secondary"
-              isDisabled={historyIndex >= history.length - 1}
+              isDisabled={!canGoForward}
               icon={<ArrowRight className="w-4 h-4" />}
               onClick={handleForward}
             />
@@ -421,9 +928,9 @@ export function BrowserView({ onOpenAlbumModal, onQueued }: BrowserViewProps) {
           <div className="flex-1 min-w-0 flex items-center gap-2">
             <div className="flex-1 min-w-0">
               <TextInput
-                label="Web URL"
+                label="Web URL or Search"
                 isLabelHidden
-                type="url"
+                type="text"
                 size="sm"
                 width="100%"
                 startIcon={Globe}
@@ -432,7 +939,7 @@ export function BrowserView({ onOpenAlbumModal, onQueued }: BrowserViewProps) {
                 onEnter={() => navigateTo(urlInput)}
                 enterKeyHint="go"
                 hasClear
-                placeholder="Enter a page or stream URL (e.g. https://av01.media, https://tinhte.vn)..."
+                placeholder="Search Google or enter URL (youtube.com, tiktok.com, av01.media)..."
               />
             </div>
             <Button
@@ -445,6 +952,34 @@ export function BrowserView({ onOpenAlbumModal, onQueued }: BrowserViewProps) {
           </div>
 
           <div className="flex flex-wrap items-center gap-1.5 shrink-0">
+            {chromiumAvailable && (
+              <Button
+                label={engineMode === 'chromium' ? 'Chromium Core' : 'Fast Proxy'}
+                size="sm"
+                variant={engineMode === 'chromium' ? 'primary' : 'secondary'}
+                icon={
+                  engineMode === 'chromium' ? (
+                    <Chrome className="w-3.5 h-3.5" />
+                  ) : (
+                    <Shield className="w-3.5 h-3.5" />
+                  )
+                }
+                onClick={() =>
+                  handleSwitchEngine(engineMode === 'chromium' ? 'proxy' : 'chromium')
+                }
+              />
+            )}
+
+            {engineMode === 'chromium' && activeUrl && (
+              <IconButton
+                label="Toggle virtual text input for mobile"
+                size="sm"
+                variant={showMobileTypeBar ? 'primary' : 'secondary'}
+                icon={<Keyboard className="w-3.5 h-3.5" />}
+                onClick={() => setShowMobileTypeBar((v) => !v)}
+              />
+            )}
+
             {activeUrl && onOpenAlbumModal && (
               <Button
                 label="Scan Page"
@@ -464,12 +999,22 @@ export function BrowserView({ onOpenAlbumModal, onQueued }: BrowserViewProps) {
             />
             {activeUrl && (
               <Button
-                label="Download Page"
+                label="Download Video"
                 size="sm"
                 variant="secondary"
                 isLoading={isEnqueuing}
                 icon={<Download className="w-3.5 h-3.5" />}
                 onClick={handleDownloadCurrentPage}
+              />
+            )}
+            {engineMode === 'chromium' && chromiumRunning && (
+              <IconButton
+                label="Stop Chromium engine"
+                tooltip="Stop Chromium to free NAS resources"
+                size="sm"
+                variant="ghost"
+                icon={<Power className="w-3.5 h-3.5 text-[var(--color-text-error)]" />}
+                onClick={handleStopChromium}
               />
             )}
           </div>
@@ -485,23 +1030,32 @@ export function BrowserView({ onOpenAlbumModal, onQueued }: BrowserViewProps) {
         />
       )}
 
-      {/* Workspace Split: Proxy Viewport + Collapsible Sniffer Panel */}
+      {/* Workspace Split: Chromium/Proxy Viewport + Collapsible Sniffer Panel */}
       <div className="flex-1 min-h-0 flex gap-3 relative overflow-hidden">
-        {/* Browser Viewport */}
-        <div className="flex-1 min-w-0 rounded-xl border border-[var(--color-border)] bg-[var(--color-background-card)] overflow-hidden flex flex-col">
+        <div
+          ref={viewportContainerRef}
+          className="flex-1 min-w-0 rounded-xl border border-[var(--color-border)] bg-[var(--color-background-card)] overflow-hidden flex flex-col"
+        >
           {!activeUrl ? (
             <div className="flex-1 overflow-y-auto p-6 flex flex-col items-center justify-center">
               <div className="max-w-2xl w-full space-y-6">
                 <div className="text-center space-y-2">
                   <div className="w-12 h-12 rounded-2xl bg-[var(--color-accent-muted)] text-[var(--color-icon-accent)] flex items-center justify-center mx-auto">
-                    <Compass className="w-6 h-6" />
+                    {chromiumAvailable ? (
+                      <Chrome className="w-6 h-6" />
+                    ) : (
+                      <Compass className="w-6 h-6" />
+                    )}
                   </div>
                   <h2 className="text-lg font-bold text-[var(--color-text-primary)]">
-                    DNS-Resilient In-App Browser
+                    {chromiumAvailable
+                      ? 'Embedded Chromium Core Browser'
+                      : 'DNS-Resilient In-App Browser'}
                   </h2>
                   <p className="text-sm text-[var(--color-text-secondary)]">
-                    Browse pages through the built-in Cloudflare/Google DoH fallback proxy, capture
-                    HLS/MP4/MPD video streams live, preview in-app, or batch-download into groups.
+                    {chromiumAvailable
+                      ? 'On-demand headless Chromium 142 with live interactive rendering & network stream capture. Surf Google, YouTube, TikTok & AV01 directly, or tap Download Video anytime.'
+                      : 'Browse pages through the built-in Cloudflare/Google DoH fallback proxy, capture HLS/MP4/MPD video streams live, preview in-app, or batch-download into groups.'}
                   </p>
                 </div>
 
@@ -529,6 +1083,116 @@ export function BrowserView({ onOpenAlbumModal, onQueued }: BrowserViewProps) {
                   ))}
                 </div>
               </div>
+            </div>
+          ) : engineMode === 'chromium' ? (
+            <div className="relative flex-1 w-full h-full bg-black flex flex-col overflow-hidden">
+              <div className="px-3 py-1.5 border-b border-[var(--color-border)] bg-[var(--color-background-surface)] flex items-center justify-between gap-2 text-xs">
+                <div className="flex items-center gap-2 min-w-0">
+                  <span
+                    className={cn(
+                      'w-2 h-2 rounded-full shrink-0',
+                      chromiumRunning ? 'bg-[var(--color-text-success)]' : 'bg-amber-500'
+                    )}
+                  />
+                  <span className="font-semibold text-[var(--color-text-primary)] truncate">
+                    Chromium Core {chromiumTransport ? `(${chromiumTransport.toUpperCase()})` : ''}
+                  </span>
+                  <span className="text-[var(--color-text-secondary)] hidden sm:inline">
+                    Click canvas to focus & type · Auto-stops when idle
+                  </span>
+                </div>
+                <div className="flex items-center gap-1.5 shrink-0">
+                  <Button
+                    label="Detect Streams"
+                    size="sm"
+                    variant="secondary"
+                    icon={<Radar className="w-3 h-3" />}
+                    onClick={() => {
+                      dispatchChromiumAction({ type: 'extract' });
+                      setIsSnifferOpen(true);
+                    }}
+                  />
+                </div>
+              </div>
+
+              <div className="relative flex-1 min-h-0 flex items-center justify-center bg-black overflow-hidden">
+                <canvas
+                  ref={canvasRef}
+                  width={viewportSize.width}
+                  height={viewportSize.height}
+                  tabIndex={0}
+                  aria-label="Interactive Chromium Browser Viewport"
+                  onMouseDown={handleCanvasMouseDown}
+                  onMouseUp={handleCanvasMouseUp}
+                  onMouseMove={handleCanvasMouseMove}
+                  onWheel={handleCanvasWheel}
+                  onKeyDown={handleCanvasKeyDown}
+                  onKeyUp={handleCanvasKeyUp}
+                  onPaste={handleCanvasPaste}
+                  onTouchStart={handleCanvasTouchStart}
+                  onTouchMove={handleCanvasTouchMove}
+                  onTouchEnd={handleCanvasTouchEnd}
+                  onContextMenu={(e) => e.preventDefault()}
+                  className="max-w-full max-h-full w-full h-full object-contain outline-none cursor-default focus:ring-1 focus:ring-[var(--color-accent)]"
+                />
+                {isLoadingPage && (
+                  <div className="absolute top-3 right-3 px-2.5 py-1 rounded-full bg-black/75 text-white text-xs flex items-center gap-1.5 pointer-events-none">
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    Rendering...
+                  </div>
+                )}
+              </div>
+
+              {showMobileTypeBar && (
+                <div className="px-3 py-2 border-t border-[var(--color-border)] bg-[var(--color-background-surface)] flex items-center gap-2">
+                  <div className="flex-1 min-w-0">
+                    <TextInput
+                      label="Send text to page"
+                      isLabelHidden
+                      size="sm"
+                      width="100%"
+                      value={mobileTypeInput}
+                      onChange={(v) => setMobileTypeInput(v)}
+                      onEnter={async () => {
+                        if (mobileTypeInput) {
+                          await dispatchChromiumAction({ type: 'text', text: mobileTypeInput });
+                          setMobileTypeInput('');
+                        }
+                        await dispatchChromiumAction({
+                          type: 'keydown',
+                          key: 'Enter',
+                          code: 'Enter',
+                          keyCode: 13,
+                        });
+                      }}
+                      placeholder="Type or paste text into focused page input..."
+                    />
+                  </div>
+                  <Button
+                    label="Send"
+                    size="sm"
+                    variant="primary"
+                    onClick={async () => {
+                      if (!mobileTypeInput) return;
+                      await dispatchChromiumAction({ type: 'text', text: mobileTypeInput });
+                      setMobileTypeInput('');
+                    }}
+                  />
+                  <Button
+                    label="Enter"
+                    size="sm"
+                    variant="secondary"
+                    onClick={() =>
+                      dispatchChromiumAction({
+                        type: 'keydown',
+                        key: 'Enter',
+                        code: 'Enter',
+                        keyCode: 13,
+                      })
+                    }
+                  />
+                </div>
+              )}
             </div>
           ) : (
             <div className="relative flex-1 w-full h-full bg-[var(--color-background-surface)]">
@@ -567,7 +1231,12 @@ export function BrowserView({ onOpenAlbumModal, onQueued }: BrowserViewProps) {
                     variant="ghost"
                     isLoading={isSniffing}
                     icon={<RotateCw className="w-3.5 h-3.5" />}
-                    onClick={() => runServerSniff(activeUrl)}
+                    onClick={() => {
+                      if (engineMode === 'chromium') {
+                        dispatchChromiumAction({ type: 'extract' });
+                      }
+                      runServerSniff(activeUrl);
+                    }}
                   />
                 )}
                 <IconButton
@@ -642,7 +1311,8 @@ export function BrowserView({ onOpenAlbumModal, onQueued }: BrowserViewProps) {
                     {isSniffing ? 'Scanning page for streams...' : 'No media detected in this tab'}
                   </p>
                   <p className="text-xs text-[var(--color-text-secondary)]">
-                    Play a video inside the browser or switch filter tabs (Videos / Audio / All).
+                    Play a video inside the browser, open a YouTube/TikTok/AV01 video page, or tap
+                    Detect Streams.
                   </p>
                 </div>
               ) : (
@@ -710,22 +1380,23 @@ export function BrowserView({ onOpenAlbumModal, onQueued }: BrowserViewProps) {
                       </div>
 
                       <div className="flex items-center justify-end gap-1.5">
-                        {(item.type === 'video' || item.type === 'audio') && (
-                          <Button
-                            label="Preview"
-                            size="sm"
-                            variant="secondary"
-                            icon={<Play className="w-3 h-3 fill-current" />}
-                            onClick={() =>
-                              playStream(item.url, item.title, {
-                                thumbnail: item.thumbnail,
-                                isAudio: item.type === 'audio',
-                                isHls: Boolean(item.isStream || /\.m3u8(\?|$)/i.test(item.url)),
-                                channel: item.channel || getHostLabel(activeUrl),
-                              })
-                            }
-                          />
-                        )}
+                        {(item.type === 'video' || item.type === 'audio') &&
+                          !/youtube\.com\/watch|youtu\.be\//i.test(item.url) && (
+                            <Button
+                              label="Preview"
+                              size="sm"
+                              variant="secondary"
+                              icon={<Play className="w-3 h-3 fill-current" />}
+                              onClick={() =>
+                                playStream(item.url, item.title, {
+                                  thumbnail: item.thumbnail,
+                                  isAudio: item.type === 'audio',
+                                  isHls: Boolean(item.isStream || /\.m3u8(\?|$)/i.test(item.url)),
+                                  channel: item.channel || getHostLabel(activeUrl),
+                                })
+                              }
+                            />
+                          )}
                         <Button
                           label="Download"
                           size="sm"

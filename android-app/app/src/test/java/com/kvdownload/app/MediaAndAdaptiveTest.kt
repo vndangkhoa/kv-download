@@ -8,6 +8,9 @@ import com.kvdownload.app.ui.adaptive.FoldPosture
 import com.kvdownload.app.ui.adaptive.HingeRectDp
 import com.kvdownload.app.ui.adaptive.WidthClass
 import com.kvdownload.app.ui.adaptive.computeWindowState
+import com.kvdownload.app.ui.screens.detectPlayablePageItem
+import com.kvdownload.app.ui.screens.normalizeBrowserOmniboxUrl
+import com.kvdownload.app.ui.screens.resolveSafeWebNavigationUrl
 import com.kvdownload.app.update.AppUpdateManager
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -172,5 +175,36 @@ class MediaAndAdaptiveTest {
         val thumbUrl = RetrofitClient.taskThumbnailUrl(task)
         assertTrue(thumbUrl.contains("/thumbnail?id=502f2593-0bce-4df0-9dc0-80e5019e64c1"))
         assertTrue(thumbUrl.contains("mediaId=3faf55e3913cb4054bdbf3aba9f2487c%2Fsample%20reel.mp4"))
+    }
+
+    @Test
+    fun androidBrowserOmniboxAndSchemeFiltering() {
+        assertEquals("https://www.google.com", normalizeBrowserOmniboxUrl(""))
+        assertEquals("https://youtube.com", normalizeBrowserOmniboxUrl("youtube.com"))
+        assertEquals(
+            "https://www.google.com/search?q=lofi+beats",
+            normalizeBrowserOmniboxUrl("lofi beats")
+        )
+        assertEquals(
+            "https://www.google.com/search?q=tiktok",
+            normalizeBrowserOmniboxUrl("tiktok")
+        )
+
+        assertEquals(null, resolveSafeWebNavigationUrl("https://www.tiktok.com/@creator/video/123"))
+        assertEquals("", resolveSafeWebNavigationUrl("snssdk1180://aweme/detail/123"))
+        assertEquals("", resolveSafeWebNavigationUrl("vnd.youtube://dQw4w9WgXcQ"))
+        assertEquals(
+            "https://www.tiktok.com/t/ZP8/",
+            resolveSafeWebNavigationUrl("intent://aweme/detail/123#Intent;scheme=snssdk1180;S.browser_fallback_url=https%3A%2F%2Fwww.tiktok.com%2Ft%2FZP8%2F;end")
+        )
+
+        val ytItem = detectPlayablePageItem("https://m.youtube.com/watch?v=dQw4w9WgXcQ", "Rick Astley")
+        assertNotNull(ytItem)
+        assertEquals("https://www.youtube.com/watch?v=dQw4w9WgXcQ", ytItem!!.url)
+        assertEquals("YOUTUBE", ytItem.format)
+
+        val ttItem = detectPlayablePageItem("https://www.tiktok.com/@user/video/7400000000000000001", "Dance")
+        assertNotNull(ttItem)
+        assertEquals("TIKTOK", ttItem!!.format)
     }
 }

@@ -2,6 +2,7 @@ package media
 
 import (
 	"archive/zip"
+	"context"
 	"crypto/sha1"
 	"encoding/hex"
 	"encoding/json"
@@ -12,8 +13,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/rs/zerolog/log"
 )
@@ -23,9 +27,12 @@ type cachedCodecInfo struct {
 	Audio string
 }
 
+const compatCacheMaxBytes int64 = 512 * 1024 * 1024
+
 var (
-	codecProbeCache sync.Map // string -> cachedCodecInfo
-	compatFileLocks sync.Map // string -> *sync.Mutex
+	codecProbeCache    sync.Map // string -> cachedCodecInfo
+	compatFileLocks    sync.Map // string -> *sync.Mutex
+	compatTranscodeSem = make(chan struct{}, 1)
 )
 
 /**
@@ -313,14 +320,42 @@ func probeMediaCodecs(filename string, fi os.FileInfo) (videoCodec, audioCodec s
 }
 
 func needsBrowserCompatTranscode(ext, videoCodec, audioCodec string, forceCompat bool) bool {
+	return needsBrowserCompatTranscodeForUA("", ext, videoCodec, audioCodec, forceCompat)
+}
+
+func isChromiumDesktopUA(ua string) bool {
+	lower := strings.ToLower(ua)
+	if strings.Contains(lower, "iphone") ||
+		strings.Contains(lower, "ipad") ||
+		strings.Contains(lower, "ipod") ||
+		strings.Contains(lower, "crios/") ||
+		strings.Contains(lower, "fxios/") ||
+		strings.Contains(lower, "edgios/") {
+		return false
+	}
+	return strings.Contains(lower, "chrome/") ||
+		strings.Contains(lower, "chromium/") ||
+		strings.Contains(lower, "edg/") ||
+		strings.Contains(lower, "opr/")
+}
+
+func needsBrowserCompatTranscodeForUA(ua, ext, videoCodec, audioCodec string, forceCompat bool) bool {
 	if forceCompat {
 		return true
+	}
+	if isNativeMobilePlayerUA(ua) {
+		return false
 	}
 	e := strings.ToLower(strings.TrimSpace(ext))
 	switch e {
 	case ".mkv", ".avi", ".mov", ".ts", ".mts", ".m2ts", ".flv", ".wmv":
 		return true
 	case ".mp4", ".m4v":
+		if isChromiumDesktopUA(ua) {
+			// Chrome/Edge/Android Chrome decode H.264/VP8/VP9/AV1/HEVC natively.
+			// If hardware decode fails on a specific client, MiniPlayerBar falls back to ?compat=1.
+			return audioCodec == "ac3" || audioCodec == "eac3" || audioCodec == "dts"
+		}
 		if videoCodec != "" && videoCodec != "h264" {
 			// Firefox/Safari reject VP9/HEVC/AV1/MPEG4 muxed inside MP4 with
 			// "No video with supported format and MIME type found."
@@ -346,6 +381,100 @@ func isNativeMobilePlayerUA(ua string) bool {
 		strings.Contains(lower, "dalvik/")
 }
 
+func compatFFmpegThreads() string {
+	raw := strings.TrimSpace(os.Getenv("MR_FFMPEG_THREADS"))
+	if raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil {
+			if n < 1 {
+				n = 1
+			} else if n > 4 {
+				n = 4
+			}
+			return strconv.Itoa(n)
+		}
+	}
+	return "2"
+}
+
+func execLowPriorityCommand(ctx context.Context, name string, args ...string) *exec.Cmd {
+	if nicePath, err := exec.LookPath("nice"); err == nil && nicePath != "" {
+		niceArgs := append([]string{"-n", "15", name}, args...)
+		return exec.CommandContext(ctx, nicePath, niceArgs...)
+	}
+	return exec.CommandContext(ctx, name, args...)
+}
+
+// CleanupCompatCache removes unfinished *.tmp.mp4 files on startup and enforces the disk cache limit.
+func CleanupCompatCache() {
+	cacheDir := filepath.Join(getDownloadDir(), ".compat_cache")
+	entries, err := os.ReadDir(cacheDir)
+	if err != nil {
+		return
+	}
+	removedTmp := 0
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		if strings.HasSuffix(entry.Name(), ".tmp.mp4") {
+			if os.Remove(filepath.Join(cacheDir, entry.Name())) == nil {
+				removedTmp++
+			}
+		}
+	}
+	if removedTmp > 0 {
+		log.Info().Msgf("[CompatCache] Cleaned up %d unfinished temp transcode file(s) on startup", removedTmp)
+	}
+	pruneCompatCache(compatCacheMaxBytes)
+}
+
+func pruneCompatCache(maxBytes int64) {
+	if maxBytes <= 0 {
+		return
+	}
+	cacheDir := filepath.Join(getDownloadDir(), ".compat_cache")
+	entries, err := os.ReadDir(cacheDir)
+	if err != nil {
+		return
+	}
+	type cachedFile struct {
+		path    string
+		size    int64
+		modTime time.Time
+	}
+	var files []cachedFile
+	var total int64
+	for _, entry := range entries {
+		if entry.IsDir() || strings.HasSuffix(entry.Name(), ".tmp.mp4") {
+			continue
+		}
+		info, iErr := entry.Info()
+		if iErr != nil {
+			continue
+		}
+		total += info.Size()
+		files = append(files, cachedFile{
+			path:    filepath.Join(cacheDir, entry.Name()),
+			size:    info.Size(),
+			modTime: info.ModTime(),
+		})
+	}
+	if total <= maxBytes {
+		return
+	}
+	sort.Slice(files, func(i, j int) bool {
+		return files[i].modTime.Before(files[j].modTime)
+	})
+	for _, f := range files {
+		if total <= maxBytes {
+			break
+		}
+		if os.Remove(f.path) == nil {
+			total -= f.size
+		}
+	}
+}
+
 func hasCachedBrowserCompatibleMP4(filename string, fi os.FileInfo) (string, bool) {
 	key := compatCacheKey(filename, fi)
 	outPath := filepath.Join(getDownloadDir(), ".compat_cache", key+".mp4")
@@ -356,17 +485,23 @@ func hasCachedBrowserCompatibleMP4(filename string, fi os.FileInfo) (string, boo
 }
 
 func buildCompatFFmpegArgs(filename, videoCodec, audioCodec string, fragmented bool, outputTarget string) []string {
-	args := []string{"-y", "-loglevel", "error", "-i", filename}
+	threads := compatFFmpegThreads()
+	args := []string{"-y", "-loglevel", "error", "-threads", threads, "-i", filename}
 	if videoCodec == "h264" {
 		args = append(args, "-c:v", "copy")
 	} else {
+		vf := "scale=trunc(iw/2)*2:trunc(ih/2)*2"
+		if fragmented {
+			vf = "scale='min(1280,iw)':trunc(ow/a/2)*2,scale=trunc(iw/2)*2:trunc(ih/2)*2"
+		}
 		args = append(
 			args,
 			"-c:v", "libx264",
 			"-preset", "ultrafast",
 			"-crf", "26",
+			"-x264-params", "threads="+threads+":lookahead_threads=1",
 			"-pix_fmt", "yuv420p",
-			"-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2",
+			"-vf", vf,
 		)
 	}
 	if audioCodec == "" {
@@ -382,10 +517,23 @@ func buildCompatFFmpegArgs(filename, videoCodec, audioCodec string, fragmented b
 	return args
 }
 
-func ensureBrowserCompatibleMP4(filename string, fi os.FileInfo, videoCodec, audioCodec string) (string, error) {
+func ensureBrowserCompatibleMP4(ctx context.Context, filename string, fi os.FileInfo, videoCodec, audioCodec string) (string, error) {
 	if _, err := exec.LookPath("ffmpeg"); err != nil {
 		return "", fmt.Errorf("ffmpeg unavailable: %w", err)
 	}
+	if cached, ok := hasCachedBrowserCompatibleMP4(filename, fi); ok {
+		return cached, nil
+	}
+
+	semWaitCtx, semCancel := context.WithTimeout(ctx, 15*time.Second)
+	defer semCancel()
+	select {
+	case compatTranscodeSem <- struct{}{}:
+		defer func() { <-compatTranscodeSem }()
+	case <-semWaitCtx.Done():
+		return "", fmt.Errorf("compat transcoder busy: %w", semWaitCtx.Err())
+	}
+
 	key := compatCacheKey(filename, fi)
 	lock := getCompatLock(key)
 	lock.Lock()
@@ -403,9 +551,12 @@ func ensureBrowserCompatibleMP4(filename string, fi os.FileInfo, videoCodec, aud
 	tmpPath := filepath.Join(cacheDir, key+".tmp.mp4")
 	_ = os.Remove(tmpPath)
 
+	runCtx, runCancel := context.WithTimeout(ctx, 90*time.Second)
+	defer runCancel()
+
 	args := buildCompatFFmpegArgs(filename, videoCodec, audioCodec, false, tmpPath)
 	log.Info().Msgf("[CompatTranscode] Preparing H.264/AAC MP4 for %s (v=%s, a=%s)", filepath.Base(filename), videoCodec, audioCodec)
-	if outBytes, err := exec.Command("ffmpeg", args...).CombinedOutput(); err != nil {
+	if outBytes, err := execLowPriorityCommand(runCtx, "ffmpeg", args...).CombinedOutput(); err != nil {
 		_ = os.Remove(tmpPath)
 		return "", fmt.Errorf("ffmpeg compat failed (%v): %s", err, strings.TrimSpace(string(outBytes)))
 	}
@@ -413,6 +564,7 @@ func ensureBrowserCompatibleMP4(filename string, fi os.FileInfo, videoCodec, aud
 		_ = os.Remove(tmpPath)
 		return "", err
 	}
+	pruneCompatCache(compatCacheMaxBytes)
 	return outPath, nil
 }
 
@@ -420,8 +572,19 @@ func streamFragmentedCompatMP4(w http.ResponseWriter, r *http.Request, filename,
 	if _, err := exec.LookPath("ffmpeg"); err != nil {
 		return fmt.Errorf("ffmpeg unavailable: %w", err)
 	}
+
+	semWaitCtx, semCancel := context.WithTimeout(r.Context(), 3*time.Second)
+	defer semCancel()
+	select {
+	case compatTranscodeSem <- struct{}{}:
+		defer func() { <-compatTranscodeSem }()
+	case <-semWaitCtx.Done():
+		return fmt.Errorf("compat transcoder busy: %w", semWaitCtx.Err())
+	}
+
 	args := buildCompatFFmpegArgs(filename, videoCodec, audioCodec, true, "pipe:1")
-	cmd := exec.CommandContext(r.Context(), "ffmpeg", args...)
+	log.Info().Msgf("[CompatStream] Streaming bounded H.264/AAC MP4 for %s (v=%s, a=%s)", baseName, videoCodec, audioCodec)
+	cmd := execLowPriorityCommand(r.Context(), "ffmpeg", args...)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return err
@@ -452,7 +615,7 @@ func setMediaDispositionHeaders(w http.ResponseWriter, baseName, contentType str
 }
 
 func streamFileToClient(w http.ResponseWriter, r *http.Request, filename string) {
-	const maxSyncCompatBytes = 80 * 1024 * 1024
+	const maxSyncCompatBytes = 35 * 1024 * 1024
 
 	fi, err := os.Stat(filename)
 	if err != nil || fi.IsDir() {
@@ -463,16 +626,15 @@ func streamFileToClient(w http.ResponseWriter, r *http.Request, filename string)
 
 	isInline := r.URL.Query().Get("inline") == "true"
 	forceCompat := r.URL.Query().Get("compat") == "1"
-	skipCompatForNativePlayer := isNativeMobilePlayerUA(r.UserAgent()) && !forceCompat
 
 	servePath := filename
 	serveInfo := fi
 	serveExt := filepath.Ext(filename)
 	fileContentType := getMimeType(filename)
 
-	if (isInline || forceCompat) && isVideoExt(serveExt) && !skipCompatForNativePlayer {
+	if (isInline || forceCompat) && isVideoExt(serveExt) {
 		vCodec, aCodec := probeMediaCodecs(filename, fi)
-		if needsBrowserCompatTranscode(serveExt, vCodec, aCodec, forceCompat) {
+		if needsBrowserCompatTranscodeForUA(r.UserAgent(), serveExt, vCodec, aCodec, forceCompat) {
 			if cachedPath, ok := hasCachedBrowserCompatibleMP4(filename, fi); ok {
 				if cFi, sErr := os.Stat(cachedPath); sErr == nil && cFi.Size() > 0 {
 					servePath = cachedPath
@@ -480,7 +642,7 @@ func streamFileToClient(w http.ResponseWriter, r *http.Request, filename string)
 					fileContentType = "video/mp4"
 				}
 			} else if fi.Size() <= maxSyncCompatBytes && r.Method != http.MethodHead {
-				if compatPath, cErr := ensureBrowserCompatibleMP4(filename, fi, vCodec, aCodec); cErr == nil {
+				if compatPath, cErr := ensureBrowserCompatibleMP4(r.Context(), filename, fi, vCodec, aCodec); cErr == nil {
 					if cFi, sErr := os.Stat(compatPath); sErr == nil && cFi.Size() > 0 {
 						servePath = compatPath
 						serveInfo = cFi
@@ -490,24 +652,16 @@ func streamFileToClient(w http.ResponseWriter, r *http.Request, filename string)
 					log.Warn().Msgf("[CompatTranscode] Falling back to raw file for %s: %v", filename, cErr)
 				}
 			} else if fi.Size() > maxSyncCompatBytes {
-				go func(fn string, info os.FileInfo, vc, ac string) {
-					if _, bgErr := ensureBrowserCompatibleMP4(fn, info, vc, ac); bgErr != nil {
-						log.Warn().Msgf("[CompatTranscode] Background transcode failed for %s: %v", fn, bgErr)
-					}
-				}(filename, fi, vCodec, aCodec)
-
-				if forceCompat || !strings.EqualFold(serveExt, ".mp4") {
-					baseName := filepath.Base(filename)
-					if r.Method == http.MethodHead {
-						setMediaDispositionHeaders(w, baseName, "video/mp4", isInline)
-						w.WriteHeader(http.StatusOK)
-						return
-					}
-					if sErr := streamFragmentedCompatMP4(w, r, filename, baseName, vCodec, aCodec, isInline); sErr == nil {
-						return
-					} else {
-						log.Warn().Msgf("[CompatTranscode] Fragmented stream failed for %s: %v", filename, sErr)
-					}
+				baseName := filepath.Base(filename)
+				if r.Method == http.MethodHead {
+					setMediaDispositionHeaders(w, baseName, "video/mp4", isInline)
+					w.WriteHeader(http.StatusOK)
+					return
+				}
+				if sErr := streamFragmentedCompatMP4(w, r, filename, baseName, vCodec, aCodec, isInline); sErr == nil {
+					return
+				} else {
+					log.Warn().Msgf("[CompatStream] Falling back to raw file for %s: %v", filename, sErr)
 				}
 			}
 		}

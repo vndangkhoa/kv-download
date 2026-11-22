@@ -93,6 +93,9 @@ func ScanUrlWithPagination(inputUrl string, cookies string, start int, limit int
 	if url == "" {
 		return nil, "", errors.New("missing URL")
 	}
+	if !isSupportedHTTPURL(url) {
+		return nil, "", errors.New("unsupported or invalid URL scheme")
+	}
 
 	if IsFacebookShareURL(url) {
 		resolved := resolveFbShareURL(url, cookies)
