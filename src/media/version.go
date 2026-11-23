@@ -7,7 +7,7 @@ import (
 	"strings"
 )
 
-const DefaultAppVersion = "1.0.47"
+const DefaultAppVersion = "1.0.48"
 
 // AppVersionInfo describes the latest Android client release metadata served to mobile clients.
 type AppVersionInfo struct {

@@ -62,6 +62,84 @@ class PhoneDownloadManager(private val context: Context) {
 
     private val autoSavedTaskIds = CollectionsSafeSet(loadStringSet(KEY_AUTO_SAVED_IDS))
 
+    init {
+        // Older versions saved into public Movies/Music/Pictures via MediaStore. Move every readable
+        // file into the private vault (so other apps can't see it) and drop broken/unreadable ones.
+        scope.launch { runCatching { migrateLegacyPublicFiles() } }
+    }
+
+    private fun hasValidMediaHeader(uri: Uri, category: String, mimeType: String): Boolean {
+        val isVideo = category == "video" || mimeType.startsWith("video/")
+        return try {
+            context.contentResolver.openInputStream(uri)?.use { input ->
+                val head = ByteArray(12)
+                var n = 0
+                while (n < head.size) {
+                    val r = input.read(head, n, head.size - n)
+                    if (r <= 0) break
+                    n += r
+                }
+                if (n <= 0) return false
+                if (!isVideo) return true
+                if (n < 8) return false
+                val ftyp = head[4] == 'f'.code.toByte() && head[5] == 't'.code.toByte() &&
+                    head[6] == 'y'.code.toByte() && head[7] == 'p'.code.toByte()
+                val ebml = head[0] == 0x1A.toByte() && head[1] == 0x45.toByte() &&
+                    head[2] == 0xDF.toByte() && head[3] == 0xA3.toByte()
+                ftyp || ebml
+            } ?: false
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private fun migrateLegacyPublicFiles() {
+        val legacy = _savedFiles.value.filter { it.contentUri.startsWith("content://") }
+        if (legacy.isEmpty()) return
+        val resolved = mutableMapOf<String, SavedPhoneFile?>() // id -> replacement (null = drop)
+        for (item in legacy) {
+            val uri = Uri.parse(item.contentUri)
+            if (!hasValidMediaHeader(uri, item.category, item.mimeType)) {
+                runCatching { context.contentResolver.delete(uri, null, null) }
+                resolved[item.id] = null
+                continue
+            }
+            try {
+                val sub = listOfNotNull(item.channel?.takeIf { it.isNotBlank() }?.let { sanitizeFileComponent(it, "Channel") }).joinToString("/")
+                val result = context.contentResolver.openInputStream(uri)?.use { input ->
+                    writeBytesToPrivateVault(
+                        fileName = item.fileName,
+                        category = item.category,
+                        subfolder = sub,
+                        totalBytes = item.sizeBytes,
+                        inputStream = input,
+                        onProgress = { _, _ -> }
+                    )
+                }
+                if (result != null) {
+                    val thumb = if (item.category == "video") extractPrivateVideoThumbnail(result.file, item.id) else item.thumbnailUri
+                    runCatching { context.contentResolver.delete(uri, null, null) }
+                    resolved[item.id] = item.copy(
+                        contentUri = result.uri.toString(),
+                        relativePath = result.displayPath,
+                        sizeBytes = result.bytesWritten,
+                        thumbnailUri = thumb
+                    )
+                }
+            } catch (_: Exception) {
+                // leave untouched; will retry next launch
+            }
+        }
+        if (resolved.isEmpty()) return
+        _savedFiles.update { current ->
+            val updated = current.mapNotNull { f ->
+                if (resolved.containsKey(f.id)) resolved[f.id] else f
+            }
+            persistCatalog(updated)
+            updated
+        }
+    }
+
     fun setAutoSaveEnabled(enabled: Boolean) {
         _autoSaveEnabled.value = enabled
         prefs.edit().putBoolean(KEY_AUTO_SAVE, enabled).apply()
@@ -751,6 +829,46 @@ class PhoneDownloadManager(private val context: Context) {
                 val updated = list.filterNot { it.id == record.id }
                 persistCatalog(updated)
                 updated
+            }
+        }
+    }
+
+    /** Absolute location of the app-only vault (not reachable from file managers / other apps). */
+    fun vaultLocationHint(): String = vaultRoot.absolutePath
+
+    /** Folder label shown in the gallery, e.g. "Videos/Channel" for "Private Vault/Videos/Channel/a.mp4". */
+    fun vaultFolderOf(record: SavedPhoneFile): String {
+        val rel = record.relativePath.removePrefix("Private Vault/").trim('/')
+        return rel.substringBeforeLast('/', "").ifBlank { "General" }
+    }
+
+    /** Deletes many saved files (a whole folder, or everything) and prunes emptied vault directories. */
+    fun deleteSavedPhoneFiles(records: List<SavedPhoneFile>) {
+        if (records.isEmpty()) return
+        scope.launch {
+            val ids = records.map { it.id }.toSet()
+            records.forEach { record ->
+                runCatching {
+                    val uri = Uri.parse(record.contentUri)
+                    if (uri.scheme == "file") uri.path?.let { File(it).delete() }
+                    else context.contentResolver.delete(uri, null, null)
+                }
+                record.thumbnailUri?.let { thumb ->
+                    runCatching {
+                        val tUri = Uri.parse(thumb)
+                        if (tUri.scheme == "file") tUri.path?.let { File(it).delete() }
+                    }
+                }
+            }
+            _savedFiles.update { list ->
+                val updated = list.filterNot { it.id in ids }
+                persistCatalog(updated)
+                updated
+            }
+            runCatching {
+                vaultRoot.walkBottomUp().filter { it.isDirectory && it != vaultRoot }.forEach { dir ->
+                    if (dir.list().isNullOrEmpty()) dir.delete()
+                }
             }
         }
     }

@@ -116,6 +116,8 @@ fun MediaGalleryScreen(
 
     var pendingDeleteServer by remember { mutableStateOf<GalleryItem?>(null) }
     var pendingDeletePhone by remember { mutableStateOf<SavedPhoneFile?>(null) }
+    var pendingDeleteFolder by remember { mutableStateOf<Pair<String, List<SavedPhoneFile>>?>(null) }
+    var pendingDeleteAllPhone by remember { mutableStateOf(false) }
 
     fun loadServerGallery() {
         isLoading = true
@@ -386,6 +388,14 @@ fun MediaGalleryScreen(
                             label = { Text(if (groupByFolder) "By Folder" else "Flat") }
                         )
 
+                        if (sourceTab == "phone" && savedFiles.isNotEmpty()) {
+                            AssistChip(
+                                onClick = { pendingDeleteAllPhone = true },
+                                leadingIcon = { Icon(Icons.Default.DeleteOutline, contentDescription = null, tint = palette.error, modifier = Modifier.size(16.dp)) },
+                                label = { Text("Delete All", color = palette.error) }
+                            )
+                        }
+
                         if (sourceTab == "server") {
                             AssistChip(
                                 onClick = {
@@ -529,6 +539,14 @@ fun MediaGalleryScreen(
                     }
                 }
 
+                item(span = { GridItemSpan(maxLineSpan) }) {
+                    Text(
+                        text = "Private vault: ${phoneDownloadManager.vaultLocationHint()}\nAndroid hides this app-only folder from file managers and other apps — browse, play and delete it here.",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = palette.textSecondary
+                    )
+                }
+
                 if (filteredPhoneFiles.isEmpty()) {
                     item(span = { GridItemSpan(maxLineSpan) }) {
                         EmptyGalleryCard(
@@ -537,11 +555,16 @@ fun MediaGalleryScreen(
                         )
                     }
                 } else if (groupByFolder) {
-                    val sections = filteredPhoneFiles.groupBy { it.channel?.ifBlank { null } ?: it.group?.ifBlank { null } ?: "General" }
+                    val sections = filteredPhoneFiles.groupBy { phoneDownloadManager.vaultFolderOf(it) }
                         .toSortedMap(String.CASE_INSENSITIVE_ORDER)
                     sections.forEach { (folderTitle, sectionFiles) ->
                         item(key = "ph_hdr:$folderTitle", span = { GridItemSpan(maxLineSpan) }) {
-                            FolderSectionHeader(title = folderTitle, count = sectionFiles.size, onSaveZip = null)
+                            FolderSectionHeader(
+                                title = folderTitle,
+                                count = sectionFiles.size,
+                                onSaveZip = null,
+                                onDeleteFolder = { pendingDeleteFolder = folderTitle to sectionFiles }
+                            )
                         }
                         items(sectionFiles, key = { it.id }) { file ->
                             PhoneSavedItemCard(
@@ -612,6 +635,46 @@ fun MediaGalleryScreen(
             }
         )
     }
+    pendingDeleteFolder?.let { (folderName, files) ->
+        AlertDialog(
+            onDismissRequest = { pendingDeleteFolder = null },
+            title = { Text("Delete folder \"$folderName\"?") },
+            text = { Text("Permanently delete ${files.size} file(s) in this folder from the private vault? This cannot be undone.") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        pendingDeleteFolder = null
+                        phoneDownloadManager.deleteSavedPhoneFiles(files)
+                        onShowMessage("Deleted folder \"$folderName\" (${files.size} files)")
+                    }
+                ) { Text("Delete folder", color = palette.error) }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingDeleteFolder = null }) { Text("Cancel") }
+            }
+        )
+    }
+
+    if (pendingDeleteAllPhone) {
+        AlertDialog(
+            onDismissRequest = { pendingDeleteAllPhone = false },
+            title = { Text("Delete all private files?") },
+            text = { Text("Permanently delete all ${savedFiles.size} file(s) stored in KV Download's private vault on this phone? Server copies are not affected.") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        pendingDeleteAllPhone = false
+                        val all = savedFiles
+                        phoneDownloadManager.deleteSavedPhoneFiles(all)
+                        onShowMessage("Deleted ${all.size} private file(s)")
+                    }
+                ) { Text("Delete all", color = palette.error) }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingDeleteAllPhone = false }) { Text("Cancel") }
+            }
+        )
+    }
 }
 
 @Composable
@@ -667,7 +730,8 @@ private fun FolderSidebarRow(
 private fun FolderSectionHeader(
     title: String,
     count: Int,
-    onSaveZip: (() -> Unit)?
+    onSaveZip: (() -> Unit)?,
+    onDeleteFolder: (() -> Unit)? = null
 ) {
     val palette = LocalAstryxPalette.current
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -678,16 +742,23 @@ private fun FolderSectionHeader(
         ) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                modifier = Modifier.weight(1f)
             ) {
                 Icon(Icons.Default.Folder, contentDescription = null, tint = palette.accent, modifier = Modifier.size(18.dp))
-                Text(title, style = MaterialTheme.typography.titleSmall, color = palette.textPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(title, style = MaterialTheme.typography.titleSmall, color = palette.textPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
                 Text("($count)", style = MaterialTheme.typography.bodySmall, color = palette.textSecondary)
             }
             if (onSaveZip != null) {
                 TextButton(onClick = onSaveZip) {
                     Icon(Icons.Default.FolderZip, contentDescription = null, modifier = Modifier.size(16.dp))
                     Text("ZIP", modifier = Modifier.padding(start = 4.dp))
+                }
+            }
+            if (onDeleteFolder != null) {
+                TextButton(onClick = onDeleteFolder) {
+                    Icon(Icons.Default.DeleteOutline, contentDescription = null, tint = palette.error, modifier = Modifier.size(16.dp))
+                    Text("Delete folder", color = palette.error, modifier = Modifier.padding(start = 4.dp))
                 }
             }
         }

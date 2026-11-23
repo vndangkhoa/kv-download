@@ -199,7 +199,17 @@ class AppPlayerController(context: Context) {
                 )
             } else {
                 _isBuffering.value = false
-                _errorMessage.value = error.localizedMessage ?: error.errorCodeName
+                var c: Throwable? = error
+                var unrecognized = false
+                while (c != null) {
+                    if (c is androidx.media3.exoplayer.source.UnrecognizedInputFormatException) { unrecognized = true; break }
+                    c = c.cause
+                }
+                _errorMessage.value = if (unrecognized) {
+                    "This file isn't a valid video (it may be corrupt or saved by an older version). Delete it and download it again."
+                } else {
+                    error.localizedMessage ?: error.errorCodeName
+                }
             }
         }
     }
