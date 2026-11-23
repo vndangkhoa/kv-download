@@ -529,9 +529,30 @@ fun MediaGalleryScreen(
                 if (activePhone.isNotEmpty()) {
                     item(span = { GridItemSpan(maxLineSpan) }) {
                         AstryxCard(emphasized = true) {
-                            Text("Saving to Private Vault (${activePhone.size})", style = MaterialTheme.typography.titleSmall, color = palette.textPrimary)
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text("Saving to Private Vault (${activePhone.size})", style = MaterialTheme.typography.titleSmall, color = palette.textPrimary)
+                                TextButton(onClick = { phoneDownloadManager.cancelAllTransfers() }) {
+                                    Text("Cancel All", color = palette.error)
+                                }
+                            }
                             activePhone.forEach { tr ->
-                                Text(tr.title, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(tr.title, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                                    IconButton(
+                                        onClick = { phoneDownloadManager.cancelTransfer(tr.key) },
+                                        modifier = Modifier.size(24.dp)
+                                    ) {
+                                        Icon(Icons.Default.Close, contentDescription = "Cancel", tint = palette.textSecondary, modifier = Modifier.size(16.dp))
+                                    }
+                                }
                                 LinearProgressIndicator(progress = { tr.progress }, modifier = Modifier.fillMaxWidth(), color = palette.success)
                                 Text(tr.statusText ?: "${(tr.progress * 100).toInt()}%", style = MaterialTheme.typography.labelSmall, color = palette.success)
                             }

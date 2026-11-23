@@ -15,34 +15,42 @@ import com.kvdownload.app.api.PhoneTransferState
 import com.kvdownload.app.api.RetrofitClient
 import com.kvdownload.app.api.SavedPhoneFile
 import com.kvdownload.app.api.SniffedMedia
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import okhttp3.Request
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import java.io.File
-import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.InputStream
-import java.net.URI
 import java.net.URLDecoder
+import java.util.Locale
 import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 
 class PhoneDownloadManager(private val context: Context) {
 
     private val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
     private val gson = Gson()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val transferSemaphore = Semaphore(MAX_CONCURRENT_FILE_DOWNLOADS)
+    private val activeJobs = ConcurrentHashMap<String, Job>()
     private val vaultRoot: File by lazy {
         File(context.filesDir, "private_vault").apply {
             if (!exists()) mkdirs()
             val nomedia = File(this, ".nomedia")
             if (!nomedia.exists()) runCatching { nomedia.createNewFile() }
         }
+    }
+    private val tempPartsRoot: File by lazy {
+        File(vaultRoot, ".tmp_parts").apply { if (!exists()) mkdirs() }
     }
 
     private val _transfers = MutableStateFlow<Map<String, PhoneTransferState>>(emptyMap())
@@ -326,121 +334,119 @@ class PhoneDownloadManager(private val context: Context) {
         }
 
         val initialTitle = title?.takeIf { it.isNotBlank() } ?: "HLS Stream"
-        scope.launch {
-            updateTransfer(
-                PhoneTransferState(
-                    key = transferKey,
-                    title = initialTitle,
-                    progress = 0f,
-                    statusText = if (AV01Resolver.isAV01Url(url)) "Resolving AV01 stream..." else "Preparing HLS segments..."
-                )
+        updateTransfer(
+            PhoneTransferState(
+                key = transferKey,
+                title = initialTitle,
+                progress = 0f,
+                statusText = if (AV01Resolver.isAV01Url(url)) "Queued (AV01)..." else "Queued (HLS)..."
             )
+        )
+        DownloadForegroundService.sync(context)
 
+        val job = scope.launch {
             var tempFile: File? = null
             try {
-                var targetPlaylistUrl = url
-                var resolvedTitle = title?.takeIf { it.isNotBlank() }
-                var resolvedChannel = channel
-                var resolvedReferer = referer
-                var qualityLabel: String? = null
-
-                if (AV01Resolver.isAV01Url(url)) {
-                    val av = AV01Resolver.resolve(url)
-                    resolvedTitle = resolvedTitle ?: av.title
-                    resolvedChannel = resolvedChannel ?: "AV01"
-                    resolvedReferer = resolvedReferer ?: av.referer
-                    if (!url.contains("iw01.xyz", ignoreCase = true) || url.contains("master.m3u8", ignoreCase = true)) {
-                        val picked = AV01Resolver.selectVariant(av.variants, formatPref)
-                        targetPlaylistUrl = picked.url
-                        qualityLabel = picked.label
-                    } else {
-                        // Already a specific variant URL: still refresh its access_token via AV01Resolver master if needed
-                        targetPlaylistUrl = AV01Resolver.selectVariant(av.variants, formatPref).url
-                        qualityLabel = AV01Resolver.selectVariant(av.variants, formatPref).label
-                    }
-                }
-
-                val displayTitle = resolvedTitle ?: "HLS Video"
-                val downloaded = HlsSegmentDownloader.downloadHlsToTempFile(
-                    context = context,
-                    playlistUrl = targetPlaylistUrl,
-                    referer = resolvedReferer,
-                    preferredFormat = formatPref,
-                    qualityLabel = qualityLabel
-                ) { progress, bytesNow, status ->
+                transferSemaphore.withPermit {
                     updateTransfer(
                         PhoneTransferState(
                             key = transferKey,
-                            title = displayTitle,
-                            progress = progress,
-                            bytesDownloaded = bytesNow,
-                            totalBytes = -1L,
-                            statusText = status
+                            title = initialTitle,
+                            progress = 0f,
+                            statusText = if (AV01Resolver.isAV01Url(url)) "Resolving AV01 stream..." else "Preparing HLS segments..."
                         )
                     )
-                }
-                tempFile = downloaded.file
 
-                val baseName = sanitizeFileComponent(displayTitle, "kv_hls_${System.currentTimeMillis()}")
-                val finalFileName = ensureExtension(baseName.substringBeforeLast('.', baseName), downloaded.extension)
-                val finalChannel = resolvedChannel ?: "HLS Streams"
-                val subfolder = buildRelativeSubfolder(finalChannel, "M3U8 Captures")
-                val recordId = UUID.randomUUID().toString()
+                    var targetPlaylistUrl = url
+                    var resolvedTitle = title?.takeIf { it.isNotBlank() }
+                    var resolvedChannel = channel
+                    var resolvedReferer = referer
+                    var qualityLabel: String? = null
 
-                val vaultResult = FileInputStream(downloaded.file).use { input ->
-                    writeBytesToPrivateVault(
-                        fileName = finalFileName,
-                        category = "video",
-                        subfolder = subfolder,
-                        totalBytes = downloaded.totalBytes,
-                        inputStream = input
-                    ) { copied, total ->
-                        val frac = if (total > 0L) 0.96f + 0.04f * (copied.toFloat() / total.toFloat()) else 0.98f
+                    if (AV01Resolver.isAV01Url(url)) {
+                        val av = AV01Resolver.resolve(url)
+                        resolvedTitle = resolvedTitle ?: av.title
+                        resolvedChannel = resolvedChannel ?: "AV01"
+                        resolvedReferer = resolvedReferer ?: av.referer
+                        val picked = AV01Resolver.selectVariant(av.variants, formatPref)
+                        targetPlaylistUrl = picked.url
+                        qualityLabel = picked.label
+                    }
+
+                    val displayTitle = resolvedTitle ?: "HLS Video"
+                    val downloaded = HlsSegmentDownloader.downloadHlsToTempFile(
+                        context = context,
+                        playlistUrl = targetPlaylistUrl,
+                        referer = resolvedReferer,
+                        preferredFormat = formatPref,
+                        qualityLabel = qualityLabel
+                    ) { progress, bytesNow, speedBps, status ->
+                        val label = if (speedBps > 0L) "$status · ${formatSpeed(speedBps)}" else status
                         updateTransfer(
                             PhoneTransferState(
                                 key = transferKey,
                                 title = displayTitle,
-                                progress = frac.coerceIn(0f, 1f),
-                                bytesDownloaded = copied,
-                                totalBytes = total,
-                                statusText = "Saving to Private Vault..."
+                                progress = progress,
+                                bytesDownloaded = bytesNow,
+                                totalBytes = -1L,
+                                statusText = label,
+                                speedBytesPerSec = speedBps
                             )
                         )
                     }
-                }
-                val thumbUri = extractPrivateVideoThumbnail(vaultResult.file, recordId)
+                    tempFile = downloaded.file
 
-                val record = SavedPhoneFile(
-                    id = recordId,
-                    serverTaskId = null,
-                    serverPath = null,
-                    fileName = finalFileName,
-                    title = displayTitle,
-                    channel = finalChannel,
-                    group = "M3U8 Captures",
-                    category = "video",
-                    mimeType = downloaded.mimeType,
-                    sizeBytes = vaultResult.bytesWritten,
-                    savedAt = System.currentTimeMillis(),
-                    contentUri = vaultResult.uri.toString(),
-                    relativePath = vaultResult.displayPath,
-                    thumbnailUri = thumbUri
-                )
-                addSavedRecord(record)
+                    val baseName = sanitizeFileComponent(displayTitle, "kv_hls_${System.currentTimeMillis()}")
+                    val finalFileName = ensureExtension(baseName.substringBeforeLast('.', baseName), downloaded.extension)
+                    val finalChannel = resolvedChannel ?: "HLS Streams"
+                    val subfolder = buildRelativeSubfolder(finalChannel, "M3U8 Captures")
+                    val recordId = UUID.randomUUID().toString()
 
-                updateTransfer(
-                    PhoneTransferState(
-                        key = transferKey,
-                        title = displayTitle,
-                        progress = 1f,
-                        bytesDownloaded = vaultResult.bytesWritten,
-                        totalBytes = vaultResult.bytesWritten,
-                        isCompleted = true,
-                        savedUri = vaultResult.uri.toString(),
-                        relativePath = vaultResult.displayPath,
-                        statusText = "Saved privately in app"
+                    // Atomic rename when cacheDir & vaultRoot share /data mount -> avoids full second file copy.
+                    val vaultResult = moveFileToPrivateVault(
+                        srcFile = downloaded.file,
+                        fileName = finalFileName,
+                        category = "video",
+                        subfolder = subfolder
                     )
-                )
+                    tempFile = null
+                    val thumbUri = extractPrivateVideoThumbnail(vaultResult.file, recordId)
+
+                    val record = SavedPhoneFile(
+                        id = recordId,
+                        serverTaskId = null,
+                        serverPath = null,
+                        fileName = finalFileName,
+                        title = displayTitle,
+                        channel = finalChannel,
+                        group = "M3U8 Captures",
+                        category = "video",
+                        mimeType = downloaded.mimeType,
+                        sizeBytes = vaultResult.bytesWritten,
+                        savedAt = System.currentTimeMillis(),
+                        contentUri = vaultResult.uri.toString(),
+                        relativePath = vaultResult.displayPath,
+                        thumbnailUri = thumbUri
+                    )
+                    addSavedRecord(record)
+
+                    updateTransfer(
+                        PhoneTransferState(
+                            key = transferKey,
+                            title = displayTitle,
+                            progress = 1f,
+                            bytesDownloaded = vaultResult.bytesWritten,
+                            totalBytes = vaultResult.bytesWritten,
+                            isCompleted = true,
+                            savedUri = vaultResult.uri.toString(),
+                            relativePath = vaultResult.displayPath,
+                            statusText = "Saved privately in app"
+                        )
+                    )
+                }
+            } catch (e: CancellationException) {
+                _transfers.update { it - transferKey }
+                throw e
             } catch (e: Exception) {
                 updateTransfer(
                     PhoneTransferState(
@@ -451,8 +457,10 @@ class PhoneDownloadManager(private val context: Context) {
                 )
             } finally {
                 tempFile?.delete()
+                activeJobs.remove(transferKey)
             }
         }
+        activeJobs[transferKey] = job
     }
 
     fun saveZipArchiveToPhone(zipUrl: String, archiveLabel: String, channelOrGroup: String? = null) {
@@ -487,83 +495,63 @@ class PhoneDownloadManager(private val context: Context) {
             return
         }
 
-        scope.launch {
-            updateTransfer(
-                PhoneTransferState(
-                    key = transferKey,
-                    title = title,
-                    progress = 0f,
-                    statusText = "Connecting..."
-                )
+        updateTransfer(
+            PhoneTransferState(
+                key = transferKey,
+                title = title,
+                progress = 0f,
+                statusText = "Queued..."
             )
+        )
+        DownloadForegroundService.sync(context)
 
+        val job = scope.launch {
+            var partFile: File? = File(tempPartsRoot, "${UUID.randomUUID()}.part")
+            var hlsTempFile: File? = null
             try {
-                fun buildReq(url: String): Request {
-                    val b = Request.Builder().url(url)
-                    if (!referer.isNullOrBlank()) {
-                        b.header("Referer", referer)
-                        try {
-                            val u = URI.create(referer)
-                            if (!u.scheme.isNullOrBlank() && !u.host.isNullOrBlank()) {
-                                b.header("Origin", "${u.scheme}://${u.host}")
-                            }
-                        } catch (_: Exception) {}
-                    }
-                    try {
-                        CookieManager.getInstance().getCookie(url)?.takeIf { it.isNotBlank() }?.let {
-                            b.header("Cookie", it)
-                        }
-                    } catch (_: Exception) {}
-                    return b.build()
-                }
+                transferSemaphore.withPermit {
+                    updateTransfer(
+                        PhoneTransferState(
+                            key = transferKey,
+                            title = title,
+                            progress = 0f,
+                            statusText = "Connecting..."
+                        )
+                    )
 
-                var activeUrl = sourceUrl
-                var response = try {
-                    RetrofitClient.streamHttpClient.newCall(buildReq(activeUrl)).execute()
-                } catch (e: Exception) {
-                    if (!fallbackSourceUrl.isNullOrBlank() && fallbackSourceUrl != activeUrl) {
-                        activeUrl = fallbackSourceUrl
-                        RetrofitClient.streamHttpClient.newCall(buildReq(activeUrl)).execute()
-                    } else {
-                        throw e
-                    }
-                }
-
-                if (!response.isSuccessful && !fallbackSourceUrl.isNullOrBlank() && fallbackSourceUrl != activeUrl) {
-                    response.close()
-                    activeUrl = fallbackSourceUrl
-                    response = RetrofitClient.streamHttpClient.newCall(buildReq(activeUrl)).execute()
-                }
-
-                var initialCt = response.header("Content-Type")?.lowercase().orEmpty()
-                if ((initialCt.contains("text/html") || initialCt.contains("application/xhtml")) &&
-                    !fallbackSourceUrl.isNullOrBlank() &&
-                    fallbackSourceUrl != activeUrl
-                ) {
-                    response.close()
-                    activeUrl = fallbackSourceUrl
-                    response = RetrofitClient.streamHttpClient.newCall(buildReq(activeUrl)).execute()
-                    initialCt = response.header("Content-Type")?.lowercase().orEmpty()
-                }
-
-                response.use { resp ->
-                    if (!resp.isSuccessful) {
-                        throw IllegalStateException("HTTP ${resp.code}: ${resp.message}")
+                    val directPart = partFile!!
+                    val dlMeta = ParallelRangeDownloader.downloadDirectToPartFile(
+                        sourceUrl = sourceUrl,
+                        fallbackSourceUrl = fallbackSourceUrl,
+                        referer = referer,
+                        partFile = directPart
+                    ) { downloaded, total, speedBps ->
+                        val pct = if (total > 0L) (downloaded.toFloat() / total.toFloat()).coerceIn(0f, 1f) else 0f
+                        updateTransfer(
+                            PhoneTransferState(
+                                key = transferKey,
+                                title = title,
+                                progress = pct,
+                                bytesDownloaded = downloaded,
+                                totalBytes = total,
+                                statusText = formatTransferStatus(pct, downloaded, total, speedBps),
+                                speedBytesPerSec = speedBps
+                            )
+                        )
                     }
 
-                    val rawCt = initialCt.ifBlank { resp.header("Content-Type")?.lowercase().orEmpty() }
-                    if (rawCt.contains("text/html") || rawCt.contains("application/xhtml")) {
-                        throw IllegalStateException("Target returned webpage instead of playable media")
-                    }
-                    if (rawCt.contains("mpegurl") || HlsSegmentDownloader.looksLikeHlsUrl(activeUrl)) {
-                        resp.close()
+                    val rawCt = dlMeta.contentType?.lowercase().orEmpty()
+                    if (rawCt.contains("mpegurl") || (dlMeta.totalBytes < 0L && HlsSegmentDownloader.looksLikeHlsUrl(dlMeta.finalUrl))) {
+                        directPart.delete()
+                        partFile = null
                         val hlsOut = HlsSegmentDownloader.downloadHlsToTempFile(
                             context = context,
-                            playlistUrl = activeUrl,
+                            playlistUrl = dlMeta.finalUrl,
                             referer = referer,
                             preferredFormat = "highest",
                             qualityLabel = null
-                        ) { progress, bytesNow, status ->
+                        ) { progress, bytesNow, speedBps, status ->
+                            val label = if (speedBps > 0L) "$status · ${formatSpeed(speedBps)}" else status
                             updateTransfer(
                                 PhoneTransferState(
                                     key = transferKey,
@@ -571,74 +559,66 @@ class PhoneDownloadManager(private val context: Context) {
                                     progress = progress,
                                     bytesDownloaded = bytesNow,
                                     totalBytes = -1L,
-                                    statusText = status
+                                    statusText = label,
+                                    speedBytesPerSec = speedBps
                                 )
                             )
                         }
-                        try {
-                            val finalFileName = ensureExtension(
-                                preferredFileName.substringBeforeLast('.', preferredFileName),
-                                hlsOut.extension
+                        hlsTempFile = hlsOut.file
+                        val finalFileName = ensureExtension(
+                            preferredFileName.substringBeforeLast('.', preferredFileName),
+                            hlsOut.extension
+                        )
+                        val subfolder = buildRelativeSubfolder(channel, group)
+                        val recordId = UUID.randomUUID().toString()
+                        val vaultResult = moveFileToPrivateVault(
+                            srcFile = hlsOut.file,
+                            fileName = finalFileName,
+                            category = "video",
+                            subfolder = subfolder
+                        )
+                        hlsTempFile = null
+                        val thumbUri = extractPrivateVideoThumbnail(vaultResult.file, recordId)
+                        addSavedRecord(
+                            SavedPhoneFile(
+                                id = recordId,
+                                serverTaskId = serverTaskId,
+                                serverPath = serverPath,
+                                fileName = finalFileName,
+                                title = title,
+                                channel = channel,
+                                group = group,
+                                category = "video",
+                                mimeType = hlsOut.mimeType,
+                                sizeBytes = vaultResult.bytesWritten,
+                                savedAt = System.currentTimeMillis(),
+                                contentUri = vaultResult.uri.toString(),
+                                relativePath = vaultResult.displayPath,
+                                thumbnailUri = thumbUri
                             )
-                            val subfolder = buildRelativeSubfolder(channel, group)
-                            val recordId = UUID.randomUUID().toString()
-                            val vaultResult = FileInputStream(hlsOut.file).use { input ->
-                                writeBytesToPrivateVault(
-                                    fileName = finalFileName,
-                                    category = "video",
-                                    subfolder = subfolder,
-                                    totalBytes = hlsOut.totalBytes,
-                                    inputStream = input
-                                ) { _, _ -> }
-                            }
-                            val thumbUri = extractPrivateVideoThumbnail(vaultResult.file, recordId)
-                            addSavedRecord(
-                                SavedPhoneFile(
-                                    id = recordId,
-                                    serverTaskId = serverTaskId,
-                                    serverPath = serverPath,
-                                    fileName = finalFileName,
-                                    title = title,
-                                    channel = channel,
-                                    group = group,
-                                    category = "video",
-                                    mimeType = hlsOut.mimeType,
-                                    sizeBytes = vaultResult.bytesWritten,
-                                    savedAt = System.currentTimeMillis(),
-                                    contentUri = vaultResult.uri.toString(),
-                                    relativePath = vaultResult.displayPath,
-                                    thumbnailUri = thumbUri
-                                )
+                        )
+                        updateTransfer(
+                            PhoneTransferState(
+                                key = transferKey,
+                                title = title,
+                                progress = 1f,
+                                bytesDownloaded = vaultResult.bytesWritten,
+                                totalBytes = vaultResult.bytesWritten,
+                                isCompleted = true,
+                                savedUri = vaultResult.uri.toString(),
+                                relativePath = vaultResult.displayPath,
+                                statusText = "Saved privately in app"
                             )
-                            updateTransfer(
-                                PhoneTransferState(
-                                    key = transferKey,
-                                    title = title,
-                                    progress = 1f,
-                                    bytesDownloaded = vaultResult.bytesWritten,
-                                    totalBytes = vaultResult.bytesWritten,
-                                    isCompleted = true,
-                                    savedUri = vaultResult.uri.toString(),
-                                    relativePath = vaultResult.displayPath,
-                                    statusText = "Saved privately in app"
-                                )
-                            )
-                        } finally {
-                            hlsOut.file.delete()
-                        }
-                        return@launch
+                        )
+                        return@withPermit
                     }
 
-                    val body = resp.body ?: throw IllegalStateException("Empty download body")
-                    val totalBytes = body.contentLength()
-                    val headerFileName = parseFileNameFromDisposition(
-                        resp.header("Content-Disposition")
-                    )
+                    val headerFileName = parseFileNameFromDisposition(dlMeta.contentDisposition)
                     val finalFileName = sanitizeFileComponent(
                         headerFileName ?: preferredFileName,
                         preferredFileName
                     )
-                    val mimeType = resp.header("Content-Type")
+                    val mimeType = dlMeta.contentType
                         ?.substringBefore(';')
                         ?.trim()
                         ?.takeIf { it.contains('/') && it != "application/octet-stream" }
@@ -648,25 +628,13 @@ class PhoneDownloadManager(private val context: Context) {
                     val subfolder = buildRelativeSubfolder(channel, group)
                     val recordId = UUID.randomUUID().toString()
 
-                    val vaultResult = writeBytesToPrivateVault(
+                    val vaultResult = moveFileToPrivateVault(
+                        srcFile = directPart,
                         fileName = finalFileName,
                         category = resolvedCategory,
-                        subfolder = subfolder,
-                        totalBytes = totalBytes,
-                        inputStream = body.byteStream()
-                    ) { downloaded, total ->
-                        val pct = if (total > 0L) (downloaded.toFloat() / total.toFloat()).coerceIn(0f, 1f) else 0f
-                        updateTransfer(
-                            PhoneTransferState(
-                                key = transferKey,
-                                title = title,
-                                progress = pct,
-                                bytesDownloaded = downloaded,
-                                totalBytes = total,
-                                statusText = if (total > 0L) "${(pct * 100).toInt()}% · ${formatFileSize(downloaded)}" else formatFileSize(downloaded)
-                            )
-                        )
-                    }
+                        subfolder = subfolder
+                    )
+                    partFile = null
                     val thumbUri = if (resolvedCategory == "video") {
                         extractPrivateVideoThumbnail(vaultResult.file, recordId)
                     } else null
@@ -703,6 +671,9 @@ class PhoneDownloadManager(private val context: Context) {
                         )
                     )
                 }
+            } catch (e: CancellationException) {
+                _transfers.update { it - transferKey }
+                throw e
             } catch (e: Exception) {
                 updateTransfer(
                     PhoneTransferState(
@@ -711,8 +682,53 @@ class PhoneDownloadManager(private val context: Context) {
                         error = e.message ?: "Failed saving file to phone"
                     )
                 )
+            } finally {
+                partFile?.delete()
+                hlsTempFile?.delete()
+                activeJobs.remove(transferKey)
             }
         }
+        activeJobs[transferKey] = job
+    }
+
+    private fun resolveVaultDir(category: String, subfolder: String): Pair<String, File> {
+        val baseDirName = when {
+            category == "archive" -> "Archives"
+            !_organizeByMediaType.value -> "Files"
+            category == "audio" -> "Audio"
+            category == "image" || category == "photo" -> "Photos"
+            category == "video" -> "Videos"
+            else -> "Files"
+        }
+        val typeDir = File(vaultRoot, baseDirName)
+        val targetDir = if (subfolder.isNotBlank()) File(typeDir, subfolder) else typeDir
+        if (!targetDir.exists()) targetDir.mkdirs()
+        return baseDirName to targetDir
+    }
+
+    private fun moveFileToPrivateVault(
+        srcFile: File,
+        fileName: String,
+        category: String,
+        subfolder: String
+    ): PrivateVaultWriteResult {
+        val (baseDirName, targetDir) = resolveVaultDir(category, subfolder)
+        val destFile = uniqueTargetFile(targetDir, fileName)
+        val bytesLen = srcFile.length()
+        if (bytesLen <= 0L) {
+            srcFile.delete()
+            throw IllegalStateException("Downloaded file is empty")
+        }
+        if (!srcFile.renameTo(destFile)) {
+            srcFile.copyTo(destFile, overwrite = true)
+            srcFile.delete()
+        }
+        val displayRel = if (subfolder.isNotBlank()) {
+            "Private Vault/$baseDirName/$subfolder/${destFile.name}"
+        } else {
+            "Private Vault/$baseDirName/${destFile.name}"
+        }
+        return PrivateVaultWriteResult(destFile, Uri.fromFile(destFile), displayRel, destFile.length())
     }
 
     private data class PrivateVaultWriteResult(
@@ -730,28 +746,14 @@ class PhoneDownloadManager(private val context: Context) {
         inputStream: InputStream,
         onProgress: (Long, Long) -> Unit
     ): PrivateVaultWriteResult {
-        val baseDirName = when {
-            category == "archive" -> "Archives"
-            !_organizeByMediaType.value -> "Files"
-            category == "audio" -> "Audio"
-            category == "image" || category == "photo" -> "Photos"
-            category == "video" -> "Videos"
-            else -> "Files"
-        }
-
-        val root = vaultRoot
-        val typeDir = File(root, baseDirName)
-        val targetDir = if (subfolder.isNotBlank()) File(typeDir, subfolder) else typeDir
-        if (!targetDir.exists()) {
-            targetDir.mkdirs()
-        }
+        val (baseDirName, targetDir) = resolveVaultDir(category, subfolder)
 
         val destFile = uniqueTargetFile(targetDir, fileName)
         val partFile = File(targetDir, "${destFile.name}.${UUID.randomUUID()}.part")
         var written = 0L
         try {
             FileOutputStream(partFile).use { out ->
-                val buffer = ByteArray(64 * 1024)
+                val buffer = ByteArray(256 * 1024)
                 var read: Int
                 var lastEmit = 0L
                 while (inputStream.read(buffer).also { read = it } != -1) {
@@ -889,6 +891,17 @@ class PhoneDownloadManager(private val context: Context) {
         }
     }
 
+    fun cancelTransfer(transferKey: String) {
+        activeJobs.remove(transferKey)?.cancel()
+        _transfers.update { it - transferKey }
+    }
+
+    fun cancelAllTransfers() {
+        val keys = activeJobs.keys.toList()
+        keys.forEach { k -> activeJobs.remove(k)?.cancel() }
+        _transfers.update { map -> map.filterValues { it.isCompleted || it.error != null } }
+    }
+
     fun clearCompletedTransferBadges() {
         _transfers.update { map -> map.filterValues { !it.isCompleted && it.error == null } }
     }
@@ -959,12 +972,39 @@ class PhoneDownloadManager(private val context: Context) {
     }
 
     companion object {
+        private const val MAX_CONCURRENT_FILE_DOWNLOADS = 3
         private const val PREFS_NAME = "kv_download_phone_storage"
         private const val KEY_SAVED_CATALOG = "saved_catalog_v1"
         private const val KEY_AUTO_SAVE = "auto_save_completed"
         private const val KEY_ORG_CHANNEL = "organize_by_channel"
         private const val KEY_ORG_TYPE = "organize_by_type"
         private const val KEY_AUTO_SAVED_IDS = "auto_saved_task_ids"
+
+        @Volatile
+        private var instance: PhoneDownloadManager? = null
+
+        fun getInstance(context: Context): PhoneDownloadManager =
+            instance ?: synchronized(this) {
+                instance ?: PhoneDownloadManager(context.applicationContext).also { instance = it }
+            }
+
+        fun formatSpeed(bytesPerSec: Long): String {
+            if (bytesPerSec <= 0L) return ""
+            return "${formatFileSize(bytesPerSec)}/s"
+        }
+
+        private fun formatTransferStatus(pct: Float, downloaded: Long, total: Long, speedBps: Long): String {
+            val speed = if (speedBps > 0L) formatSpeed(speedBps) else null
+            return if (total > 0L) {
+                listOfNotNull(
+                    "${(pct * 100f).toInt()}%",
+                    speed,
+                    "${formatFileSize(downloaded)} / ${formatFileSize(total)}"
+                ).joinToString(" · ")
+            } else {
+                listOfNotNull(speed, formatFileSize(downloaded)).joinToString(" · ")
+            }
+        }
 
         fun isDirectMediaLink(url: String): Boolean {
             val trimmed = url.trim()
@@ -996,7 +1036,7 @@ class PhoneDownloadManager(private val context: Context) {
                 v /= 1024.0
                 idx++
             }
-            return if (idx == 0) "${bytes} B" else String.format("%.1f %s", v, units[idx])
+            return if (idx == 0) "${bytes} B" else String.format(Locale.US, "%.1f %s", v, units[idx])
         }
 
         private fun parseFileNameFromDisposition(header: String?): String? {

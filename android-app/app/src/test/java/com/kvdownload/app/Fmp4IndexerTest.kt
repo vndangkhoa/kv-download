@@ -3,6 +3,8 @@ package com.kvdownload.app
 import com.kvdownload.app.storage.Fmp4Indexer
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.ByteArrayOutputStream
@@ -116,6 +118,42 @@ class Fmp4IndexerTest {
         f.writeBytes(cat(box("ftyp", ByteArray(16)), moov(), box("mdat", ByteArray(200))))
         assertFalse(Fmp4Indexer.hasFragmentsWithoutIndex(f))
         assertFalse(Fmp4Indexer.addSidxIfMissing(f))
+        dir.deleteRecursively()
+    }
+
+    @Test
+    fun buildsOrderedSegmentSidxMatchingFullFileIndexer() {
+        val dir = File(System.getProperty("java.io.tmpdir"), "kv_fmp4_ord_" + System.nanoTime()).apply { mkdirs() }
+        val ftyp = box("ftyp", ByteArray(16))
+        val mdat = box("mdat", ByteArray(100))
+        val initBytes = cat(ftyp, moov())
+        val seg0 = cat(moof(0, 0), mdat)
+        val seg1 = cat(moof(270_000, 396_900), mdat)
+        val seg2 = cat(moof(540_000, 793_800), mdat)
+
+        val initFile = File(dir, "init.mp4").apply { writeBytes(initBytes) }
+        val s0 = File(dir, "seg0.m4s").apply { writeBytes(seg0) }
+        val s1 = File(dir, "seg1.m4s").apply { writeBytes(seg1) }
+        val s2 = File(dir, "seg2.m4s").apply { writeBytes(seg2) }
+
+        val ordered = Fmp4Indexer.buildSidxFromOrderedSegments(initFile, listOf(s0, s1, s2))
+        assertNotNull(ordered)
+        val fastOut = cat(
+            initBytes.copyOfRange(0, ordered!!.moovEnd.toInt()),
+            ordered.sidxBytes,
+            seg0,
+            seg1,
+            seg2
+        )
+
+        val mergedFile = File(dir, "merged.mp4").apply { writeBytes(cat(initBytes, seg0, seg1, seg2)) }
+        assertTrue(Fmp4Indexer.addSidxIfMissing(mergedFile))
+        assertTrue(fastOut.contentEquals(mergedFile.readBytes()))
+
+        // Multi-moof segment should fall back safely by returning null.
+        val multi = File(dir, "multi.m4s").apply { writeBytes(cat(seg0, seg1)) }
+        assertNull(Fmp4Indexer.buildSidxFromOrderedSegments(initFile, listOf(multi)))
+
         dir.deleteRecursively()
     }
 

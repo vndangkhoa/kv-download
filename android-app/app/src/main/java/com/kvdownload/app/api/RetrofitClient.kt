@@ -1,6 +1,8 @@
 package com.kvdownload.app.api
 
 import android.net.Uri
+import okhttp3.ConnectionPool
+import okhttp3.Dispatcher
 import okhttp3.Dns
 import okhttp3.OkHttpClient
 import okhttp3.Protocol
@@ -117,11 +119,29 @@ object RetrofitClient {
             .build()
     }
 
+    private val downloadDispatcher: Dispatcher by lazy {
+        Dispatcher().apply {
+            maxRequests = 64
+            maxRequestsPerHost = 24
+        }
+    }
+
+    private val downloadConnectionPool: ConnectionPool by lazy {
+        ConnectionPool(24, 5, TimeUnit.MINUTES)
+    }
+
     val streamHttpClient: OkHttpClient by lazy {
         OkHttpClient.Builder()
             .dns(resilientDns)
-            .connectTimeout(30, TimeUnit.SECONDS)
-            .readTimeout(0, TimeUnit.MILLISECONDS)
+            .dispatcher(downloadDispatcher)
+            .connectionPool(downloadConnectionPool)
+            // Force HTTP/1.1 TCP connections so parallel Range chunks & HLS segment workers
+            // saturate bandwidth instead of contending on a single HTTP/2 connection window.
+            .protocols(listOf(Protocol.HTTP_1_1))
+            .connectTimeout(20, TimeUnit.SECONDS)
+            .readTimeout(45, TimeUnit.SECONDS)
+            .writeTimeout(30, TimeUnit.SECONDS)
+            .retryOnConnectionFailure(true)
             .followRedirects(true)
             .build()
     }

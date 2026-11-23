@@ -18,6 +18,8 @@ object Fmp4Indexer {
 
     data class Fragment(val offset: Long, val size: Long, val baseDecodeTime: Long)
 
+    data class OrderedSidx(val moovEnd: Long, val sidxBytes: ByteArray)
+
     private fun u32(b: ByteArray, p: Int): Long =
         ((b[p].toLong() and 0xFF) shl 24) or ((b[p + 1].toLong() and 0xFF) shl 16) or
             ((b[p + 2].toLong() and 0xFF) shl 8) or (b[p + 3].toLong() and 0xFF)
@@ -142,6 +144,76 @@ object Fmp4Indexer {
             bb.putInt(0x90000000.toInt()) // starts_with_SAP=1, SAP_type=1, delta=0
         }
         return bb.array()
+    }
+
+    /**
+     * Builds a `sidx` box directly from an fMP4 `init.mp4` and its ordered `.m4s` segment files
+     * without rewriting a merged file first. Returns `null` if any segment uses an unexpected box
+     * layout so callers can fall back to [addSidxIfMissing].
+     */
+    fun buildSidxFromOrderedSegments(initFile: File, segmentFiles: List<File>): OrderedSidx? {
+        if (segmentFiles.isEmpty() || segmentFiles.size > 65_000) return null
+        return try {
+            var moovEnd = 0L
+            var initLen = 0L
+            var trackId = 0L
+            var timescale = 0L
+            RandomAccessFile(initFile, "r").use { raf ->
+                initLen = raf.length()
+                val boxes = readTopLevel(raf, initLen)
+                if (boxes.any { it.type == "sidx" || it.type == "moof" }) return null
+                val moovBox = boxes.firstOrNull { it.type == "moov" } ?: return null
+                if (moovBox.size > 64L * 1024 * 1024) return null
+                val moov = ByteArray(moovBox.size.toInt())
+                raf.seek(moovBox.offset)
+                raf.readFully(moov)
+                val track = pickTrack(moov) ?: return null
+                trackId = track.first
+                timescale = track.second
+                moovEnd = moovBox.offset + moovBox.size
+            }
+
+            val segSizes = LongArray(segmentFiles.size)
+            val moofOffsets = LongArray(segmentFiles.size)
+            val bdts = LongArray(segmentFiles.size)
+            for (i in segmentFiles.indices) {
+                val seg = segmentFiles[i]
+                RandomAccessFile(seg, "r").use { raf ->
+                    val len = raf.length()
+                    if (len <= 8L) return null
+                    segSizes[i] = len
+                    val boxes = readTopLevel(raf, len)
+                    if (boxes.any { it.type == "sidx" || it.type == "moov" }) return null
+                    val moofs = boxes.filter { it.type == "moof" }
+                    if (moofs.size != 1) return null
+                    val m = moofs[0]
+                    if (m.size > 16L * 1024 * 1024) return null
+                    moofOffsets[i] = m.offset
+                    val moof = ByteArray(m.size.toInt())
+                    raf.seek(m.offset)
+                    raf.readFully(moof)
+                    val bdt = baseDecodeTime(moof, trackId)
+                    if (bdt < 0L) return null
+                    bdts[i] = bdt
+                }
+            }
+
+            val firstOffset = (initLen - moovEnd) + moofOffsets[0]
+            val fragments = ArrayList<Fragment>(segmentFiles.size)
+            var runningOffset = 0L
+            for (i in segmentFiles.indices) {
+                val fragSize = if (i + 1 < segmentFiles.size) {
+                    (segSizes[i] - moofOffsets[i]) + moofOffsets[i + 1]
+                } else {
+                    segSizes[i] - moofOffsets[i]
+                }
+                fragments.add(Fragment(runningOffset, fragSize, bdts[i]))
+                runningOffset += fragSize
+            }
+            OrderedSidx(moovEnd = moovEnd, sidxBytes = buildSidx(trackId, timescale, firstOffset, fragments))
+        } catch (_: Exception) {
+            null
+        }
     }
 
     /**

@@ -1,5 +1,9 @@
 package com.kvdownload.app.ui.screens
 
+import android.content.Context
+import android.content.Intent
+import android.os.PowerManager
+import android.provider.Settings
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -37,6 +41,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.kvdownload.app.api.RetrofitClient
 import com.kvdownload.app.api.StorageUpdateRequest
@@ -177,6 +182,38 @@ fun SettingsScreen(
                 style = MaterialTheme.typography.labelSmall,
                 color = palette.accentText
             )
+            val ctx = LocalContext.current
+            val pm = remember { ctx.getSystemService(Context.POWER_SERVICE) as? PowerManager }
+            val isUnrestricted = remember(pm) {
+                pm?.isIgnoringBatteryOptimizations(ctx.packageName) == true
+            }
+            Text(
+                text = "Speed & Background Engine: Foreground dataSync service + up to 3 concurrent files (6 Range connections per direct file / 12 workers per HLS stream).",
+                style = MaterialTheme.typography.labelSmall,
+                color = palette.textSecondary
+            )
+            if (!isUnrestricted) {
+                OutlinedButton(
+                    onClick = {
+                        runCatching {
+                            ctx.startActivity(
+                                Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS).apply {
+                                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                }
+                            )
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("Allow Unrestricted Battery for Long Background Downloads")
+                }
+            } else {
+                Text(
+                    text = "Battery saver exempt: Unrestricted background execution active.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = palette.success
+                )
+            }
         }
     }
 

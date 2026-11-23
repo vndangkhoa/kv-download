@@ -449,7 +449,33 @@ fun DownloadCenterScreen(
                     }
                     activeTransfers.forEach { tr ->
                         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                            Text(tr.title, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    tr.title,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontWeight = FontWeight.SemiBold,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                if (!tr.isCompleted && tr.error == null) {
+                                    IconButton(
+                                        onClick = { phoneDownloadManager.cancelTransfer(tr.key) },
+                                        modifier = Modifier.size(24.dp)
+                                    ) {
+                                        Icon(
+                                            Icons.Default.Close,
+                                            contentDescription = "Cancel transfer",
+                                            tint = palette.textSecondary,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                    }
+                                }
+                            }
                             if (tr.error != null) {
                                 Text(tr.error, style = MaterialTheme.typography.labelSmall, color = palette.error, maxLines = 2)
                             } else {

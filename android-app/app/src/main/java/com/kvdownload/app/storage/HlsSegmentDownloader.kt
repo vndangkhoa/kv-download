@@ -7,16 +7,19 @@ import android.media.MediaFormat
 import android.media.MediaMuxer
 import android.webkit.CookieManager
 import com.kvdownload.app.api.RetrofitClient
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.sync.Semaphore
-import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import okhttp3.Request
+import java.io.BufferedOutputStream
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
+import java.io.OutputStream
 import java.net.URI
 import java.net.URLDecoder
 import java.nio.ByteBuffer
@@ -54,6 +57,8 @@ object HlsSegmentDownloader {
 
     private const val DEFAULT_UA =
         "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36"
+    private const val HLS_CONCURRENT_WORKERS = 12
+    private const val COPY_BUFFER_BYTES = 256 * 1024
 
     private val STREAM_INF_RES_REGEX = Regex("""RESOLUTION=(\d+)x(\d+)""", RegexOption.IGNORE_CASE)
     private val STREAM_INF_BW_REGEX = Regex("""BANDWIDTH=(\d+)""", RegexOption.IGNORE_CASE)
@@ -201,12 +206,12 @@ object HlsSegmentDownloader {
         referer: String?,
         preferredFormat: String,
         qualityLabel: String?,
-        onProgress: (Float, Long, String) -> Unit
+        onProgress: (Float, Long, Long, String) -> Unit
     ): HlsDownloadedFile {
         val effReferer = referer?.ifBlank { null }
             ?: if (playlistUrl.contains("iw01.xyz", ignoreCase = true)) "https://av01.media/" else playlistUrl
 
-        onProgress(0.01f, 0L, "Fetching HLS manifest...")
+        onProgress(0.01f, 0L, 0L, "Fetching HLS manifest...")
         val firstManifest = fetchTextWithRetry(playlistUrl, effReferer)
         if (!firstManifest.contains("#EXTM3U")) {
             throw IllegalStateException("URL did not return valid #EXTM3U playlist")
@@ -216,7 +221,7 @@ object HlsSegmentDownloader {
         var activePlaylistText = firstManifest
         if (firstManifest.contains("#EXT-X-STREAM-INF:")) {
             activePlaylistUrl = selectVariantFromMaster(firstManifest, playlistUrl, preferredFormat)
-            onProgress(0.03f, 0L, "Loading ${qualityLabel ?: preferredFormat} playlist...")
+            onProgress(0.03f, 0L, 0L, "Loading ${qualityLabel ?: preferredFormat} playlist...")
             activePlaylistText = fetchTextWithRetry(activePlaylistUrl, effReferer)
         }
 
@@ -240,6 +245,22 @@ object HlsSegmentDownloader {
         val downloadedBytes = AtomicLong(0L)
         val doneCount = AtomicInteger(0)
         val totalParts = spec.segments.size + if (spec.initMapUrl != null) 1 else 0
+        val meter = ThroughputMeter()
+        val lastEmitMs = AtomicLong(0L)
+        var outToCleanOnFailure: File? = null
+
+        fun emitSegmentProgress(force: Boolean = false, statusOverride: String? = null) {
+            val now = System.currentTimeMillis()
+            val prev = lastEmitMs.get()
+            if (force || (now - prev >= 160L && lastEmitMs.compareAndSet(prev, now))) {
+                val c = doneCount.get()
+                val bytesNow = downloadedBytes.get()
+                val speed = meter.sample(bytesNow)
+                val pct = (c.toFloat() / totalParts.toFloat()) * 0.92f
+                val label = statusOverride ?: "$tagPrefix · $c/${spec.segments.size} segs"
+                onProgress(pct.coerceIn(0f, 0.92f), bytesNow, speed, label)
+            }
+        }
 
         try {
             if (spec.initMapUrl != null) {
@@ -247,68 +268,116 @@ object HlsSegmentDownloader {
                 val plainInit = decryptIfNeeded(rawInit, spec.initKeyUrl?.let { keyCache[it] }, spec.initIvBytes, 0L)
                 initFile = File(workDir, "init.mp4").apply { writeBytes(plainInit) }
                 downloadedBytes.addAndGet(plainInit.size.toLong())
-                val c = doneCount.incrementAndGet()
-                onProgress((c.toFloat() / totalParts).coerceIn(0f, 0.92f), downloadedBytes.get(), "$tagPrefix · init segment")
+                doneCount.incrementAndGet()
+                emitSegmentProgress(force = true, statusOverride = "$tagPrefix · init segment")
             }
 
-            val sem = Semaphore(6)
+            val nextSegIdx = AtomicInteger(0)
+            val workerCount = minOf(HLS_CONCURRENT_WORKERS, spec.segments.size)
             coroutineScope {
-                spec.segments.map { seg ->
+                val workers = (0 until workerCount).map {
                     async(Dispatchers.IO) {
-                        sem.withPermit {
-                            val rawBytes = fetchBytesWithRetry(seg.url, effReferer)
-                            val key = seg.keyUrl?.let { keyCache[it] }
-                            val plainBytes = decryptIfNeeded(rawBytes, key, seg.ivBytes, seg.mediaSequenceNumber)
+                        while (true) {
+                            kotlin.coroutines.coroutineContext.ensureActive()
+                            val idx = nextSegIdx.getAndIncrement()
+                            if (idx >= spec.segments.size) break
+                            val seg = spec.segments[idx]
                             val segFile = File(workDir, "seg_%06d.bin".format(seg.index))
-                            segFile.writeBytes(plainBytes)
+                            val key = seg.keyUrl?.let { keyCache[it] }
+                            if (key == null) {
+                                // Stream directly to disk with buffered I/O to avoid heap copies per segment.
+                                downloadSegmentDirectToFile(seg.url, effReferer, segFile) { delta ->
+                                    downloadedBytes.addAndGet(delta)
+                                    emitSegmentProgress()
+                                }
+                            } else {
+                                val rawBytes = fetchBytesWithRetry(seg.url, effReferer)
+                                val plainBytes = decryptIfNeeded(rawBytes, key, seg.ivBytes, seg.mediaSequenceNumber)
+                                segFile.writeBytes(plainBytes)
+                                downloadedBytes.addAndGet(plainBytes.size.toLong())
+                            }
                             segFiles[seg.index] = segFile
-
-                            val bytesNow = downloadedBytes.addAndGet(plainBytes.size.toLong())
-                            val c = doneCount.incrementAndGet()
-                            val pct = (c.toFloat() / totalParts.toFloat()) * 0.92f
-                            onProgress(pct.coerceIn(0f, 0.92f), bytesNow, "$tagPrefix · $c/${spec.segments.size} segs")
+                            doneCount.incrementAndGet()
+                            emitSegmentProgress()
                         }
                     }
-                }.awaitAll()
+                }
+                workers.awaitAll()
             }
 
-            onProgress(0.94f, downloadedBytes.get(), "$tagPrefix · assembling MP4...")
+            onProgress(0.94f, downloadedBytes.get(), meter.sample(downloadedBytes.get()), "$tagPrefix · assembling MP4...")
             val finalOutFile: File
             val finalExt: String
             val finalMime: String
 
             if (spec.isFmp4) {
-                val mergedFmp4 = File(workDir, "merged_fmp4.mp4")
-                FileOutputStream(mergedFmp4).use { out ->
-                    initFile?.let { copyInto(it, out) }
-                    for (sf in segFiles) {
-                        if (sf != null) copyInto(sf, out)
-                    }
-                    out.flush()
-                }
-                val remuxedMp4 = File(context.cacheDir, "kv_hls_out_${UUID.randomUUID()}.mp4")
-                if (remuxToStandardMp4(mergedFmp4, remuxedMp4) && isSeekableMp4(remuxedMp4)) {
-                    finalOutFile = remuxedMp4
+                val orderedSegs = segFiles.filterNotNull()
+                val directSidx = if (initFile != null && orderedSegs.size == spec.segments.size) {
+                    Fmp4Indexer.buildSidxFromOrderedSegments(initFile, orderedSegs)
                 } else {
-                    remuxedMp4.delete()
-                    // Keep the fragmented MP4 but add a sidx index so players can seek (no more jump to 0:00).
-                    val fallbackMp4 = File(context.cacheDir, "kv_hls_out_${UUID.randomUUID()}.mp4")
-                    mergedFmp4.copyTo(fallbackMp4, overwrite = true)
-                    Fmp4Indexer.addSidxIfMissing(fallbackMp4)
-                    finalOutFile = fallbackMp4
+                    null
+                }
+                if (directSidx != null && initFile != null) {
+                    // Fast single-pass fMP4 assembly: init [0..moovEnd] + sidx + seg_0..N (no Movie remux or re-copy).
+                    val fastMp4 = File(context.cacheDir, "kv_hls_out_${UUID.randomUUID()}.mp4")
+                    outToCleanOnFailure = fastMp4
+                    BufferedOutputStream(FileOutputStream(fastMp4), 512 * 1024).use { out ->
+                        copyRange(initFile, 0L, directSidx.moovEnd, out)
+                        out.write(directSidx.sidxBytes)
+                        if (directSidx.moovEnd < initFile.length()) {
+                            copyRange(initFile, directSidx.moovEnd, initFile.length(), out)
+                        }
+                        for (sf in orderedSegs) {
+                            copyInto(sf, out)
+                            sf.delete()
+                        }
+                        out.flush()
+                    }
+                    finalOutFile = fastMp4
+                } else {
+                    val mergedFmp4 = File(workDir, "merged_fmp4.mp4")
+                    BufferedOutputStream(FileOutputStream(mergedFmp4), 512 * 1024).use { out ->
+                        initFile?.let { copyInto(it, out) }
+                        for (sf in segFiles) {
+                            if (sf != null) {
+                                copyInto(sf, out)
+                                sf.delete()
+                            }
+                        }
+                        out.flush()
+                    }
+                    val indexedInPlace = Fmp4Indexer.addSidxIfMissing(mergedFmp4)
+                    val outMp4 = File(context.cacheDir, "kv_hls_out_${UUID.randomUUID()}.mp4")
+                    outToCleanOnFailure = outMp4
+                    if (indexedInPlace && isSeekableMp4(mergedFmp4)) {
+                        if (!mergedFmp4.renameTo(outMp4)) {
+                            mergedFmp4.copyTo(outMp4, overwrite = true)
+                        }
+                    } else if (!remuxToStandardMp4(mergedFmp4, outMp4) || !isSeekableMp4(outMp4)) {
+                        outMp4.delete()
+                        Fmp4Indexer.addSidxIfMissing(mergedFmp4)
+                        if (!mergedFmp4.renameTo(outMp4)) {
+                            mergedFmp4.copyTo(outMp4, overwrite = true)
+                        }
+                    }
+                    finalOutFile = outMp4
                 }
                 finalExt = "mp4"
                 finalMime = "video/mp4"
             } else {
                 val mergedTs = File(workDir, "merged.ts")
-                FileOutputStream(mergedTs).use { out ->
+                BufferedOutputStream(FileOutputStream(mergedTs), 512 * 1024).use { out ->
                     initFile?.let { copyInto(it, out) }
                     for (sf in segFiles) {
-                        if (sf != null) copyInto(sf, out)
+                        if (sf != null) {
+                            copyInto(sf, out)
+                            sf.delete()
+                        }
                     }
                     out.flush()
                 }
                 val remuxedMp4 = File(context.cacheDir, "kv_hls_out_${UUID.randomUUID()}.mp4")
+                outToCleanOnFailure = remuxedMp4
                 if (remuxToStandardMp4(mergedTs, remuxedMp4) && isSeekableMp4(remuxedMp4)) {
                     finalOutFile = remuxedMp4
                     finalExt = "mp4"
@@ -316,20 +385,27 @@ object HlsSegmentDownloader {
                 } else {
                     remuxedMp4.delete()
                     val preservedTs = File(context.cacheDir, "kv_hls_out_${UUID.randomUUID()}.ts")
-                    mergedTs.copyTo(preservedTs, overwrite = true)
+                    outToCleanOnFailure = preservedTs
+                    if (!mergedTs.renameTo(preservedTs)) {
+                        mergedTs.copyTo(preservedTs, overwrite = true)
+                    }
                     finalOutFile = preservedTs
                     finalExt = "ts"
                     finalMime = "video/mp2t"
                 }
             }
 
-            onProgress(0.97f, finalOutFile.length(), "Saving to private app vault...")
+            outToCleanOnFailure = null
+            onProgress(0.97f, finalOutFile.length(), 0L, "Saving to private app vault...")
             return HlsDownloadedFile(
                 file = finalOutFile,
                 extension = finalExt,
                 mimeType = finalMime,
                 totalBytes = finalOutFile.length()
             )
+        } catch (e: Exception) {
+            outToCleanOnFailure?.delete()
+            throw e
         } finally {
             workDir.deleteRecursively()
         }
@@ -506,13 +582,12 @@ object HlsSegmentDownloader {
         return cipher.doFinal(raw)
     }
 
-    private fun fetchTextWithRetry(url: String, referer: String): String {
+    private suspend fun fetchTextWithRetry(url: String, referer: String): String {
         val bytes = fetchBytesWithRetry(url, referer)
         return String(bytes, Charsets.UTF_8)
     }
 
-    private fun fetchBytesWithRetry(url: String, referer: String): ByteArray {
-        var lastErr: Exception? = null
+    private fun buildSegmentRequest(url: String, referer: String): Request {
         val cookieHeader = try {
             CookieManager.getInstance().getCookie(url)
         } catch (_: Exception) {
@@ -524,38 +599,118 @@ object HlsSegmentDownloader {
         } catch (_: Exception) {
             null
         }
+        val builder = Request.Builder()
+            .url(url)
+            .header("User-Agent", DEFAULT_UA)
+            .header("Referer", referer)
+            .header("Accept", "*/*")
+        if (!originHeader.isNullOrBlank()) builder.header("Origin", originHeader)
+        if (!cookieHeader.isNullOrBlank()) builder.header("Cookie", cookieHeader)
+        return builder.build()
+    }
 
-        for (attempt in 1..3) {
+    private suspend fun downloadSegmentDirectToFile(
+        url: String,
+        referer: String,
+        destFile: File,
+        onBytesChunk: (Long) -> Unit
+    ) {
+        var lastErr: Exception? = null
+        val partFile = File(destFile.parentFile, "${destFile.name}.part")
+        val buf = ByteArray(128 * 1024)
+        for (attempt in 1..4) {
+            kotlin.coroutines.coroutineContext.ensureActive()
+            val call = RetrofitClient.streamHttpClient.newCall(buildSegmentRequest(url, referer))
             try {
-                val builder = Request.Builder()
-                    .url(url)
-                    .header("User-Agent", DEFAULT_UA)
-                    .header("Referer", referer)
-                    .header("Accept", "*/*")
-                if (!originHeader.isNullOrBlank()) builder.header("Origin", originHeader)
-                if (!cookieHeader.isNullOrBlank()) builder.header("Cookie", cookieHeader)
-
-                RetrofitClient.streamHttpClient.newCall(builder.build()).execute().use { resp ->
+                call.execute().use { resp ->
                     if (!resp.isSuccessful) {
-                        throw IllegalStateException("HTTP ${resp.code} fetching segment/manifest")
+                        val backoff = if (resp.code == 429 || resp.code == 503) 1200L * attempt else 400L * attempt
+                        throw RetryableSegmentException("HTTP ${resp.code} fetching segment", backoff)
                     }
-                    return resp.body?.bytes() ?: throw IllegalStateException("Empty HTTP body")
+                    val stream = resp.body?.byteStream() ?: throw IllegalStateException("Empty HTTP body")
+                    FileOutputStream(partFile).use { out ->
+                        while (true) {
+                            kotlin.coroutines.coroutineContext.ensureActive()
+                            val n = stream.read(buf)
+                            if (n == -1) break
+                            out.write(buf, 0, n)
+                            onBytesChunk(n.toLong())
+                        }
+                        out.flush()
+                    }
+                    if (!partFile.renameTo(destFile)) {
+                        partFile.copyTo(destFile, overwrite = true)
+                        partFile.delete()
+                    }
+                    return
                 }
-            } catch (e: Exception) {
+            } catch (e: CancellationException) {
+                call.cancel()
+                partFile.delete()
+                throw e
+            } catch (e: RetryableSegmentException) {
+                partFile.delete()
                 lastErr = e
-                if (attempt < 3) Thread.sleep(350L * attempt)
+                if (attempt < 4) delay(e.backoffMs)
+            } catch (e: Exception) {
+                partFile.delete()
+                lastErr = e
+                if (attempt < 4) delay(400L * attempt)
             }
         }
         throw lastErr ?: IllegalStateException("Failed fetching $url")
     }
 
-    private fun copyInto(src: File, out: FileOutputStream) {
-        val buf = ByteArray(64 * 1024)
+    private class RetryableSegmentException(message: String, val backoffMs: Long) : IllegalStateException(message)
+
+    private suspend fun fetchBytesWithRetry(url: String, referer: String): ByteArray {
+        var lastErr: Exception? = null
+        for (attempt in 1..4) {
+            kotlin.coroutines.coroutineContext.ensureActive()
+            val call = RetrofitClient.streamHttpClient.newCall(buildSegmentRequest(url, referer))
+            try {
+                call.execute().use { resp ->
+                    if (!resp.isSuccessful) {
+                        val backoff = if (resp.code == 429 || resp.code == 503) 1200L * attempt else 350L * attempt
+                        throw RetryableSegmentException("HTTP ${resp.code} fetching segment/manifest", backoff)
+                    }
+                    return resp.body?.bytes() ?: throw IllegalStateException("Empty HTTP body")
+                }
+            } catch (e: CancellationException) {
+                call.cancel()
+                throw e
+            } catch (e: RetryableSegmentException) {
+                lastErr = e
+                if (attempt < 4) delay(e.backoffMs)
+            } catch (e: Exception) {
+                lastErr = e
+                if (attempt < 4) delay(350L * attempt)
+            }
+        }
+        throw lastErr ?: IllegalStateException("Failed fetching $url")
+    }
+
+    private fun copyInto(src: File, out: OutputStream) {
+        val buf = ByteArray(COPY_BUFFER_BYTES)
         FileInputStream(src).use { input ->
             while (true) {
                 val n = input.read(buf)
                 if (n <= 0) break
                 out.write(buf, 0, n)
+            }
+        }
+    }
+
+    private fun copyRange(src: File, start: Long, endExclusive: Long, out: OutputStream) {
+        val buf = ByteArray(COPY_BUFFER_BYTES)
+        FileInputStream(src).use { input ->
+            if (start > 0L) input.channel.position(start)
+            var remaining = (endExclusive - start).coerceAtLeast(0L)
+            while (remaining > 0L) {
+                val n = input.read(buf, 0, minOf(buf.size.toLong(), remaining).toInt())
+                if (n <= 0) break
+                out.write(buf, 0, n)
+                remaining -= n
             }
         }
     }

@@ -80,6 +80,7 @@ import com.kvdownload.app.api.RetrofitClient
 import com.kvdownload.app.player.AppPlayerController
 import com.kvdownload.app.player.MediaKind
 import com.kvdownload.app.player.MediaPlayRequest
+import com.kvdownload.app.storage.DownloadForegroundService
 import com.kvdownload.app.storage.PhoneDownloadManager
 import com.kvdownload.app.ui.adaptive.LocalWindowState
 import com.kvdownload.app.ui.adaptive.ProvideWindowState
@@ -125,7 +126,10 @@ class MainActivity : ComponentActivity() {
                 mutableStateOf(prefs.getString(KEY_THEME_MODE, "system") ?: "system")
             }
 
-            val phoneDownloadManager = remember { PhoneDownloadManager(context.applicationContext) }
+            val phoneDownloadManager = remember {
+                DownloadForegroundService.ensureChannels(context.applicationContext)
+                PhoneDownloadManager.getInstance(context.applicationContext)
+            }
             val incomingUrl by sharedUrlState
             val isInPipMode by isInPipModeState
 

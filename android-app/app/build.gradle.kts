@@ -12,8 +12,8 @@ android {
         applicationId = "com.kvdownload.app"
         minSdk = 26
         targetSdk = 34
-        versionCode = 10
-        versionName = "1.0.49"
+        versionCode = 11
+        versionName = "1.0.50"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {

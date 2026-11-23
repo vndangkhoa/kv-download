@@ -271,5 +271,6 @@ data class PhoneTransferState(
     val error: String? = null,
     val savedUri: String? = null,
     val relativePath: String? = null,
-    val statusText: String? = null
+    val statusText: String? = null,
+    val speedBytesPerSec: Long = 0L
 )
