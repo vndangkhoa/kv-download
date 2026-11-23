@@ -65,7 +65,23 @@ class PhoneDownloadManager(private val context: Context) {
     init {
         // Older versions saved into public Movies/Music/Pictures via MediaStore. Move every readable
         // file into the private vault (so other apps can't see it) and drop broken/unreadable ones.
-        scope.launch { runCatching { migrateLegacyPublicFiles() } }
+        scope.launch {
+            runCatching { migrateLegacyPublicFiles() }
+            runCatching { repairUnseekableVaultVideos() }
+        }
+    }
+
+    /** Saved HLS videos without a sidx index can't be seeked (jump back to 0:00): index them in place. */
+    private fun repairUnseekableVaultVideos() {
+        _savedFiles.value.forEach { item ->
+            val uri = Uri.parse(item.contentUri)
+            if (uri.scheme != "file") return@forEach
+            val path = uri.path ?: return@forEach
+            val f = File(path)
+            if (f.isFile && f.name.endsWith(".mp4", ignoreCase = true) && Fmp4Indexer.hasFragmentsWithoutIndex(f)) {
+                Fmp4Indexer.addSidxIfMissing(f)
+            }
+        }
     }
 
     private fun hasValidMediaHeader(uri: Uri, category: String, mimeType: String): Boolean {

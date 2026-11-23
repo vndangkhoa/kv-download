@@ -287,12 +287,14 @@ object HlsSegmentDownloader {
                     out.flush()
                 }
                 val remuxedMp4 = File(context.cacheDir, "kv_hls_out_${UUID.randomUUID()}.mp4")
-                if (remuxToStandardMp4(mergedFmp4, remuxedMp4)) {
+                if (remuxToStandardMp4(mergedFmp4, remuxedMp4) && isSeekableMp4(remuxedMp4)) {
                     finalOutFile = remuxedMp4
                 } else {
                     remuxedMp4.delete()
+                    // Keep the fragmented MP4 but add a sidx index so players can seek (no more jump to 0:00).
                     val fallbackMp4 = File(context.cacheDir, "kv_hls_out_${UUID.randomUUID()}.mp4")
                     mergedFmp4.copyTo(fallbackMp4, overwrite = true)
+                    Fmp4Indexer.addSidxIfMissing(fallbackMp4)
                     finalOutFile = fallbackMp4
                 }
                 finalExt = "mp4"
@@ -307,7 +309,7 @@ object HlsSegmentDownloader {
                     out.flush()
                 }
                 val remuxedMp4 = File(context.cacheDir, "kv_hls_out_${UUID.randomUUID()}.mp4")
-                if (remuxToStandardMp4(mergedTs, remuxedMp4)) {
+                if (remuxToStandardMp4(mergedTs, remuxedMp4) && isSeekableMp4(remuxedMp4)) {
                     finalOutFile = remuxedMp4
                     finalExt = "mp4"
                     finalMime = "video/mp4"
@@ -349,6 +351,35 @@ object HlsSegmentDownloader {
         }
     }
 
+    /** True when a seek to the middle of the video lands near the middle (not back at 0:00). */
+    private fun isSeekableMp4(file: File): Boolean {
+        val extractor = MediaExtractor()
+        return try {
+            extractor.setDataSource(file.absolutePath)
+            var videoIdx = -1
+            var durationUs = 0L
+            for (i in 0 until extractor.trackCount) {
+                val fmt = extractor.getTrackFormat(i)
+                val mime = fmt.getString(MediaFormat.KEY_MIME) ?: continue
+                if (mime.startsWith("video/")) {
+                    videoIdx = i
+                    if (fmt.containsKey(MediaFormat.KEY_DURATION)) durationUs = fmt.getLong(MediaFormat.KEY_DURATION)
+                    break
+                }
+            }
+            if (videoIdx < 0 || durationUs < 40_000_000L) return true // short clips / audio only: nothing to verify
+            extractor.selectTrack(videoIdx)
+            val target = durationUs / 2
+            extractor.seekTo(target, MediaExtractor.SEEK_TO_PREVIOUS_SYNC)
+            val landed = extractor.sampleTime
+            landed >= target / 2
+        } catch (_: Exception) {
+            true // verification itself failed; don't throw away a probably-good remux
+        } finally {
+            try { extractor.release() } catch (_: Exception) {}
+        }
+    }
+
     private fun remuxToStandardMp4(inputFile: File, outMp4: File): Boolean {
         val extractor = MediaExtractor()
         var muxer: MediaMuxer? = null
@@ -361,6 +392,7 @@ object HlsSegmentDownloader {
             val trackMap = mutableMapOf<Int, Int>()
             val basePtsMap = mutableMapOf<Int, Long>()
             val lastPtsMap = mutableMapOf<Int, Long>()
+            val videoTracks = mutableSetOf<Int>()
             var maxBuf = 1024 * 1024
 
             for (i in 0 until trackCount) {
@@ -369,6 +401,7 @@ object HlsSegmentDownloader {
                 if (mime.startsWith("video/") || mime.startsWith("audio/")) {
                     val dstIdx = muxer.addTrack(fmt)
                     trackMap[i] = dstIdx
+                    if (mime.startsWith("video/")) videoTracks.add(i)
                     extractor.selectTrack(i)
                     if (fmt.containsKey(MediaFormat.KEY_MAX_INPUT_SIZE)) {
                         maxBuf = maxOf(maxBuf, fmt.getInteger(MediaFormat.KEY_MAX_INPUT_SIZE))
@@ -397,8 +430,12 @@ object HlsSegmentDownloader {
                     val rawPts = extractor.sampleTime
                     val basePts = basePtsMap.getOrPut(srcIdx) { rawPts.coerceAtLeast(0L) }
                     val lastPts = lastPtsMap[srcIdx] ?: -1L
+                    // Video with B-frames arrives in decode order, so its PTS is NOT monotonic and must be kept
+                    // as-is (forcing it monotonic corrupts the timeline). Audio stays strictly increasing.
                     val cleanPts = if (rawPts < 0L) {
                         (lastPts + 1L).coerceAtLeast(0L)
+                    } else if (srcIdx in videoTracks) {
+                        (rawPts - basePts).coerceAtLeast(0L)
                     } else {
                         normalizeTrackPtsUs(rawPts, basePts, lastPts)
                     }
