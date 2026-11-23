@@ -38,7 +38,6 @@ import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.FolderZip
 import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.List
-import androidx.compose.material.icons.filled.OpenInNew
 import androidx.compose.material.icons.filled.PhoneAndroid
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.PlaylistAddCheck
@@ -392,30 +391,30 @@ fun DownloadCenterScreen(
                                         kind = MediaKind.VIDEO,
                                         isHls = true,
                                         referer = if (AV01Resolver.isAV01Url(directHlsOrAv01Url)) AV01Resolver.REFERER else null,
-                                        onSaveToPhone = {
-                                            phoneDownloadManager.saveHlsOrAV01ToPhone(
-                                                url = directHlsOrAv01Url,
-                                                formatPref = selectedFormat
-                                            )
-                                            onShowMessage("Downloading M3U8 segments to Movies/KV Download...")
-                                        }
+                                            onSaveToPhone = {
+                                                phoneDownloadManager.saveHlsOrAV01ToPhone(
+                                                    url = directHlsOrAv01Url,
+                                                    formatPref = selectedFormat
+                                                )
+                                                onShowMessage("Saving M3U8 segments to Private App Vault...")
+                                            }
+                                        )
                                     )
-                                )
-                            },
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(16.dp))
-                            Text("Preview Stream", modifier = Modifier.padding(start = 4.dp), maxLines = 1)
-                        }
+                                },
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Text("Preview Stream", modifier = Modifier.padding(start = 4.dp), maxLines = 1)
+                            }
 
-                        OutlinedButton(
-                            onClick = {
-                                phoneDownloadManager.saveHlsOrAV01ToPhone(
-                                    url = directHlsOrAv01Url,
-                                    formatPref = selectedFormat
-                                )
-                                onShowMessage("Downloading M3U8 stream to phone storage...")
-                            },
+                            OutlinedButton(
+                                onClick = {
+                                    phoneDownloadManager.saveHlsOrAV01ToPhone(
+                                        url = directHlsOrAv01Url,
+                                        formatPref = selectedFormat
+                                    )
+                                    onShowMessage("Saving M3U8 stream to Private App Vault...")
+                                },
                             modifier = Modifier.weight(1f)
                         ) {
                             Icon(Icons.Default.PhoneAndroid, contentDescription = null, modifier = Modifier.size(16.dp))
@@ -1227,19 +1226,17 @@ private fun TaskCardView(
 
                         if (savedRecord != null) {
                             OutlinedButton(
-                                onClick = { phoneDownloadManager.openOnDevice(savedRecord) },
+                                onClick = ::launchPlayback,
                                 contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
                             ) {
                                 Icon(Icons.Default.CheckCircle, contentDescription = null, modifier = Modifier.size(15.dp), tint = palette.success)
-                                Spacer(Modifier.width(4.dp))
-                                Icon(Icons.Default.OpenInNew, contentDescription = null, modifier = Modifier.size(14.dp))
-                                Text("Saved", modifier = Modifier.padding(start = 4.dp))
+                                Text("Private", modifier = Modifier.padding(start = 4.dp))
                             }
                         } else {
                             OutlinedButton(
                                 onClick = {
                                     phoneDownloadManager.saveTaskToPhone(task)
-                                    onShowMessage("Downloading \"${task.displayTitle()}\" to phone storage")
+                                    onShowMessage("Saving \"${task.displayTitle()}\" to Private App Vault")
                                 },
                                 contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
                             ) {

@@ -32,12 +32,10 @@ import androidx.compose.material.icons.filled.FolderZip
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.List
-import androidx.compose.material.icons.filled.OpenInNew
 import androidx.compose.material.icons.filled.PhoneAndroid
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.SaveAlt
 import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
@@ -229,7 +227,7 @@ fun MediaGalleryScreen(
                 id = "phone:${file.id}",
                 title = file.title,
                 subtitle = file.relativePath,
-                thumbnailUrl = if (kind == MediaKind.IMAGE || kind == MediaKind.VIDEO) file.contentUri else null,
+                thumbnailUrl = file.thumbnailUri ?: if (kind == MediaKind.IMAGE) file.contentUri else null,
                 primaryUrl = file.contentUri,
                 kind = kind,
                 isLocalUri = true
@@ -492,9 +490,9 @@ fun MediaGalleryScreen(
                                 onPlay = { playServerItem(item) },
                                 onSaveToPhone = {
                                     phoneDownloadManager.saveGalleryItemToPhone(item)
-                                    onShowMessage("Downloading \"${item.displayTitle()}\" to phone storage")
+                                    onShowMessage("Saving \"${item.displayTitle()}\" to Private App Vault")
                                 },
-                                onOpenSaved = { saved -> phoneDownloadManager.openOnDevice(saved) },
+                                onOpenSaved = { saved -> playPhoneFile(saved) },
                                 onDelete = { pendingDeleteServer = item }
                             )
                         }
@@ -508,9 +506,9 @@ fun MediaGalleryScreen(
                             onPlay = { playServerItem(item) },
                             onSaveToPhone = {
                                 phoneDownloadManager.saveGalleryItemToPhone(item)
-                                onShowMessage("Downloading \"${item.displayTitle()}\" to phone storage")
+                                onShowMessage("Saving \"${item.displayTitle()}\" to Private App Vault")
                             },
-                            onOpenSaved = { saved -> phoneDownloadManager.openOnDevice(saved) },
+                            onOpenSaved = { saved -> playPhoneFile(saved) },
                             onDelete = { pendingDeleteServer = item }
                         )
                     }
@@ -521,7 +519,7 @@ fun MediaGalleryScreen(
                 if (activePhone.isNotEmpty()) {
                     item(span = { GridItemSpan(maxLineSpan) }) {
                         AstryxCard(emphasized = true) {
-                            Text("Saving to Phone (${activePhone.size})", style = MaterialTheme.typography.titleSmall, color = palette.textPrimary)
+                            Text("Saving to Private Vault (${activePhone.size})", style = MaterialTheme.typography.titleSmall, color = palette.textPrimary)
                             activePhone.forEach { tr ->
                                 Text(tr.title, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
                                 LinearProgressIndicator(progress = { tr.progress }, modifier = Modifier.fillMaxWidth(), color = palette.success)
@@ -534,8 +532,8 @@ fun MediaGalleryScreen(
                 if (filteredPhoneFiles.isEmpty()) {
                     item(span = { GridItemSpan(maxLineSpan) }) {
                         EmptyGalleryCard(
-                            "No files saved on this phone yet",
-                            "Tap 'To Phone' or 'Save M3U8' on any item to save directly into Movies / Music / Pictures / Downloads."
+                            "No private files on this phone yet",
+                            "Tap 'To Phone' or pick Phone (Private Vault) in the Browser — files are stored strictly inside KV Download and hidden from Gallery and other apps."
                         )
                     }
                 } else if (groupByFolder) {
@@ -549,8 +547,6 @@ fun MediaGalleryScreen(
                             PhoneSavedItemCard(
                                 file = file,
                                 onPlay = { playPhoneFile(file) },
-                                onOpen = { phoneDownloadManager.openOnDevice(file) },
-                                onShare = { phoneDownloadManager.shareFile(file) },
                                 onDelete = { pendingDeletePhone = file }
                             )
                         }
@@ -560,8 +556,6 @@ fun MediaGalleryScreen(
                         PhoneSavedItemCard(
                             file = file,
                             onPlay = { playPhoneFile(file) },
-                            onOpen = { phoneDownloadManager.openOnDevice(file) },
-                            onShare = { phoneDownloadManager.shareFile(file) },
                             onDelete = { pendingDeletePhone = file }
                         )
                     }
@@ -795,8 +789,6 @@ private fun ServerGalleryItemCard(
 private fun PhoneSavedItemCard(
     file: SavedPhoneFile,
     onPlay: () -> Unit,
-    onOpen: () -> Unit,
-    onShare: () -> Unit,
     onDelete: () -> Unit
 ) {
     val palette = LocalAstryxPalette.current
@@ -806,9 +798,9 @@ private fun PhoneSavedItemCard(
     AstryxCard(contentPadding = PaddingValues(10.dp)) {
         if (isPlayable) {
             AstryxMediaThumbnail(
-                imageUrl = if (isPhoto || file.category == "video") file.contentUri else null,
+                imageUrl = file.thumbnailUri ?: if (isPhoto) file.contentUri else null,
                 mediaType = file.category,
-                badgeText = file.channel ?: "ON PHONE",
+                badgeText = file.channel ?: "PRIVATE",
                 durationText = PhoneDownloadManager.formatFileSize(file.sizeBytes),
                 showPlayOverlay = true,
                 onClick = onPlay
@@ -822,13 +814,20 @@ private fun PhoneSavedItemCard(
             maxLines = 2,
             overflow = TextOverflow.Ellipsis
         )
-        Text(
-            text = "${file.relativePath} · ${PhoneDownloadManager.formatFileSize(file.sizeBytes)}",
-            style = MaterialTheme.typography.labelSmall,
-            color = palette.textSecondary,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis
-        )
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            AstryxStatusBadge("PRIVATE", AstryxTone.Accent)
+            Text(
+                text = "${file.relativePath} · ${PhoneDownloadManager.formatFileSize(file.sizeBytes)}",
+                style = MaterialTheme.typography.labelSmall,
+                color = palette.textSecondary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f)
+            )
+        }
 
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -846,18 +845,10 @@ private fun PhoneSavedItemCard(
                             contentDescription = null,
                             modifier = Modifier.size(16.dp)
                         )
-                        Text(if (isPhoto) "View" else "Play", modifier = Modifier.padding(start = 4.dp))
+                        Text(if (isPhoto) "View" else "Play In-App", modifier = Modifier.padding(start = 4.dp))
                     }
-                }
-                OutlinedButton(
-                    onClick = onOpen,
-                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
-                ) {
-                    Icon(Icons.Default.OpenInNew, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Text("Open", modifier = Modifier.padding(start = 4.dp))
-                }
-                IconButton(onClick = onShare) {
-                    Icon(Icons.Default.Share, contentDescription = "Share")
+                } else {
+                    AstryxStatusBadge("APP VAULT ONLY", AstryxTone.Neutral)
                 }
             }
             IconButton(onClick = onDelete) {

@@ -1,13 +1,9 @@
 package com.kvdownload.app.storage
 
-import android.content.ContentValues
 import android.content.Context
-import android.content.Intent
-import android.media.MediaScannerConnection
+import android.graphics.Bitmap
+import android.media.MediaMetadataRetriever
 import android.net.Uri
-import android.os.Build
-import android.os.Environment
-import android.provider.MediaStore
 import android.webkit.CookieManager
 import android.webkit.MimeTypeMap
 import com.google.gson.Gson
@@ -18,6 +14,7 @@ import com.kvdownload.app.api.GalleryItem
 import com.kvdownload.app.api.PhoneTransferState
 import com.kvdownload.app.api.RetrofitClient
 import com.kvdownload.app.api.SavedPhoneFile
+import com.kvdownload.app.api.SniffedMedia
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -30,6 +27,7 @@ import okhttp3.Request
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
+import java.io.InputStream
 import java.net.URI
 import java.net.URLDecoder
 import java.util.UUID
@@ -39,6 +37,13 @@ class PhoneDownloadManager(private val context: Context) {
     private val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
     private val gson = Gson()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val vaultRoot: File by lazy {
+        File(context.filesDir, "private_vault").apply {
+            if (!exists()) mkdirs()
+            val nomedia = File(this, ".nomedia")
+            if (!nomedia.exists()) runCatching { nomedia.createNewFile() }
+        }
+    }
 
     private val _transfers = MutableStateFlow<Map<String, PhoneTransferState>>(emptyMap())
     val transfers: StateFlow<Map<String, PhoneTransferState>> = _transfers.asStateFlow()
@@ -149,7 +154,8 @@ class PhoneDownloadManager(private val context: Context) {
         type: String,
         channel: String? = null,
         referer: String? = null,
-        formatPref: String = "highest"
+        formatPref: String = "highest",
+        group: String? = null
     ) {
         if (AV01Resolver.isAV01Url(mediaUrl) || HlsSegmentDownloader.looksLikeHlsUrl(mediaUrl)) {
             saveHlsOrAV01ToPhone(
@@ -169,19 +175,48 @@ class PhoneDownloadManager(private val context: Context) {
         }
         val cleanTitle = sanitizeFileComponent(title, "kv_browser_${System.currentTimeMillis()}")
         val fileName = ensureExtension(cleanTitle, ext)
+        val routedSource = if (isDirectMediaLink(mediaUrl)) {
+            mediaUrl
+        } else {
+            RetrofitClient.browserStreamUrl(mediaUrl, referer)
+        }
+        val routedFallback = if (routedSource == mediaUrl) {
+            RetrofitClient.browserStreamUrl(mediaUrl, referer)
+        } else {
+            null
+        }
         enqueueDownload(
             transferKey = "direct:${mediaUrl.hashCode()}",
-            sourceUrl = mediaUrl,
-            fallbackSourceUrl = RetrofitClient.browserStreamUrl(mediaUrl, referer),
+            sourceUrl = routedSource,
+            fallbackSourceUrl = routedFallback,
             referer = referer,
             preferredFileName = fileName,
             title = title.ifBlank { fileName },
             channel = channel ?: "Browser Sniffer",
-            group = "Browser Captures",
+            group = group ?: "Browser Captures",
             category = type,
             serverTaskId = null,
             serverPath = null
         )
+    }
+
+    fun saveBatchToPhone(
+        items: List<SniffedMedia>,
+        formatPref: String = "highest",
+        defaultReferer: String? = null,
+        groupName: String? = null
+    ) {
+        items.forEach { item ->
+            saveDirectMediaToPhone(
+                mediaUrl = item.url,
+                title = item.title,
+                type = item.type,
+                channel = item.channel ?: groupName,
+                referer = item.referer ?: defaultReferer,
+                formatPref = item.resolution ?: formatPref,
+                group = groupName ?: "Browser Batch"
+            )
+        }
     }
 
     fun saveHlsOrAV01ToPhone(
@@ -256,11 +291,11 @@ class PhoneDownloadManager(private val context: Context) {
                 val finalFileName = ensureExtension(baseName.substringBeforeLast('.', baseName), downloaded.extension)
                 val finalChannel = resolvedChannel ?: "HLS Streams"
                 val subfolder = buildRelativeSubfolder(finalChannel, "M3U8 Captures")
+                val recordId = UUID.randomUUID().toString()
 
-                val (savedUri, displayRelPath, writtenBytes) = FileInputStream(downloaded.file).use { input ->
-                    writeBytesToPublicStorage(
+                val vaultResult = FileInputStream(downloaded.file).use { input ->
+                    writeBytesToPrivateVault(
                         fileName = finalFileName,
-                        mimeType = downloaded.mimeType,
                         category = "video",
                         subfolder = subfolder,
                         totalBytes = downloaded.totalBytes,
@@ -274,14 +309,15 @@ class PhoneDownloadManager(private val context: Context) {
                                 progress = frac.coerceIn(0f, 1f),
                                 bytesDownloaded = copied,
                                 totalBytes = total,
-                                statusText = "Saving to $subfolder..."
+                                statusText = "Saving to Private Vault..."
                             )
                         )
                     }
                 }
+                val thumbUri = extractPrivateVideoThumbnail(vaultResult.file, recordId)
 
                 val record = SavedPhoneFile(
-                    id = UUID.randomUUID().toString(),
+                    id = recordId,
                     serverTaskId = null,
                     serverPath = null,
                     fileName = finalFileName,
@@ -290,10 +326,11 @@ class PhoneDownloadManager(private val context: Context) {
                     group = "M3U8 Captures",
                     category = "video",
                     mimeType = downloaded.mimeType,
-                    sizeBytes = writtenBytes,
+                    sizeBytes = vaultResult.bytesWritten,
                     savedAt = System.currentTimeMillis(),
-                    contentUri = savedUri.toString(),
-                    relativePath = displayRelPath
+                    contentUri = vaultResult.uri.toString(),
+                    relativePath = vaultResult.displayPath,
+                    thumbnailUri = thumbUri
                 )
                 addSavedRecord(record)
 
@@ -302,12 +339,12 @@ class PhoneDownloadManager(private val context: Context) {
                         key = transferKey,
                         title = displayTitle,
                         progress = 1f,
-                        bytesDownloaded = writtenBytes,
-                        totalBytes = writtenBytes,
+                        bytesDownloaded = vaultResult.bytesWritten,
+                        totalBytes = vaultResult.bytesWritten,
                         isCompleted = true,
-                        savedUri = savedUri.toString(),
-                        relativePath = displayRelPath,
-                        statusText = "Saved to phone"
+                        savedUri = vaultResult.uri.toString(),
+                        relativePath = vaultResult.displayPath,
+                        statusText = "Saved privately in app"
                     )
                 )
             } catch (e: Exception) {
@@ -404,12 +441,26 @@ class PhoneDownloadManager(private val context: Context) {
                     response = RetrofitClient.streamHttpClient.newCall(buildReq(activeUrl)).execute()
                 }
 
+                var initialCt = response.header("Content-Type")?.lowercase().orEmpty()
+                if ((initialCt.contains("text/html") || initialCt.contains("application/xhtml")) &&
+                    !fallbackSourceUrl.isNullOrBlank() &&
+                    fallbackSourceUrl != activeUrl
+                ) {
+                    response.close()
+                    activeUrl = fallbackSourceUrl
+                    response = RetrofitClient.streamHttpClient.newCall(buildReq(activeUrl)).execute()
+                    initialCt = response.header("Content-Type")?.lowercase().orEmpty()
+                }
+
                 response.use { resp ->
                     if (!resp.isSuccessful) {
                         throw IllegalStateException("HTTP ${resp.code}: ${resp.message}")
                     }
 
-                    val rawCt = resp.header("Content-Type")?.lowercase().orEmpty()
+                    val rawCt = initialCt.ifBlank { resp.header("Content-Type")?.lowercase().orEmpty() }
+                    if (rawCt.contains("text/html") || rawCt.contains("application/xhtml")) {
+                        throw IllegalStateException("Target returned webpage instead of playable media")
+                    }
                     if (rawCt.contains("mpegurl") || HlsSegmentDownloader.looksLikeHlsUrl(activeUrl)) {
                         resp.close()
                         val hlsOut = HlsSegmentDownloader.downloadHlsToTempFile(
@@ -436,19 +487,20 @@ class PhoneDownloadManager(private val context: Context) {
                                 hlsOut.extension
                             )
                             val subfolder = buildRelativeSubfolder(channel, group)
-                            val (savedUri, displayRelPath, writtenBytes) = FileInputStream(hlsOut.file).use { input ->
-                                writeBytesToPublicStorage(
+                            val recordId = UUID.randomUUID().toString()
+                            val vaultResult = FileInputStream(hlsOut.file).use { input ->
+                                writeBytesToPrivateVault(
                                     fileName = finalFileName,
-                                    mimeType = hlsOut.mimeType,
                                     category = "video",
                                     subfolder = subfolder,
                                     totalBytes = hlsOut.totalBytes,
                                     inputStream = input
                                 ) { _, _ -> }
                             }
+                            val thumbUri = extractPrivateVideoThumbnail(vaultResult.file, recordId)
                             addSavedRecord(
                                 SavedPhoneFile(
-                                    id = UUID.randomUUID().toString(),
+                                    id = recordId,
                                     serverTaskId = serverTaskId,
                                     serverPath = serverPath,
                                     fileName = finalFileName,
@@ -457,10 +509,11 @@ class PhoneDownloadManager(private val context: Context) {
                                     group = group,
                                     category = "video",
                                     mimeType = hlsOut.mimeType,
-                                    sizeBytes = writtenBytes,
+                                    sizeBytes = vaultResult.bytesWritten,
                                     savedAt = System.currentTimeMillis(),
-                                    contentUri = savedUri.toString(),
-                                    relativePath = displayRelPath
+                                    contentUri = vaultResult.uri.toString(),
+                                    relativePath = vaultResult.displayPath,
+                                    thumbnailUri = thumbUri
                                 )
                             )
                             updateTransfer(
@@ -468,12 +521,12 @@ class PhoneDownloadManager(private val context: Context) {
                                     key = transferKey,
                                     title = title,
                                     progress = 1f,
-                                    bytesDownloaded = writtenBytes,
-                                    totalBytes = writtenBytes,
+                                    bytesDownloaded = vaultResult.bytesWritten,
+                                    totalBytes = vaultResult.bytesWritten,
                                     isCompleted = true,
-                                    savedUri = savedUri.toString(),
-                                    relativePath = displayRelPath,
-                                    statusText = "Saved to phone"
+                                    savedUri = vaultResult.uri.toString(),
+                                    relativePath = vaultResult.displayPath,
+                                    statusText = "Saved privately in app"
                                 )
                             )
                         } finally {
@@ -499,10 +552,10 @@ class PhoneDownloadManager(private val context: Context) {
 
                     val resolvedCategory = resolveCategoryFromMime(mimeType, category)
                     val subfolder = buildRelativeSubfolder(channel, group)
+                    val recordId = UUID.randomUUID().toString()
 
-                    val (savedUri, displayRelPath, writtenBytes) = writeBytesToPublicStorage(
+                    val vaultResult = writeBytesToPrivateVault(
                         fileName = finalFileName,
-                        mimeType = mimeType,
                         category = resolvedCategory,
                         subfolder = subfolder,
                         totalBytes = totalBytes,
@@ -520,9 +573,12 @@ class PhoneDownloadManager(private val context: Context) {
                             )
                         )
                     }
+                    val thumbUri = if (resolvedCategory == "video") {
+                        extractPrivateVideoThumbnail(vaultResult.file, recordId)
+                    } else null
 
                     val record = SavedPhoneFile(
-                        id = UUID.randomUUID().toString(),
+                        id = recordId,
                         serverTaskId = serverTaskId,
                         serverPath = serverPath,
                         fileName = finalFileName,
@@ -531,10 +587,11 @@ class PhoneDownloadManager(private val context: Context) {
                         group = group,
                         category = resolvedCategory,
                         mimeType = mimeType,
-                        sizeBytes = writtenBytes,
+                        sizeBytes = vaultResult.bytesWritten,
                         savedAt = System.currentTimeMillis(),
-                        contentUri = savedUri.toString(),
-                        relativePath = displayRelPath
+                        contentUri = vaultResult.uri.toString(),
+                        relativePath = vaultResult.displayPath,
+                        thumbnailUri = thumbUri
                     )
                     addSavedRecord(record)
 
@@ -543,12 +600,12 @@ class PhoneDownloadManager(private val context: Context) {
                             key = transferKey,
                             title = title,
                             progress = 1f,
-                            bytesDownloaded = writtenBytes,
-                            totalBytes = writtenBytes,
+                            bytesDownloaded = vaultResult.bytesWritten,
+                            totalBytes = vaultResult.bytesWritten,
                             isCompleted = true,
-                            savedUri = savedUri.toString(),
-                            relativePath = displayRelPath,
-                            statusText = "Saved to phone"
+                            savedUri = vaultResult.uri.toString(),
+                            relativePath = vaultResult.displayPath,
+                            statusText = "Saved privately in app"
                         )
                     )
                 }
@@ -564,93 +621,42 @@ class PhoneDownloadManager(private val context: Context) {
         }
     }
 
-    private fun writeBytesToPublicStorage(
+    private data class PrivateVaultWriteResult(
+        val file: File,
+        val uri: Uri,
+        val displayPath: String,
+        val bytesWritten: Long
+    )
+
+    private fun writeBytesToPrivateVault(
         fileName: String,
-        mimeType: String,
         category: String,
         subfolder: String,
         totalBytes: Long,
-        inputStream: java.io.InputStream,
+        inputStream: InputStream,
         onProgress: (Long, Long) -> Unit
-    ): Triple<Uri, String, Long> {
+    ): PrivateVaultWriteResult {
         val baseDirName = when {
-            category == "archive" || mimeType == "application/zip" -> Environment.DIRECTORY_DOWNLOADS
-            !_organizeByMediaType.value -> Environment.DIRECTORY_DOWNLOADS
-            category == "audio" -> Environment.DIRECTORY_MUSIC
-            category == "image" || category == "photo" -> Environment.DIRECTORY_PICTURES
-            category == "video" -> Environment.DIRECTORY_MOVIES
-            else -> Environment.DIRECTORY_DOWNLOADS
+            category == "archive" -> "Archives"
+            !_organizeByMediaType.value -> "Files"
+            category == "audio" -> "Audio"
+            category == "image" || category == "photo" -> "Photos"
+            category == "video" -> "Videos"
+            else -> "Files"
         }
 
-        val relativeFolder = if (subfolder.isNotBlank()) {
-            "$baseDirName/KV Download/$subfolder"
-        } else {
-            "$baseDirName/KV Download"
+        val root = vaultRoot
+        val typeDir = File(root, baseDirName)
+        val targetDir = if (subfolder.isNotBlank()) File(typeDir, subfolder) else typeDir
+        if (!targetDir.exists()) {
+            targetDir.mkdirs()
         }
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            val resolver = context.contentResolver
-            val collectionUri = when (baseDirName) {
-                Environment.DIRECTORY_MOVIES -> MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
-                Environment.DIRECTORY_MUSIC -> MediaStore.Audio.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
-                Environment.DIRECTORY_PICTURES -> MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
-                else -> MediaStore.Downloads.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
-            }
-
-            val values = ContentValues().apply {
-                put(MediaStore.MediaColumns.DISPLAY_NAME, fileName)
-                put(MediaStore.MediaColumns.MIME_TYPE, mimeType)
-                put(MediaStore.MediaColumns.RELATIVE_PATH, relativeFolder)
-                put(MediaStore.MediaColumns.IS_PENDING, 1)
-            }
-
-            val itemUri = resolver.insert(collectionUri, values)
-                ?: throw IllegalStateException("Could not create MediaStore entry in $relativeFolder")
-
-            var written = 0L
-            try {
-                resolver.openOutputStream(itemUri)?.use { out ->
-                    val buffer = ByteArray(64 * 1024)
-                    var read: Int
-                    var lastEmit = 0L
-                    while (inputStream.read(buffer).also { read = it } != -1) {
-                        out.write(buffer, 0, read)
-                        written += read
-                        val now = System.currentTimeMillis()
-                        if (now - lastEmit > 150) {
-                            onProgress(written, totalBytes)
-                            lastEmit = now
-                        }
-                    }
-                    out.flush()
-                } ?: throw IllegalStateException("Unable to open MediaStore output stream")
-
-                val publishValues = ContentValues().apply {
-                    put(MediaStore.MediaColumns.IS_PENDING, 0)
-                }
-                resolver.update(itemUri, publishValues, null, null)
-                return Triple(itemUri, "$relativeFolder/$fileName", written)
-            } catch (e: Exception) {
-                try {
-                    resolver.delete(itemUri, null, null)
-                } catch (_: Exception) {}
-                throw e
-            }
-        } else {
-            @Suppress("DEPRECATION")
-            val root = Environment.getExternalStoragePublicDirectory(baseDirName)
-            val targetDir = if (subfolder.isNotBlank()) {
-                File(File(root, "KV Download"), subfolder)
-            } else {
-                File(root, "KV Download")
-            }
-            if (!targetDir.exists()) {
-                targetDir.mkdirs()
-            }
-
-            val destFile = uniqueTargetFile(targetDir, fileName)
-            var written = 0L
-            FileOutputStream(destFile).use { out ->
+        val destFile = uniqueTargetFile(targetDir, fileName)
+        val partFile = File(targetDir, "${destFile.name}.${UUID.randomUUID()}.part")
+        var written = 0L
+        try {
+            FileOutputStream(partFile).use { out ->
                 val buffer = ByteArray(64 * 1024)
                 var read: Int
                 var lastEmit = 0L
@@ -665,14 +671,61 @@ class PhoneDownloadManager(private val context: Context) {
                 }
                 out.flush()
             }
+            if (written <= 0L) {
+                partFile.delete()
+                throw IllegalStateException("Downloaded file is empty")
+            }
+            if (!partFile.renameTo(destFile)) {
+                partFile.copyTo(destFile, overwrite = true)
+                partFile.delete()
+            }
+        } catch (e: Exception) {
+            partFile.delete()
+            if (destFile.exists() && destFile.length() == 0L) destFile.delete()
+            throw e
+        }
 
-            MediaScannerConnection.scanFile(
-                context,
-                arrayOf(destFile.absolutePath),
-                arrayOf(mimeType),
-                null
-            )
-            return Triple(Uri.fromFile(destFile), "$relativeFolder/${destFile.name}", written)
+        val displayRel = if (subfolder.isNotBlank()) {
+            "Private Vault/$baseDirName/$subfolder/${destFile.name}"
+        } else {
+            "Private Vault/$baseDirName/${destFile.name}"
+        }
+        return PrivateVaultWriteResult(destFile, Uri.fromFile(destFile), displayRel, written)
+    }
+
+    private fun extractPrivateVideoThumbnail(videoFile: File, recordId: String): String? {
+        val retriever = MediaMetadataRetriever()
+        return try {
+            retriever.setDataSource(videoFile.absolutePath)
+            val rawBmp = retriever.getFrameAtTime(1_000_000L, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+                ?: retriever.frameAtTime
+                ?: return null
+            val maxDim = 480
+            val w = rawBmp.width
+            val h = rawBmp.height
+            val scaled = if (w > maxDim && h > 0) {
+                val targetH = ((h.toFloat() / w.toFloat()) * maxDim).toInt().coerceAtLeast(1)
+                Bitmap.createScaledBitmap(rawBmp, maxDim, targetH, true).also {
+                    if (it !== rawBmp) rawBmp.recycle()
+                }
+            } else {
+                rawBmp
+            }
+            val thumbDir = File(vaultRoot, ".thumbs")
+            if (!thumbDir.exists()) thumbDir.mkdirs()
+            val thumbFile = File(thumbDir, "$recordId.jpg")
+            FileOutputStream(thumbFile).use { out ->
+                scaled.compress(Bitmap.CompressFormat.JPEG, 82, out)
+                out.flush()
+            }
+            scaled.recycle()
+            Uri.fromFile(thumbFile).toString()
+        } catch (_: Exception) {
+            null
+        } finally {
+            try {
+                retriever.release()
+            } catch (_: Exception) {}
         }
     }
 
@@ -688,35 +741,18 @@ class PhoneDownloadManager(private val context: Context) {
             } catch (_: Exception) {
                 // Remove catalog entry even if user already deleted it externally.
             }
+            record.thumbnailUri?.let { thumb ->
+                runCatching {
+                    val tUri = Uri.parse(thumb)
+                    if (tUri.scheme == "file") tUri.path?.let { File(it).delete() }
+                }
+            }
             _savedFiles.update { list ->
                 val updated = list.filterNot { it.id == record.id }
                 persistCatalog(updated)
                 updated
             }
         }
-    }
-
-    fun openOnDevice(record: SavedPhoneFile) {
-        try {
-            val uri = Uri.parse(record.contentUri)
-            val intent = Intent(Intent.ACTION_VIEW).apply {
-                setDataAndType(uri, record.mimeType)
-                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
-            }
-            context.startActivity(Intent.createChooser(intent, "Open ${record.title}").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-        } catch (_: Exception) {}
-    }
-
-    fun shareFile(record: SavedPhoneFile) {
-        try {
-            val uri = Uri.parse(record.contentUri)
-            val intent = Intent(Intent.ACTION_SEND).apply {
-                type = record.mimeType
-                putExtra(Intent.EXTRA_STREAM, uri)
-                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
-            }
-            context.startActivity(Intent.createChooser(intent, "Share ${record.title}").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-        } catch (_: Exception) {}
     }
 
     fun clearCompletedTransferBadges() {
@@ -756,7 +792,15 @@ class PhoneDownloadManager(private val context: Context) {
         val raw = prefs.getString(KEY_SAVED_CATALOG, null) ?: return emptyList()
         return try {
             val type = object : TypeToken<List<SavedPhoneFile>>() {}.type
-            gson.fromJson<List<SavedPhoneFile>>(raw, type) ?: emptyList()
+            val parsed = gson.fromJson<List<SavedPhoneFile>>(raw, type) ?: emptyList()
+            parsed.filter { item ->
+                val uri = Uri.parse(item.contentUri)
+                if (uri.scheme == "file") {
+                    uri.path?.let { File(it).exists() && File(it).length() > 0L } == true
+                } else {
+                    true
+                }
+            }
         } catch (_: Exception) {
             emptyList()
         }
@@ -787,6 +831,27 @@ class PhoneDownloadManager(private val context: Context) {
         private const val KEY_ORG_CHANNEL = "organize_by_channel"
         private const val KEY_ORG_TYPE = "organize_by_type"
         private const val KEY_AUTO_SAVED_IDS = "auto_saved_task_ids"
+
+        fun isDirectMediaLink(url: String): Boolean {
+            val trimmed = url.trim()
+            if (trimmed.isBlank()) return false
+            val lower = trimmed.lowercase()
+            if (lower.contains("/download?id=") || lower.contains("/download?file=") ||
+                lower.contains("/download/zip") || lower.contains("/api/browser/stream")
+            ) {
+                return true
+            }
+            val cleanPath = lower.substringBefore('?').substringBefore('#')
+            val mediaExts = listOf(
+                ".mp4", ".m4v", ".webm", ".mkv", ".mov", ".avi", ".flv",
+                ".m3u8", ".mpd", ".mp3", ".m4a", ".aac", ".flac", ".ogg", ".wav",
+                ".jpg", ".jpeg", ".png", ".webp", ".gif", ".zip"
+            )
+            if (mediaExts.any { cleanPath.endsWith(it) }) return true
+            if (lower.contains("tiktokcdn") && lower.contains("mime_type=video")) return true
+            if (lower.contains("googlevideo.com/videoplayback")) return true
+            return false
+        }
 
         fun formatFileSize(bytes: Long): String {
             if (bytes <= 0L) return "0 B"

@@ -153,31 +153,27 @@ fun SettingsScreen(
 
     @Composable
     fun PhoneStorageCard() {
-        SettingsCard("Phone Storage & Organization") {
+        SettingsCard("Private Phone Vault (App-Only)") {
             SettingSwitchRow(
                 title = "Auto-Save Completed Downloads",
-                subtitle = "Automatically export completed server tasks into public phone storage",
+                subtitle = "Automatically save completed server tasks privately inside KV Download",
                 checked = autoSave,
                 onCheckedChange = { phoneDownloadManager.setAutoSaveEnabled(it) }
             )
             SettingSwitchRow(
                 title = "Group Folders by Channel / Album",
-                subtitle = "Creates Movies/KV Download/<Channel> & Download/KV Download/<Group>",
+                subtitle = "Organizes Private Vault/<Category>/<Channel> inside app storage",
                 checked = organizeByChannel,
                 onCheckedChange = { phoneDownloadManager.setOrganizeByChannel(it) }
             )
             SettingSwitchRow(
                 title = "Separate by Media Type",
-                subtitle = "Routes videos to Movies/, audio to Music/, photos to Pictures/",
+                subtitle = "Organizes Videos, Audio, Photos & Archives inside app-private storage",
                 checked = organizeByType,
                 onCheckedChange = { phoneDownloadManager.setOrganizeByMediaType(it) }
             )
             Text(
-                text = if (organizeByType) {
-                    "Active folders: Movies/KV Download/, Music/KV Download/, Pictures/KV Download/, Download/KV Download/"
-                } else {
-                    "Active folder: Download/KV Download/"
-                },
+                text = "App-only isolation active: downloaded phone files stay strictly inside KV Download's private vault and never appear in Gallery or other apps.",
                 style = MaterialTheme.typography.labelSmall,
                 color = palette.accentText
             )

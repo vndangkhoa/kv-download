@@ -13,11 +13,14 @@ import androidx.media3.common.Player
 import androidx.media3.common.VideoSize
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultDataSource
+import androidx.media3.datasource.FileDataSource
 import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.exoplayer.DefaultLoadControl
+import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.source.MediaSource
+import androidx.media3.extractor.DefaultExtractorsFactory
 import androidx.media3.ui.AspectRatioFrameLayout
 import com.kvdownload.app.api.AV01Resolver
 import com.kvdownload.app.api.RetrofitClient
@@ -33,6 +36,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import java.io.File
 import java.net.URI
 import java.util.UUID
 
@@ -64,10 +68,13 @@ class AppPlayerController(context: Context) {
     private val appContext = context.applicationContext
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
-    val exoPlayer: ExoPlayer = ExoPlayer.Builder(appContext)
+    val exoPlayer: ExoPlayer = ExoPlayer.Builder(
+        appContext,
+        DefaultRenderersFactory(appContext).setEnableDecoderFallback(true)
+    )
         .setLoadControl(
             DefaultLoadControl.Builder()
-                .setBufferDurationsMs(15_000, 60_000, 1_500, 3_500)
+                .setBufferDurationsMs(10_000, 35_000, 500, 1_500)
                 .build()
         )
         .build()
@@ -135,17 +142,32 @@ class AppPlayerController(context: Context) {
 
     private var activeStreamUrl: String = ""
     private var triedFallback: Boolean = false
+    private var retriedStallOnce: Boolean = false
+    private var bufferingStallMs: Long = 0L
+    private var lastTickerPosMs: Long = -1L
     private var resolveJob: Job? = null
     private var tickerJob: Job? = null
 
     private val playerListener = object : Player.Listener {
         override fun onIsPlayingChanged(isPlaying: Boolean) {
             _isPlaying.value = isPlaying
+            if (isPlaying) {
+                _isBuffering.value = false
+                bufferingStallMs = 0L
+            }
+        }
+
+        override fun onRenderedFirstFrame() {
+            val state = exoPlayer.playbackState
+            _isBuffering.value = state == Player.STATE_BUFFERING && !exoPlayer.isPlaying
         }
 
         override fun onPlaybackStateChanged(playbackState: Int) {
-            _isBuffering.value = playbackState == Player.STATE_BUFFERING
+            _isBuffering.value = playbackState == Player.STATE_BUFFERING && !exoPlayer.isPlaying
             _isEnded.value = playbackState == Player.STATE_ENDED
+            if (playbackState == Player.STATE_READY || playbackState == Player.STATE_ENDED) {
+                bufferingStallMs = 0L
+            }
             val dur = exoPlayer.duration
             if (dur != C.TIME_UNSET && dur > 0L) {
                 _durationMs.value = dur
@@ -160,6 +182,7 @@ class AppPlayerController(context: Context) {
         }
 
         override fun onPlayerError(error: PlaybackException) {
+            bufferingStallMs = 0L
             val req = _currentRequest.value
             val fallback = req?.fallbackUrl?.takeIf { it.isNotBlank() && it != activeStreamUrl }
             if (req != null && !triedFallback && fallback != null) {
@@ -190,11 +213,51 @@ class AppPlayerController(context: Context) {
         tickerJob?.cancel()
         tickerJob = scope.launch {
             while (isActive) {
-                if (_currentRequest.value != null) {
-                    _currentPositionMs.value = exoPlayer.currentPosition.coerceAtLeast(0L)
+                val req = _currentRequest.value
+                if (req != null) {
+                    val posNow = exoPlayer.currentPosition.coerceAtLeast(0L)
+                    _currentPositionMs.value = posNow
                     val d = exoPlayer.duration
                     _durationMs.value = if (d != C.TIME_UNSET && d > 0L) d else 0L
                     _bufferedPercent.value = exoPlayer.bufferedPercentage.coerceIn(0, 100)
+
+                    val state = exoPlayer.playbackState
+                    val playingNow = exoPlayer.isPlaying
+                    _isPlaying.value = playingNow
+                    _isBuffering.value = state == Player.STATE_BUFFERING && !playingNow
+
+                    if (state == Player.STATE_BUFFERING && exoPlayer.playWhenReady && !playingNow && _errorMessage.value == null) {
+                        if (posNow == lastTickerPosMs) {
+                            bufferingStallMs += 250L
+                        } else {
+                            bufferingStallMs = 0L
+                        }
+                        if (bufferingStallMs >= 10_000L) {
+                            bufferingStallMs = 0L
+                            val fallback = req.fallbackUrl?.takeIf { it.isNotBlank() && it != activeStreamUrl }
+                            if (!triedFallback && fallback != null) {
+                                triedFallback = true
+                                _errorMessage.value = null
+                                loadPlaybackUrl(
+                                    uriStr = fallback,
+                                    forceHls = req.isHls || HlsSegmentDownloader.looksLikeHlsUrl(fallback),
+                                    referer = req.referer,
+                                    extraHeaders = req.headers,
+                                    seekPositionMs = posNow
+                                )
+                            } else if (!retriedStallOnce) {
+                                retriedStallOnce = true
+                                exoPlayer.prepare()
+                                exoPlayer.play()
+                            } else {
+                                _isBuffering.value = false
+                                _errorMessage.value = "Playback stalled while buffering. Tap Retry."
+                            }
+                        }
+                    } else {
+                        bufferingStallMs = 0L
+                    }
+                    lastTickerPosMs = posNow
                 }
                 delay(250L)
             }
@@ -216,6 +279,8 @@ class AppPlayerController(context: Context) {
         _currentPositionMs.value = 0L
         _durationMs.value = 0L
         triedFallback = false
+        retriedStallOnce = false
+        bufferingStallMs = 0L
 
         val initialVariants = request.variants
         val initialVariant = initialVariants.firstOrNull { it.url == request.primaryUrl } ?: initialVariants.firstOrNull()
@@ -292,6 +357,10 @@ class AppPlayerController(context: Context) {
     fun retry() {
         val req = _currentRequest.value ?: return
         triedFallback = false
+        retriedStallOnce = false
+        bufferingStallMs = 0L
+        retriedStallOnce = false
+        bufferingStallMs = 0L
         _errorMessage.value = null
         val resumeMs = exoPlayer.currentPosition.coerceAtLeast(0L)
         val url = _selectedVariant.value?.url ?: req.primaryUrl
@@ -312,14 +381,20 @@ class AppPlayerController(context: Context) {
         seekPositionMs: Long
     ) {
         activeStreamUrl = uriStr
+        bufferingStallMs = 0L
         _isBuffering.value = true
-        val mediaSource = buildMediaSource(uriStr, forceHls, referer, extraHeaders)
-        exoPlayer.setMediaSource(mediaSource)
-        if (seekPositionMs > 0L) {
-            exoPlayer.seekTo(seekPositionMs)
+        try {
+            val mediaSource = buildMediaSource(uriStr, forceHls, referer, extraHeaders)
+            exoPlayer.setMediaSource(mediaSource)
+            if (seekPositionMs > 0L) {
+                exoPlayer.seekTo(seekPositionMs)
+            }
+            exoPlayer.prepare()
+            exoPlayer.playWhenReady = true
+        } catch (e: Exception) {
+            _isBuffering.value = false
+            _errorMessage.value = e.message ?: "Unable to open media file"
         }
-        exoPlayer.prepare()
-        exoPlayer.playWhenReady = true
     }
 
     private fun buildMediaSource(
@@ -328,6 +403,23 @@ class AppPlayerController(context: Context) {
         referer: String?,
         extraHeaders: Map<String, String>
     ): MediaSource {
+        val extractorsFactory = DefaultExtractorsFactory()
+            .setConstantBitrateSeekingEnabled(true)
+
+        val isLocalFile = uriStr.startsWith("file://") || uriStr.startsWith("/")
+        if (isLocalFile) {
+            val path = if (uriStr.startsWith("file://")) Uri.parse(uriStr).path.orEmpty() else uriStr
+            val localFile = File(path)
+            if (!localFile.exists() || localFile.length() <= 0L) {
+                throw IllegalStateException("Local video file is missing or empty")
+            }
+            val item = MediaItem.Builder()
+                .setUri(Uri.fromFile(localFile))
+                .build()
+            return DefaultMediaSourceFactory(FileDataSource.Factory(), extractorsFactory)
+                .createMediaSource(item)
+        }
+
         val effHeaders = linkedMapOf<String, String>()
         effHeaders["Accept"] = "*/*"
         val effRef = referer?.takeIf { it.isNotBlank() }
@@ -350,7 +442,7 @@ class AppPlayerController(context: Context) {
         } catch (_: Exception) {}
         effHeaders.putAll(extraHeaders)
 
-        val okHttpFactory = OkHttpDataSource.Factory(RetrofitClient.streamHttpClient)
+        val okHttpFactory = OkHttpDataSource.Factory(RetrofitClient.playerHttpClient)
             .setUserAgent(DEFAULT_UA)
             .setDefaultRequestProperties(effHeaders)
         val dataSourceFactory = DefaultDataSource.Factory(appContext, okHttpFactory)
@@ -364,7 +456,8 @@ class AppPlayerController(context: Context) {
             itemBuilder.setMimeType(MimeTypes.APPLICATION_MPD)
         }
 
-        return DefaultMediaSourceFactory(dataSourceFactory).createMediaSource(itemBuilder.build())
+        return DefaultMediaSourceFactory(dataSourceFactory, extractorsFactory)
+            .createMediaSource(itemBuilder.build())
     }
 
     fun togglePlayPause() {

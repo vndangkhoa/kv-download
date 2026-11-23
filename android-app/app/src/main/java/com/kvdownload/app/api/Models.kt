@@ -257,7 +257,8 @@ data class SavedPhoneFile(
     val sizeBytes: Long,
     val savedAt: Long,
     val contentUri: String,
-    val relativePath: String
+    val relativePath: String,
+    val thumbnailUri: String? = null
 )
 
 data class PhoneTransferState(

@@ -1,5 +1,7 @@
 package com.kvdownload.app
 
+import android.media.MediaCodec
+import android.media.MediaExtractor
 import com.kvdownload.app.api.AV01Resolver
 import com.kvdownload.app.api.DownloadTask
 import com.kvdownload.app.api.RetrofitClient
@@ -9,6 +11,7 @@ import com.kvdownload.app.ui.adaptive.HingeRectDp
 import com.kvdownload.app.ui.adaptive.WidthClass
 import com.kvdownload.app.ui.adaptive.computeWindowState
 import com.kvdownload.app.ui.screens.detectPlayablePageItem
+import com.kvdownload.app.ui.screens.normalizeAv01QuickInput
 import com.kvdownload.app.ui.screens.normalizeBrowserOmniboxUrl
 import com.kvdownload.app.ui.screens.resolveSafeWebNavigationUrl
 import com.kvdownload.app.update.AppUpdateManager
@@ -206,5 +209,36 @@ class MediaAndAdaptiveTest {
         val ttItem = detectPlayablePageItem("https://www.tiktok.com/@user/video/7400000000000000001", "Dance")
         assertNotNull(ttItem)
         assertEquals("TIKTOK", ttItem!!.format)
+
+        assertEquals("https://av01.media/jp/video/226601", normalizeAv01QuickInput("226601"))
+        assertEquals(
+            "https://av01.media/jp/video/226601/fc2-ppv-5011616",
+            normalizeAv01QuickInput("https://av01.media/jp/video/226601/fc2-ppv-5011616")
+        )
+        assertEquals(null, normalizeAv01QuickInput("https://av01.media/"))
+        assertEquals(null, normalizeAv01QuickInput("abc"))
+    }
+
+    @Test
+    fun remuxFlagTranslationAndMonotonicPts() {
+        assertEquals(
+            MediaCodec.BUFFER_FLAG_KEY_FRAME,
+            HlsSegmentDownloader.translateSampleFlags(MediaExtractor.SAMPLE_FLAG_SYNC)
+        )
+        assertEquals(
+            MediaCodec.BUFFER_FLAG_KEY_FRAME,
+            HlsSegmentDownloader.translateSampleFlags(
+                MediaExtractor.SAMPLE_FLAG_SYNC or MediaExtractor.SAMPLE_FLAG_PARTIAL_FRAME
+            )
+        )
+        assertEquals(
+            0,
+            HlsSegmentDownloader.translateSampleFlags(MediaExtractor.SAMPLE_FLAG_PARTIAL_FRAME)
+        )
+
+        assertEquals(0L, HlsSegmentDownloader.normalizeTrackPtsUs(5_000L, 5_000L, -1L))
+        assertEquals(33_333L, HlsSegmentDownloader.normalizeTrackPtsUs(38_333L, 5_000L, 0L))
+        assertEquals(33_334L, HlsSegmentDownloader.normalizeTrackPtsUs(38_333L, 5_000L, 33_333L))
+        assertEquals(33_335L, HlsSegmentDownloader.normalizeTrackPtsUs(1_000L, 5_000L, 33_334L))
     }
 }

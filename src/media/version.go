@@ -7,7 +7,7 @@ import (
 	"strings"
 )
 
-const DefaultAppVersion = "1.0.46"
+const DefaultAppVersion = "1.0.47"
 
 // AppVersionInfo describes the latest Android client release metadata served to mobile clients.
 type AppVersionInfo struct {
@@ -37,7 +37,7 @@ func AppVersionHandler(w http.ResponseWriter, r *http.Request) {
 		ApkURL:         "https://syno.vndns.net/kvdownload-v" + ver + ".apk",
 		LatestApkURL:   "https://syno.vndns.net/kvdownload-release.apk",
 		ReleasePageURL: "https://syno.vndns.net/package/kvdownload",
-		Notes:          "Low-CPU Chromium Core browser (tini + 7fps paced stream, 0% idle), edge-to-edge fit-view & maximized browser chrome.",
+		Notes:          "Android compact omnibox bar, AV01 black-screen recovery, app-only Private Vault storage, stalled playback fix & NAS/Phone destination chooser.",
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(info)

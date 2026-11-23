@@ -27,8 +27,6 @@ RUN GOOS=$TARGETOS GOARCH=$TARGETARCH go build -o kv-download ./src
 FROM --platform=$TARGETPLATFORM python:3.13.7-alpine3.22
 
 ARG TARGETARCH
-ARG IMAGE_TAG="1.0.46"
-ENV APP_VERSION=$IMAGE_TAG
 ENV CHROMIUM_BIN="/usr/bin/chromium-browser"
 
 LABEL org.opencontainers.image.source="https://git.khoavo.myds.me/vndangkhoa/kv-download"
@@ -57,10 +55,6 @@ RUN apk add --update --no-cache \
 # https://github.com/wader/static-ffmpeg
 COPY --from=mwader/static-ffmpeg:8.0 /ffmpeg  /usr/local/bin/
 COPY --from=mwader/static-ffmpeg:8.0 /ffprobe /usr/local/bin/
-COPY --from=builder /app/kv-download /app/kv-download
-COPY --from=frontend-builder /app/frontend/out /app/frontend/out
-COPY templates /app/templates
-COPY static /app/static
 
 WORKDIR /app
 
@@ -78,6 +72,14 @@ RUN yt-dlp --update --update-to nightly || true
 # Sanity check
 RUN yt-dlp --version && \
     ffmpeg -version
+
+COPY --from=builder /app/kv-download /app/kv-download
+COPY --from=frontend-builder /app/frontend/out /app/frontend/out
+COPY templates /app/templates
+COPY static /app/static
+
+ARG IMAGE_TAG="1.0.47"
+ENV APP_VERSION=$IMAGE_TAG
 
 EXPOSE 9292
 

@@ -3,6 +3,7 @@ package com.kvdownload.app.api
 import android.net.Uri
 import okhttp3.Dns
 import okhttp3.OkHttpClient
+import okhttp3.Protocol
 import okhttp3.Request
 import okhttp3.logging.HttpLoggingInterceptor
 import org.json.JSONObject
@@ -121,6 +122,22 @@ object RetrofitClient {
             .dns(resilientDns)
             .connectTimeout(30, TimeUnit.SECONDS)
             .readTimeout(0, TimeUnit.MILLISECONDS)
+            .followRedirects(true)
+            .build()
+    }
+
+    /**
+     * Bounded HTTP/1.1 client dedicated to ExoPlayer video/audio playback so Range
+     * reads never stall indefinitely or hit HTTP/2 flow-control locks on Synology Nginx.
+     */
+    val playerHttpClient: OkHttpClient by lazy {
+        OkHttpClient.Builder()
+            .dns(resilientDns)
+            .protocols(listOf(Protocol.HTTP_1_1))
+            .connectTimeout(15, TimeUnit.SECONDS)
+            .readTimeout(20, TimeUnit.SECONDS)
+            .writeTimeout(15, TimeUnit.SECONDS)
+            .retryOnConnectionFailure(true)
             .followRedirects(true)
             .build()
     }

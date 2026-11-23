@@ -278,15 +278,23 @@ object HlsSegmentDownloader {
             val finalMime: String
 
             if (spec.isFmp4) {
-                val mergedMp4 = File(context.cacheDir, "kv_hls_out_${UUID.randomUUID()}.mp4")
-                FileOutputStream(mergedMp4).use { out ->
+                val mergedFmp4 = File(workDir, "merged_fmp4.mp4")
+                FileOutputStream(mergedFmp4).use { out ->
                     initFile?.let { copyInto(it, out) }
                     for (sf in segFiles) {
                         if (sf != null) copyInto(sf, out)
                     }
                     out.flush()
                 }
-                finalOutFile = mergedMp4
+                val remuxedMp4 = File(context.cacheDir, "kv_hls_out_${UUID.randomUUID()}.mp4")
+                if (remuxToStandardMp4(mergedFmp4, remuxedMp4)) {
+                    finalOutFile = remuxedMp4
+                } else {
+                    remuxedMp4.delete()
+                    val fallbackMp4 = File(context.cacheDir, "kv_hls_out_${UUID.randomUUID()}.mp4")
+                    mergedFmp4.copyTo(fallbackMp4, overwrite = true)
+                    finalOutFile = fallbackMp4
+                }
                 finalExt = "mp4"
                 finalMime = "video/mp4"
             } else {
@@ -299,7 +307,7 @@ object HlsSegmentDownloader {
                     out.flush()
                 }
                 val remuxedMp4 = File(context.cacheDir, "kv_hls_out_${UUID.randomUUID()}.mp4")
-                if (remuxTsToMp4(mergedTs, remuxedMp4)) {
+                if (remuxToStandardMp4(mergedTs, remuxedMp4)) {
                     finalOutFile = remuxedMp4
                     finalExt = "mp4"
                     finalMime = "video/mp4"
@@ -313,7 +321,7 @@ object HlsSegmentDownloader {
                 }
             }
 
-            onProgress(0.97f, finalOutFile.length(), "Saving to phone Movies...")
+            onProgress(0.97f, finalOutFile.length(), "Saving to private app vault...")
             return HlsDownloadedFile(
                 file = finalOutFile,
                 extension = finalExt,
@@ -325,17 +333,35 @@ object HlsSegmentDownloader {
         }
     }
 
-    private fun remuxTsToMp4(tsFile: File, outMp4: File): Boolean {
+    fun translateSampleFlags(extractorFlags: Int): Int =
+        if ((extractorFlags and MediaExtractor.SAMPLE_FLAG_SYNC) != 0) {
+            MediaCodec.BUFFER_FLAG_KEY_FRAME
+        } else {
+            0
+        }
+
+    fun normalizeTrackPtsUs(rawPtsUs: Long, basePtsUs: Long, lastTrackPtsUs: Long): Long {
+        val shifted = (rawPtsUs - basePtsUs).coerceAtLeast(0L)
+        return if (lastTrackPtsUs >= 0L && shifted <= lastTrackPtsUs) {
+            lastTrackPtsUs + 1L
+        } else {
+            shifted
+        }
+    }
+
+    private fun remuxToStandardMp4(inputFile: File, outMp4: File): Boolean {
         val extractor = MediaExtractor()
         var muxer: MediaMuxer? = null
         try {
-            extractor.setDataSource(tsFile.absolutePath)
+            extractor.setDataSource(inputFile.absolutePath)
             val trackCount = extractor.trackCount
             if (trackCount <= 0) return false
 
             muxer = MediaMuxer(outMp4.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
             val trackMap = mutableMapOf<Int, Int>()
-            var maxBuf = 256 * 1024
+            val basePtsMap = mutableMapOf<Int, Long>()
+            val lastPtsMap = mutableMapOf<Int, Long>()
+            var maxBuf = 1024 * 1024
 
             for (i in 0 until trackCount) {
                 val fmt = extractor.getTrackFormat(i)
@@ -353,17 +379,33 @@ object HlsSegmentDownloader {
             if (trackMap.isEmpty()) return false
             muxer.start()
 
-            val buffer = ByteBuffer.allocate(maxBuf)
+            var buffer = ByteBuffer.allocate(maxBuf)
             val info = MediaCodec.BufferInfo()
             while (true) {
+                val sampleSize = extractor.sampleSize
+                if (sampleSize > buffer.capacity().toLong()) {
+                    buffer = ByteBuffer.allocate((sampleSize.toInt() + 65536).coerceAtLeast(maxBuf))
+                }
+                buffer.clear()
                 info.offset = 0
                 info.size = extractor.readSampleData(buffer, 0)
                 if (info.size < 0) break
-                info.presentationTimeUs = extractor.sampleTime
-                info.flags = extractor.sampleFlags
+
                 val srcIdx = extractor.sampleTrackIndex
                 val dstIdx = trackMap[srcIdx]
                 if (dstIdx != null) {
+                    val rawPts = extractor.sampleTime
+                    val basePts = basePtsMap.getOrPut(srcIdx) { rawPts.coerceAtLeast(0L) }
+                    val lastPts = lastPtsMap[srcIdx] ?: -1L
+                    val cleanPts = if (rawPts < 0L) {
+                        (lastPts + 1L).coerceAtLeast(0L)
+                    } else {
+                        normalizeTrackPtsUs(rawPts, basePts, lastPts)
+                    }
+                    lastPtsMap[srcIdx] = cleanPts
+
+                    info.presentationTimeUs = cleanPts
+                    info.flags = translateSampleFlags(extractor.sampleFlags)
                     muxer.writeSampleData(dstIdx, buffer, info)
                 }
                 extractor.advance()

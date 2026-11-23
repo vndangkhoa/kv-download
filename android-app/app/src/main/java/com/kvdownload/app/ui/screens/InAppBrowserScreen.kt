@@ -1,15 +1,20 @@
 package com.kvdownload.app.ui.screens
 
 import android.annotation.SuppressLint
+import android.graphics.Bitmap
 import android.net.Uri
+import android.view.View
+import android.view.ViewGroup
 import android.webkit.CookieManager
 import android.webkit.JavascriptInterface
 import android.webkit.WebChromeClient
+import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.widget.FrameLayout
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -19,6 +24,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -30,21 +36,27 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.CloudUpload
 import androidx.compose.material.icons.filled.DesktopWindows
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Language
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.PhoneAndroid
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Radar
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Shield
+import androidx.compose.material.icons.filled.WifiOff
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
@@ -56,6 +68,7 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
@@ -64,7 +77,9 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -73,6 +88,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -97,10 +115,15 @@ import com.kvdownload.app.ui.components.AstryxStatusBadge
 import com.kvdownload.app.ui.components.AstryxTone
 import com.kvdownload.app.ui.theme.LocalAstryxPalette
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import okhttp3.Request
 import org.json.JSONObject
+import java.io.ByteArrayInputStream
 import java.net.URLDecoder
 import java.net.URLEncoder
+import java.util.Collections
+import java.util.concurrent.TimeUnit
 
 internal fun normalizeBrowserOmniboxUrl(raw: String): String {
     val trimmed = raw.trim()
@@ -111,6 +134,16 @@ internal fun normalizeBrowserOmniboxUrl(raw: String): String {
         return "https://www.google.com/search?q=" + URLEncoder.encode(trimmed, "UTF-8")
     }
     return "https://$trimmed"
+}
+
+internal fun normalizeAv01QuickInput(raw: String): String? {
+    val trimmed = raw.trim()
+    if (trimmed.isBlank()) return null
+    if (AV01Resolver.isAV01Url(trimmed)) return trimmed
+    if (trimmed.all { it.isDigit() } && trimmed.length >= 3) {
+        return "https://av01.media/jp/video/$trimmed"
+    }
+    return null
 }
 
 /**
@@ -267,6 +300,13 @@ private const val INJECTED_SNIFFER_JS = """
 })();
 """
 
+private data class PendingBrowserDownload(
+    val label: String,
+    val items: List<SniffedMedia>,
+    val canonicalServerUrl: String? = null,
+    val isBatch: Boolean = false
+)
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun InAppBrowserScreen(
@@ -284,19 +324,33 @@ fun InAppBrowserScreen(
     var useServerProxy by remember { mutableStateOf(false) }
     var desktopMode by remember { mutableStateOf(false) }
     var defaultMobileUa by remember { mutableStateOf<String?>(null) }
-    var isLoadingPage by remember { mutableStateOf(false) }
-    var isSniffingServer by remember { mutableStateOf(false) }
 
+    var isLoadingPage by remember { mutableStateOf(false) }
+    var pageLoadProgress by remember { mutableIntStateOf(0) }
+    var pageCommitted by remember { mutableStateOf(false) }
+    var pageErrorText by remember { mutableStateOf<String?>(null) }
+    var pageLoadTimedOut by remember { mutableStateOf(false) }
+    var loadNonce by remember { mutableIntStateOf(0) }
+
+    var isSniffingServer by remember { mutableStateOf(false) }
     var webViewRef by remember { mutableStateOf<WebView?>(null) }
+    var customFullscreenView by remember { mutableStateOf<View?>(null) }
+    var customFullscreenCallback by remember { mutableStateOf<WebChromeClient.CustomViewCallback?>(null) }
     var canGoBack by remember { mutableStateOf(false) }
     var canGoForward by remember { mutableStateOf(false) }
 
+    val dohFallbackHosts = remember { Collections.synchronizedSet(mutableSetOf<String>()) }
+
     val sniffedItems = remember { mutableStateListOf<SniffedMedia>() }
     var resolvedAV01 by remember { mutableStateOf<AV01ResolvedMedia?>(null) }
+    var av01QuickInput by remember { mutableStateOf("") }
+    var isResolvingQuickAv01 by remember { mutableStateOf(false) }
+
     var showSnifferSheet by remember { mutableStateOf(false) }
     var sniffTab by remember { mutableStateOf("video") }
     var selectedUrls by remember { mutableStateOf<Set<String>>(emptySet()) }
     var formatQuality by remember { mutableStateOf("highest") }
+    var pendingDownload by remember { mutableStateOf<PendingBrowserDownload?>(null) }
 
     fun mergeSniffed(incoming: List<SniffedMedia>) {
         incoming.forEach { item ->
@@ -313,7 +367,7 @@ fun InAppBrowserScreen(
         }
     }
 
-    fun resolveAV01DirectOnPhone(target: String) {
+    fun resolveAV01DirectOnPhone(target: String, onResolvedCallback: ((AV01ResolvedMedia) -> Unit)? = null) {
         if (!AV01Resolver.isAV01Url(target)) return
         isSniffingServer = true
         scope.launch {
@@ -337,8 +391,11 @@ fun InAppBrowserScreen(
                     )
                 }
                 mergeSniffed(avItems)
-            } catch (_: Exception) {
-                // Server sniff still runs below as backup
+                onResolvedCallback?.invoke(av)
+            } catch (e: Exception) {
+                if (onResolvedCallback != null) {
+                    onShowMessage(e.message ?: "Unable to resolve AV01 stream")
+                }
             } finally {
                 isSniffingServer = false
             }
@@ -367,6 +424,12 @@ fun InAppBrowserScreen(
         val clean = normalizeBrowserOmniboxUrl(raw)
         addressInput = clean
         currentUrl = clean
+        isLoadingPage = true
+        pageLoadProgress = 8
+        pageCommitted = false
+        pageErrorText = null
+        pageLoadTimedOut = false
+        loadNonce++
         sniffedItems.clear()
         resolvedAV01 = null
         selectedUrls = emptySet()
@@ -380,6 +443,236 @@ fun InAppBrowserScreen(
 
         val loadUrl = if (forceProxy) RetrofitClient.browserProxyUrl(clean) else clean
         webViewRef?.loadUrl(loadUrl)
+    }
+
+    // Timeout watchdog: prevents blank/black WebView when ISP drops TLS handshake (e.g. av01.media)
+    LaunchedEffect(currentUrl, loadNonce, pageCommitted, pageErrorText) {
+        if (currentUrl.isBlank() || pageCommitted || pageErrorText != null) return@LaunchedEffect
+        delay(12_000L)
+        if (!pageCommitted && pageErrorText == null) {
+            isLoadingPage = false
+            pageLoadTimedOut = true
+        }
+    }
+
+    fun openCurrentPageDownloadPicker() {
+        val av = resolvedAV01
+        if (av != null && av.variants.isNotEmpty()) {
+            val picked = AV01Resolver.selectVariant(av.variants, formatQuality)
+            pendingDownload = PendingBrowserDownload(
+                label = av.title,
+                items = listOf(
+                    SniffedMedia(
+                        id = "av01:${av.videoId}",
+                        url = picked.url,
+                        type = "video",
+                        format = "${picked.label} M3U8 HLS",
+                        title = av.title,
+                        thumbnail = av.thumbnail,
+                        source = "av01_phone",
+                        resolution = picked.label,
+                        channel = "AV01",
+                        isStream = true,
+                        referer = av.referer,
+                        variants = av.variants
+                    )
+                ),
+                canonicalServerUrl = currentUrl.ifBlank { "https://av01.media/jp/video/${av.videoId}" }
+            )
+            return
+        }
+
+        val detectedVideo = sniffedItems.firstOrNull { it.type == "video" }
+        if (detectedVideo != null) {
+            pendingDownload = PendingBrowserDownload(
+                label = detectedVideo.title.ifBlank { currentUrl },
+                items = listOf(detectedVideo),
+                canonicalServerUrl = if (AV01Resolver.isAV01Url(currentUrl)) currentUrl else detectedVideo.url
+            )
+            return
+        }
+
+        val pageUrl = currentUrl.ifBlank { return }
+        pendingDownload = PendingBrowserDownload(
+            label = webViewRef?.title?.takeIf { it.isNotBlank() } ?: pageUrl,
+            items = listOf(
+                SniffedMedia(
+                    id = "page:${pageUrl.hashCode()}",
+                    url = pageUrl,
+                    type = "video",
+                    format = "PAGE",
+                    title = webViewRef?.title?.takeIf { it.isNotBlank() } ?: pageUrl,
+                    referer = pageUrl
+                )
+            ),
+            canonicalServerUrl = pageUrl
+        )
+    }
+
+    fun executePendingDownloadToNas(req: PendingBrowserDownload) {
+        pendingDownload = null
+        scope.launch {
+            try {
+                if (req.isBatch && req.items.size > 1) {
+                    RetrofitClient.getApi().addQueue(
+                        QueueAddRequest(
+                            items = req.items.map {
+                                EnqueueItemInput(
+                                    url = it.url,
+                                    title = it.title,
+                                    thumbnail = it.thumbnail,
+                                    channel = it.channel,
+                                    duration = it.duration,
+                                    referer = it.referer ?: currentUrl.ifBlank { null }
+                                )
+                            },
+                            format = formatQuality,
+                            groupTitle = req.label,
+                            groupType = "batch"
+                        )
+                    )
+                    selectedUrls = emptySet()
+                    showSnifferSheet = false
+                    onRefreshQueue()
+                    onShowMessage("Queued ${req.items.size} items to NAS server")
+                } else {
+                    val item = req.items.firstOrNull()
+                    val serverUrl = req.canonicalServerUrl?.takeIf { it.isNotBlank() } ?: item?.url ?: return@launch
+                    val serverFmt = item?.resolution?.lowercase()?.takeIf {
+                        it in setOf("1080p", "720p", "480p", "360p")
+                    } ?: formatQuality
+                    RetrofitClient.getApi().addQueue(
+                        QueueAddRequest(
+                            items = listOf(
+                                EnqueueItemInput(
+                                    url = serverUrl,
+                                    title = item?.title ?: req.label,
+                                    thumbnail = item?.thumbnail,
+                                    channel = item?.channel,
+                                    duration = item?.duration,
+                                    referer = item?.referer ?: currentUrl.ifBlank { null }
+                                )
+                            ),
+                            format = serverFmt
+                        )
+                    )
+                    onRefreshQueue()
+                    onShowMessage("Queued on NAS server: ${req.label}")
+                }
+            } catch (e: Exception) {
+                onShowMessage(e.message ?: "Failed to queue on NAS server")
+            }
+        }
+    }
+
+    fun executePendingDownloadToPhone(req: PendingBrowserDownload) {
+        pendingDownload = null
+        if (req.isBatch && req.items.size > 1) {
+            phoneDownloadManager.saveBatchToPhone(
+                items = req.items,
+                formatPref = formatQuality,
+                defaultReferer = currentUrl.ifBlank { null },
+                groupName = req.label
+            )
+            selectedUrls = emptySet()
+            showSnifferSheet = false
+            onShowMessage("Saving ${req.items.size} items to Private App Vault...")
+        } else {
+            val item = req.items.firstOrNull() ?: return
+            val effReferer = item.referer ?: currentUrl.ifBlank { null }
+            val avPage = req.canonicalServerUrl?.takeIf { AV01Resolver.isAV01Url(it) }
+            if (avPage != null) {
+                phoneDownloadManager.saveHlsOrAV01ToPhone(
+                    url = avPage,
+                    title = item.title.ifBlank { req.label },
+                    formatPref = item.resolution ?: formatQuality,
+                    channel = "AV01",
+                    referer = effReferer ?: AV01Resolver.REFERER
+                )
+            } else {
+                phoneDownloadManager.saveDirectMediaToPhone(
+                    mediaUrl = item.url,
+                    title = item.title.ifBlank { req.label },
+                    type = item.type,
+                    channel = item.channel,
+                    referer = effReferer,
+                    formatPref = item.resolution ?: formatQuality
+                )
+            }
+            onShowMessage("Saving privately inside KV Download...")
+        }
+    }
+
+    @Composable
+    fun CompactOmniboxPill(modifier: Modifier = Modifier) {
+        Surface(
+            modifier = modifier.height(38.dp),
+            shape = RoundedCornerShape(12.dp),
+            color = palette.muted,
+            border = BorderStroke(1.dp, palette.borderSubtle)
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(horizontal = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Icon(
+                    imageVector = if (useServerProxy) Icons.Default.Shield else Icons.Default.Language,
+                    contentDescription = null,
+                    tint = palette.accent,
+                    modifier = Modifier.size(16.dp)
+                )
+                Box(
+                    modifier = Modifier.weight(1f),
+                    contentAlignment = Alignment.CenterStart
+                ) {
+                    if (addressInput.isEmpty()) {
+                        Text(
+                            text = "Search or enter URL...",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = palette.textSecondary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                    BasicTextField(
+                        value = addressInput,
+                        onValueChange = { addressInput = it },
+                        singleLine = true,
+                        textStyle = MaterialTheme.typography.bodySmall.copy(color = palette.textPrimary),
+                        cursorBrush = SolidColor(palette.accent),
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
+                        keyboardActions = KeyboardActions(
+                            onGo = { if (addressInput.isNotBlank()) loadTarget(addressInput) }
+                        ),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+                if (addressInput.isNotEmpty()) {
+                    Icon(
+                        imageVector = Icons.Default.Close,
+                        contentDescription = "Clear address",
+                        tint = palette.textSecondary,
+                        modifier = Modifier
+                            .size(16.dp)
+                            .clickable { addressInput = "" }
+                    )
+                }
+                Icon(
+                    imageVector = Icons.Default.Refresh,
+                    contentDescription = "Go or Reload",
+                    tint = if (addressInput.isNotBlank()) palette.accentText else palette.textSecondary,
+                    modifier = Modifier
+                        .size(18.dp)
+                        .clickable {
+                            val target = addressInput.ifBlank { currentUrl }
+                            if (target.isNotBlank()) loadTarget(target)
+                        }
+                )
+            }
+        }
     }
 
     @Composable
@@ -448,7 +741,7 @@ fun InAppBrowserScreen(
                 }
             } else {
                 LazyColumn(
-                    modifier = if (compactSheet) Modifier.fillMaxWidth().height(360.dp) else Modifier.weight(1f).fillMaxWidth(),
+                    modifier = if (compactSheet) Modifier.fillMaxWidth().height(340.dp) else Modifier.weight(1f).fillMaxWidth(),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     items(visibleItems, key = { it.url }) { item ->
@@ -506,10 +799,8 @@ fun InAppBrowserScreen(
                                 }
 
                                 Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .horizontalScroll(rememberScrollState()),
-                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                                 ) {
                                     OutlinedButton(
                                         onClick = {
@@ -539,11 +830,12 @@ fun InAppBrowserScreen(
                                                             referer = effReferer,
                                                             formatPref = item.resolution ?: formatQuality
                                                         )
-                                                        onShowMessage("Saving directly to phone storage...")
+                                                        onShowMessage("Saving privately inside KV Download...")
                                                     }
                                                 )
                                             )
-                                        }
+                                        },
+                                        modifier = Modifier.weight(1f)
                                     ) {
                                         Icon(
                                             imageVector = if (isImage) Icons.Default.Image else Icons.Default.PlayArrow,
@@ -553,59 +845,19 @@ fun InAppBrowserScreen(
                                         Text(if (isImage) "View" else "Preview", modifier = Modifier.padding(start = 4.dp))
                                     }
 
-                                    OutlinedButton(
-                                        onClick = {
-                                            phoneDownloadManager.saveDirectMediaToPhone(
-                                                mediaUrl = item.url,
-                                                title = item.title,
-                                                type = item.type,
-                                                channel = item.channel,
-                                                referer = effReferer,
-                                                formatPref = item.resolution ?: formatQuality
-                                            )
-                                            onShowMessage(
-                                                if (itemIsHls) "Downloading M3U8 segments to Movies/KV Download..."
-                                                else "Downloading directly to phone storage..."
-                                            )
-                                        }
-                                    ) {
-                                        Icon(Icons.Default.PhoneAndroid, contentDescription = null, modifier = Modifier.size(16.dp))
-                                        Text("To Phone", modifier = Modifier.padding(start = 4.dp))
-                                    }
-
                                     Button(
                                         onClick = {
-                                            scope.launch {
-                                                // If AV01, send canonical av01.media URL when available so server refreshes its own IP JWT cleanly
-                                                val serverEnqueueUrl = if (AV01Resolver.isAV01Url(currentUrl)) currentUrl else item.url
-                                                val serverFmt = item.resolution?.lowercase()?.takeIf {
-                                                    it in setOf("1080p", "720p", "480p", "360p")
-                                                } ?: formatQuality
-                                                try {
-                                                    RetrofitClient.getApi().addQueue(
-                                                        QueueAddRequest(
-                                                            items = listOf(
-                                                                EnqueueItemInput(
-                                                                    url = serverEnqueueUrl,
-                                                                    title = item.title,
-                                                                    thumbnail = item.thumbnail,
-                                                                    channel = item.channel,
-                                                                    duration = item.duration,
-                                                                    referer = effReferer
-                                                                )
-                                                            ),
-                                                            format = serverFmt
-                                                        )
-                                                    )
-                                                    onRefreshQueue()
-                                                    onShowMessage("Queued on server: ${item.title}")
-                                                } catch (e: Exception) {
-                                                    onShowMessage(e.message ?: "Server queue failed")
-                                                }
-                                            }
-                                        }
+                                            val canonicalUrl = if (AV01Resolver.isAV01Url(currentUrl)) currentUrl else item.url
+                                            pendingDownload = PendingBrowserDownload(
+                                                label = item.title.ifBlank { canonicalUrl },
+                                                items = listOf(item),
+                                                canonicalServerUrl = canonicalUrl
+                                            )
+                                        },
+                                        modifier = Modifier.weight(1f)
                                     ) {
-                                        Text("Server")
+                                        Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(16.dp))
+                                        Text("Download", modifier = Modifier.padding(start = 4.dp))
                                     }
                                 }
                             }
@@ -615,36 +867,16 @@ fun InAppBrowserScreen(
 
                 if (selectedUrls.isNotEmpty()) {
                     AstryxGradientButton(
-                        text = "Queue Selected as Group (${selectedUrls.size})",
+                        text = "Download Selected (${selectedUrls.size})",
                         icon = Icons.Default.Download,
                         onClick = {
                             val chosen = sniffedItems.filter { selectedUrls.contains(it.url) }
-                            showSnifferSheet = false
-                            scope.launch {
-                                try {
-                                    RetrofitClient.getApi().addQueue(
-                                        QueueAddRequest(
-                                            items = chosen.map {
-                                                EnqueueItemInput(
-                                                    url = it.url,
-                                                    title = it.title,
-                                                    thumbnail = it.thumbnail,
-                                                    channel = it.channel,
-                                                    duration = it.duration,
-                                                    referer = it.referer ?: currentUrl.ifBlank { null }
-                                                )
-                                            },
-                                            format = formatQuality,
-                                            groupTitle = "Browser Batch (${chosen.size})",
-                                            groupType = "batch"
-                                        )
-                                    )
-                                    selectedUrls = emptySet()
-                                    onRefreshQueue()
-                                    onShowMessage("Queued ${chosen.size} items as a group")
-                                } catch (e: Exception) {
-                                    onShowMessage(e.message ?: "Batch queue failed")
-                                }
+                            if (chosen.isNotEmpty()) {
+                                pendingDownload = PendingBrowserDownload(
+                                    label = "Browser Batch (${chosen.size})",
+                                    items = chosen,
+                                    isBatch = true
+                                )
                             }
                         },
                         modifier = Modifier.fillMaxWidth()
@@ -657,141 +889,241 @@ fun InAppBrowserScreen(
     @Composable
     fun BrowserViewportPane(modifier: Modifier = Modifier) {
         Column(modifier = modifier.fillMaxSize()) {
-            // Address Bar & Controls
+            // Responsive Address & Control Chrome
             Surface(color = palette.surface) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 10.dp, vertical = 8.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(4.dp)
-                    ) {
-                        IconButton(onClick = { webViewRef?.goBack() }, enabled = canGoBack) {
-                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
-                        }
-                        IconButton(onClick = { webViewRef?.goForward() }, enabled = canGoForward) {
-                            Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = "Forward")
-                        }
-                        IconButton(
-                            onClick = {
-                                currentUrl = ""
-                                addressInput = ""
-                                webViewRef = null
-                                canGoBack = false
-                                canGoForward = false
-                                sniffedItems.clear()
-                                resolvedAV01 = null
-                            }
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    if (windowState.isTwoPane) {
+                        // Wide Tablet / Unfolded Foldable: Single Unified Chrome Row
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 10.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
-                            Icon(Icons.Default.Home, contentDescription = "Home")
-                        }
+                            IconButton(
+                                onClick = { webViewRef?.goBack() },
+                                enabled = canGoBack,
+                                modifier = Modifier.size(34.dp)
+                            ) {
+                                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", modifier = Modifier.size(18.dp))
+                            }
+                            IconButton(
+                                onClick = { webViewRef?.goForward() },
+                                enabled = canGoForward,
+                                modifier = Modifier.size(34.dp)
+                            ) {
+                                Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = "Forward", modifier = Modifier.size(18.dp))
+                            }
+                            IconButton(
+                                onClick = {
+                                    currentUrl = ""
+                                    addressInput = ""
+                                    webViewRef = null
+                                    canGoBack = false
+                                    canGoForward = false
+                                    isLoadingPage = false
+                                    pageCommitted = false
+                                    pageErrorText = null
+                                    pageLoadTimedOut = false
+                                    sniffedItems.clear()
+                                    resolvedAV01 = null
+                                },
+                                modifier = Modifier.size(34.dp)
+                            ) {
+                                Icon(Icons.Default.Home, contentDescription = "Home", modifier = Modifier.size(18.dp))
+                            }
 
-                        OutlinedTextField(
-                            value = addressInput,
-                            onValueChange = { addressInput = it },
-                            modifier = Modifier.weight(1f),
-                            singleLine = true,
-                            placeholder = { Text("Search Google or enter URL (youtube.com, tiktok.com)...") },
-                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
-                            keyboardActions = KeyboardActions(
-                                onGo = { if (addressInput.isNotBlank()) loadTarget(addressInput) }
+                            CompactOmniboxPill(modifier = Modifier.weight(1f))
+
+                            if (currentUrl.isNotBlank()) {
+                                Button(
+                                    onClick = { openCurrentPageDownloadPicker() },
+                                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                                    modifier = Modifier.height(36.dp)
+                                ) {
+                                    Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(16.dp))
+                                    Text("Download", modifier = Modifier.padding(start = 4.dp), style = MaterialTheme.typography.labelLarge)
+                                }
+                            }
+
+                            FilterChip(
+                                selected = desktopMode,
+                                onClick = {
+                                    val next = !desktopMode
+                                    desktopMode = next
+                                    webViewRef?.let { wv ->
+                                        wv.settings.userAgentString = if (next) DESKTOP_CHROME_UA else defaultMobileUa
+                                        wv.settings.useWideViewPort = true
+                                        wv.settings.loadWithOverviewMode = true
+                                        if (currentUrl.isNotBlank()) wv.reload()
+                                    }
+                                },
+                                leadingIcon = { Icon(Icons.Default.DesktopWindows, contentDescription = null, modifier = Modifier.size(15.dp)) },
+                                label = { Text(if (desktopMode) "Desktop" else "Mobile") }
                             )
-                        )
 
-                        IconButton(
-                            onClick = {
-                                if (addressInput.isNotBlank()) loadTarget(addressInput)
-                            }
+                            FilterChip(
+                                selected = useServerProxy,
+                                onClick = {
+                                    val next = !useServerProxy
+                                    useServerProxy = next
+                                    if (currentUrl.isNotBlank()) loadTarget(currentUrl, forceProxy = next)
+                                },
+                                leadingIcon = { Icon(Icons.Default.Shield, contentDescription = null, modifier = Modifier.size(15.dp)) },
+                                label = { Text(if (useServerProxy) "Proxy" else "Direct") }
+                            )
+                        }
+                    } else {
+                        // Compact Phone: Dedicated Full-Width Pill Omnibox + Compact Action Strip
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 8.dp, vertical = 6.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
-                            Icon(Icons.Default.Refresh, contentDescription = "Go / Reload")
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                IconButton(
+                                    onClick = {
+                                        if (canGoBack) webViewRef?.goBack()
+                                        else {
+                                            currentUrl = ""
+                                            addressInput = ""
+                                            webViewRef = null
+                                            pageErrorText = null
+                                            pageLoadTimedOut = false
+                                            resolvedAV01 = null
+                                            sniffedItems.clear()
+                                        }
+                                    },
+                                    enabled = currentUrl.isNotBlank() || canGoBack,
+                                    modifier = Modifier.size(32.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = if (canGoBack) Icons.AutoMirrored.Filled.ArrowBack else Icons.Default.Home,
+                                        contentDescription = if (canGoBack) "Back" else "Home",
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+
+                                CompactOmniboxPill(modifier = Modifier.weight(1f))
+                            }
+
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .horizontalScroll(rememberScrollState()),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                IconButton(
+                                    onClick = { webViewRef?.goBack() },
+                                    enabled = canGoBack,
+                                    modifier = Modifier.size(30.dp)
+                                ) {
+                                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", modifier = Modifier.size(16.dp))
+                                }
+                                IconButton(
+                                    onClick = { webViewRef?.goForward() },
+                                    enabled = canGoForward,
+                                    modifier = Modifier.size(30.dp)
+                                ) {
+                                    Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = "Forward", modifier = Modifier.size(16.dp))
+                                }
+                                IconButton(
+                                    onClick = {
+                                        currentUrl = ""
+                                        addressInput = ""
+                                        webViewRef = null
+                                        canGoBack = false
+                                        canGoForward = false
+                                        isLoadingPage = false
+                                        pageCommitted = false
+                                        pageErrorText = null
+                                        pageLoadTimedOut = false
+                                        sniffedItems.clear()
+                                        resolvedAV01 = null
+                                    },
+                                    modifier = Modifier.size(30.dp)
+                                ) {
+                                    Icon(Icons.Default.Home, contentDescription = "Home", modifier = Modifier.size(16.dp))
+                                }
+
+                                if (currentUrl.isNotBlank()) {
+                                    AssistChip(
+                                        onClick = { openCurrentPageDownloadPicker() },
+                                        leadingIcon = { Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(15.dp), tint = palette.accent) },
+                                        label = { Text("Download") }
+                                    )
+                                }
+
+                                AssistChip(
+                                    onClick = {
+                                        if (currentUrl.isNotBlank()) {
+                                            if (AV01Resolver.isAV01Url(currentUrl)) resolveAV01DirectOnPhone(currentUrl)
+                                            else triggerServerSniff(currentUrl)
+                                        }
+                                        showSnifferSheet = true
+                                    },
+                                    leadingIcon = {
+                                        BadgedBox(
+                                            badge = {
+                                                if (sniffedItems.isNotEmpty()) {
+                                                    Badge(containerColor = palette.accent) {
+                                                        Text("${sniffedItems.size}", color = Color.White)
+                                                    }
+                                                }
+                                            }
+                                        ) {
+                                            Icon(Icons.Default.Radar, contentDescription = null, modifier = Modifier.size(15.dp))
+                                        }
+                                    },
+                                    label = { Text(if (isSniffingServer) "Sniffing..." else "Sniffer") }
+                                )
+
+                                FilterChip(
+                                    selected = desktopMode,
+                                    onClick = {
+                                        val next = !desktopMode
+                                        desktopMode = next
+                                        webViewRef?.let { wv ->
+                                            wv.settings.userAgentString = if (next) DESKTOP_CHROME_UA else defaultMobileUa
+                                            wv.settings.useWideViewPort = true
+                                            wv.settings.loadWithOverviewMode = true
+                                            if (currentUrl.isNotBlank()) wv.reload()
+                                        }
+                                    },
+                                    leadingIcon = { Icon(Icons.Default.DesktopWindows, contentDescription = null, modifier = Modifier.size(14.dp)) },
+                                    label = { Text(if (desktopMode) "Desktop" else "Mobile") }
+                                )
+
+                                FilterChip(
+                                    selected = useServerProxy,
+                                    onClick = {
+                                        val next = !useServerProxy
+                                        useServerProxy = next
+                                        if (currentUrl.isNotBlank()) loadTarget(currentUrl, forceProxy = next)
+                                    },
+                                    leadingIcon = { Icon(Icons.Default.Shield, contentDescription = null, modifier = Modifier.size(14.dp)) },
+                                    label = { Text(if (useServerProxy) "Proxy" else "Direct") }
+                                )
+                            }
                         }
                     }
 
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .horizontalScroll(rememberScrollState()),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        FilterChip(
-                            selected = desktopMode,
-                            onClick = {
-                                val next = !desktopMode
-                                desktopMode = next
-                                webViewRef?.let { wv ->
-                                    wv.settings.userAgentString = if (next) DESKTOP_CHROME_UA else defaultMobileUa
-                                    wv.settings.useWideViewPort = true
-                                    wv.settings.loadWithOverviewMode = true
-                                    if (currentUrl.isNotBlank()) {
-                                        wv.reload()
-                                    }
-                                }
-                            },
-                            leadingIcon = { Icon(Icons.Default.DesktopWindows, contentDescription = null, modifier = Modifier.size(16.dp)) },
-                            label = { Text(if (desktopMode) "Desktop UA" else "Mobile Chrome") }
+                    if (isLoadingPage && pageLoadProgress in 1..99) {
+                        LinearProgressIndicator(
+                            progress = { pageLoadProgress / 100f },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(2.dp),
+                            color = palette.accent,
+                            trackColor = Color.Transparent
                         )
-
-                        FilterChip(
-                            selected = useServerProxy,
-                            onClick = {
-                                val next = !useServerProxy
-                                useServerProxy = next
-                                if (currentUrl.isNotBlank()) loadTarget(currentUrl, forceProxy = next)
-                            },
-                            leadingIcon = { Icon(Icons.Default.Shield, contentDescription = null, modifier = Modifier.size(16.dp)) },
-                            label = { Text(if (useServerProxy) "Proxy Mode ON" else "Direct Mode") }
-                        )
-
-                        if (!windowState.isTwoPane) {
-                            AssistChip(
-                                onClick = {
-                                    if (currentUrl.isNotBlank()) {
-                                        if (AV01Resolver.isAV01Url(currentUrl)) resolveAV01DirectOnPhone(currentUrl)
-                                        else triggerServerSniff(currentUrl)
-                                    }
-                                    showSnifferSheet = true
-                                },
-                                leadingIcon = {
-                                    BadgedBox(
-                                        badge = {
-                                            if (sniffedItems.isNotEmpty()) {
-                                                Badge(containerColor = palette.accent) {
-                                                    Text("${sniffedItems.size}", color = androidx.compose.ui.graphics.Color.White)
-                                                }
-                                            }
-                                        }
-                                    ) {
-                                        Icon(Icons.Default.Radar, contentDescription = null, modifier = Modifier.size(16.dp))
-                                    }
-                                },
-                                label = { Text(if (isSniffingServer) "Sniffing..." else "Live Sniffer") }
-                            )
-                        }
-
-                        if (currentUrl.isNotBlank()) {
-                            AssistChip(
-                                onClick = {
-                                    scope.launch {
-                                        try {
-                                            RetrofitClient.getApi().addQueue(
-                                                QueueAddRequest(urls = listOf(currentUrl), format = formatQuality)
-                                            )
-                                            onRefreshQueue()
-                                            onShowMessage("Sent current page to download queue")
-                                        } catch (e: Exception) {
-                                            onShowMessage(e.message ?: "Failed")
-                                        }
-                                    }
-                                },
-                                leadingIcon = { Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(16.dp)) },
-                                label = { Text("Queue Page") }
-                            )
-                        }
                     }
                 }
             }
@@ -845,42 +1177,58 @@ fun InAppBrowserScreen(
                                             subtitle = "AV01 · ${picked.label}",
                                             thumbnailUrl = av.thumbnail,
                                             primaryUrl = picked.url,
-                                            fallbackUrl = RetrofitClient.browserStreamUrl(currentUrl, av.referer),
+                                            fallbackUrl = RetrofitClient.browserStreamUrl(currentUrl.ifBlank { "https://av01.media/jp/video/${av.videoId}" }, av.referer),
                                             kind = MediaKind.VIDEO,
                                             isHls = true,
                                             referer = av.referer,
                                             variants = av.variants,
                                             onSaveToPhone = {
                                                 phoneDownloadManager.saveHlsOrAV01ToPhone(
-                                                    url = currentUrl,
+                                                    url = currentUrl.ifBlank { "https://av01.media/jp/video/${av.videoId}" },
                                                     title = av.title,
                                                     formatPref = formatQuality,
                                                     channel = "AV01",
                                                     referer = av.referer
                                                 )
-                                                onShowMessage("Downloading M3U8 to Movies/KV Download/AV01...")
+                                                onShowMessage("Saving AV01 M3U8 privately inside KV Download...")
                                             }
                                         )
                                     )
-                                }
+                                },
+                                modifier = Modifier.weight(1f)
                             ) {
                                 Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(16.dp))
-                                Text("Play Fullscreen", modifier = Modifier.padding(start = 4.dp))
+                                Text("Play", modifier = Modifier.padding(start = 4.dp))
                             }
                             OutlinedButton(
                                 onClick = {
-                                    phoneDownloadManager.saveHlsOrAV01ToPhone(
-                                        url = currentUrl,
-                                        title = av.title,
-                                        formatPref = formatQuality,
-                                        channel = "AV01",
-                                        referer = av.referer
+                                    val picked = AV01Resolver.selectVariant(av.variants, formatQuality)
+                                    val canonical = currentUrl.ifBlank { "https://av01.media/jp/video/${av.videoId}" }
+                                    pendingDownload = PendingBrowserDownload(
+                                        label = av.title,
+                                        items = listOf(
+                                            SniffedMedia(
+                                                id = "av01:${av.videoId}",
+                                                url = picked.url,
+                                                type = "video",
+                                                format = "${picked.label} M3U8 HLS",
+                                                title = av.title,
+                                                thumbnail = av.thumbnail,
+                                                source = "av01_phone",
+                                                resolution = picked.label,
+                                                channel = "AV01",
+                                                isStream = true,
+                                                referer = av.referer,
+                                                variants = av.variants
+                                            )
+                                        ),
+                                        canonicalServerUrl = canonical
                                     )
-                                    onShowMessage("Saving AV01 M3U8 segments to phone storage...")
-                                }
+                                },
+                                modifier = Modifier.weight(1f)
                             ) {
-                                Icon(Icons.Default.PhoneAndroid, contentDescription = null, modifier = Modifier.size(16.dp))
-                                Text("Save M3U8", modifier = Modifier.padding(start = 4.dp))
+                                Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Text("Download", modifier = Modifier.padding(start = 4.dp))
                             }
                         }
                     }
@@ -896,10 +1244,47 @@ fun InAppBrowserScreen(
                     item {
                         Text("Quick Bookmarks & AV01 Extractor", style = MaterialTheme.typography.titleMedium, color = palette.textPrimary)
                         Text(
-                            "Paste any av01.media video URL directly in the bar above (even on ISP-blocked Wi-Fi) — M3U8 streams resolve automatically.",
+                            "Paste any av01.media URL or video ID below (works even on ISP-blocked Wi-Fi) — M3U8 streams resolve directly via CDN.",
                             style = MaterialTheme.typography.bodySmall,
                             color = palette.textSecondary
                         )
+                    }
+
+                    item {
+                        AstryxCard(emphasized = true, contentPadding = PaddingValues(12.dp)) {
+                            Text("AV01 Direct Video Extractor", style = MaterialTheme.typography.titleSmall, color = palette.accentText)
+                            OutlinedTextField(
+                                value = av01QuickInput,
+                                onValueChange = { av01QuickInput = it },
+                                modifier = Modifier.fillMaxWidth(),
+                                singleLine = true,
+                                placeholder = { Text("Paste av01.media/jp/video/... URL or video ID (e.g. 226601)") }
+                            )
+                            Button(
+                                onClick = {
+                                    val normalized = normalizeAv01QuickInput(av01QuickInput)
+                                    if (normalized == null) {
+                                        onShowMessage("Enter an av01.media video URL or numeric ID")
+                                    } else {
+                                        isResolvingQuickAv01 = true
+                                        addressInput = normalized
+                                        resolveAV01DirectOnPhone(normalized) { av ->
+                                            isResolvingQuickAv01 = false
+                                            onShowMessage("Resolved ${av.title} (${av.variants.size} M3U8 qualities)")
+                                        }
+                                    }
+                                },
+                                enabled = av01QuickInput.isNotBlank() && !isResolvingQuickAv01,
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                if (isResolvingQuickAv01) {
+                                    CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp, color = Color.White)
+                                } else {
+                                    Icon(Icons.Default.Radar, contentDescription = null, modifier = Modifier.size(16.dp))
+                                }
+                                Text(if (isResolvingQuickAv01) "Resolving CDN..." else "Extract AV01 M3U8", modifier = Modifier.padding(start = 6.dp))
+                            }
+                        }
                     }
 
                     val bookmarks = listOf(
@@ -937,16 +1322,52 @@ fun InAppBrowserScreen(
                     }
                 }
             } else {
-                Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+                val showRecoveryOverlay = pageErrorText != null || pageLoadTimedOut
+                val showLoadingOverlay = isLoadingPage && !pageCommitted && !showRecoveryOverlay
+                val isAv01Site = currentUrl.contains("av01", ignoreCase = true)
+
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
+                        .background(palette.surface)
+                ) {
+                    val bgArgb = palette.surface.toArgb()
                     AndroidView(
                         modifier = Modifier.fillMaxSize(),
                         factory = { ctx ->
                             configureWebView(
                                 WebView(ctx),
+                                backgroundColorArgb = bgArgb,
                                 desktopMode = desktopMode,
+                                dohFallbackHosts = dohFallbackHosts,
                                 onInitMobileUa = { defaultMobileUa = it },
+                                onProgressChanged = { prog ->
+                                    pageLoadProgress = prog
+                                    if (prog >= 85) isLoadingPage = false
+                                },
+                                onPageCommitVisible = {
+                                    pageCommitted = true
+                                    isLoadingPage = false
+                                    pageLoadTimedOut = false
+                                    pageErrorText = null
+                                },
+                                onReceivedMainError = { msg ->
+                                    isLoadingPage = false
+                                    pageErrorText = msg
+                                },
+                                onEnterCustomFullscreen = { view, callback ->
+                                    customFullscreenView = view
+                                    customFullscreenCallback = callback
+                                },
+                                onExitCustomFullscreen = {
+                                    customFullscreenView = null
+                                    customFullscreenCallback = null
+                                },
                                 onPageStarted = { pageUrl ->
                                     isLoadingPage = true
+                                    pageErrorText = null
+                                    pageLoadTimedOut = false
                                     if (!pageUrl.contains("/api/browser/proxy")) {
                                         currentUrl = pageUrl
                                         addressInput = pageUrl
@@ -968,6 +1389,8 @@ fun InAppBrowserScreen(
                                 },
                                 onPageFinished = { view ->
                                     isLoadingPage = false
+                                    pageLoadProgress = 100
+                                    pageCommitted = true
                                     canGoBack = view.canGoBack()
                                     canGoForward = view.canGoForward()
                                     view.title?.let { t ->
@@ -990,14 +1413,170 @@ fun InAppBrowserScreen(
                         }
                     )
 
-                    if (isLoadingPage) {
-                        CircularProgressIndicator(
+                    if (showLoadingOverlay) {
+                        Box(
                             modifier = Modifier
-                                .align(Alignment.TopEnd)
-                                .padding(12.dp)
-                                .size(22.dp),
-                            strokeWidth = 2.5.dp,
-                            color = palette.accent
+                                .fillMaxSize()
+                                .background(palette.body.copy(alpha = 0.96f))
+                                .padding(20.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            AstryxCard(emphasized = true, modifier = Modifier.fillMaxWidth()) {
+                                Column(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                                ) {
+                                    CircularProgressIndicator(color = palette.accent)
+                                    Text(
+                                        text = "Loading ${Uri.parse(currentUrl).host ?: currentUrl}...",
+                                        style = MaterialTheme.typography.titleSmall,
+                                        color = palette.textPrimary,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    Text(
+                                        text = if (pageLoadProgress in 1..99) {
+                                            "Connecting (${pageLoadProgress}%) · ${if (useServerProxy) "Server Proxy" else "Direct DoH"}"
+                                        } else {
+                                            "Connecting via ${if (useServerProxy) "Server Proxy" else "Direct Mode"}..."
+                                        },
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = palette.textSecondary
+                                    )
+                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        OutlinedButton(
+                                            onClick = {
+                                                val next = !useServerProxy
+                                                useServerProxy = next
+                                                loadTarget(currentUrl, forceProxy = next)
+                                            }
+                                        ) {
+                                            Text(if (useServerProxy) "Try Direct Mode" else "Try Proxy Mode")
+                                        }
+                                        OutlinedButton(
+                                            onClick = {
+                                                webViewRef?.stopLoading()
+                                                isLoadingPage = false
+                                                pageLoadTimedOut = true
+                                            }
+                                        ) {
+                                            Text("Cancel")
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    if (showRecoveryOverlay) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .background(palette.body)
+                                .verticalScroll(rememberScrollState())
+                                .padding(16.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            AstryxCard(emphasized = true, modifier = Modifier.fillMaxWidth()) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                ) {
+                                    Icon(Icons.Default.WifiOff, contentDescription = null, tint = palette.warning, modifier = Modifier.size(28.dp))
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = if (pageLoadTimedOut) "Site timed out or ISP-blocked" else "Page could not load",
+                                            style = MaterialTheme.typography.titleMedium,
+                                            color = palette.textPrimary
+                                        )
+                                        Text(
+                                            text = pageErrorText ?: "No response within 12s from ${Uri.parse(currentUrl).host ?: currentUrl}. Your ISP may block HTTPS/TLS directly.",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = palette.textSecondary
+                                        )
+                                    }
+                                }
+
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Button(
+                                        onClick = { loadTarget(currentUrl, forceProxy = useServerProxy) },
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
+                                        Text("Retry", modifier = Modifier.padding(start = 4.dp))
+                                    }
+                                    OutlinedButton(
+                                        onClick = {
+                                            val next = !useServerProxy
+                                            useServerProxy = next
+                                            loadTarget(currentUrl, forceProxy = next)
+                                        },
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        Icon(Icons.Default.Shield, contentDescription = null, modifier = Modifier.size(16.dp))
+                                        Text(if (useServerProxy) "Direct Mode" else "Server Proxy", modifier = Modifier.padding(start = 4.dp))
+                                    }
+                                }
+
+                                if (isAv01Site) {
+                                    HorizontalDivider(color = palette.borderSubtle)
+                                    Text(
+                                        text = "AV01 CDN Extractor (bypasses av01.media HTML block)",
+                                        style = MaterialTheme.typography.titleSmall,
+                                        color = palette.accentText
+                                    )
+                                    Text(
+                                        text = "When your ISP blocks av01.media web pages, paste any AV01 video URL or numeric ID below to stream & download M3U8 directly from iw01.xyz CDN.",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = palette.textSecondary
+                                    )
+                                    OutlinedTextField(
+                                        value = av01QuickInput,
+                                        onValueChange = { av01QuickInput = it },
+                                        modifier = Modifier.fillMaxWidth(),
+                                        singleLine = true,
+                                        placeholder = { Text("av01.media/jp/video/226601 or 226601") }
+                                    )
+                                    Button(
+                                        onClick = {
+                                            val candidate = normalizeAv01QuickInput(av01QuickInput)
+                                                ?: normalizeAv01QuickInput(currentUrl)
+                                            if (candidate == null) {
+                                                onShowMessage("Paste an av01.media video URL or numeric ID")
+                                            } else {
+                                                isResolvingQuickAv01 = true
+                                                resolveAV01DirectOnPhone(candidate) { av ->
+                                                    isResolvingQuickAv01 = false
+                                                    pageErrorText = null
+                                                    pageLoadTimedOut = false
+                                                    onShowMessage("Resolved ${av.title} — tap Play or Download above")
+                                                }
+                                            }
+                                        },
+                                        enabled = !isResolvingQuickAv01 && (av01QuickInput.isNotBlank() || AV01Resolver.isAV01Url(currentUrl)),
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Icon(Icons.Default.Radar, contentDescription = null, modifier = Modifier.size(16.dp))
+                                        Text("Extract AV01 Video Now", modifier = Modifier.padding(start = 6.dp))
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    if (customFullscreenView != null) {
+                        AndroidView(
+                            factory = { customFullscreenView!! },
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .background(Color.Black),
+                            onRelease = {
+                                customFullscreenCallback?.onCustomViewHidden()
+                            }
                         )
                     }
                 }
@@ -1036,13 +1615,127 @@ fun InAppBrowserScreen(
             SnifferPanelContent(compactSheet = true)
         }
     }
+
+    // Unified Destination Chooser: NAS (Server) vs This Phone (Private App Vault)
+    pendingDownload?.let { req ->
+        ModalBottomSheet(
+            onDismissRequest = { pendingDownload = null },
+            containerColor = palette.surface
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp)
+                    .padding(bottom = 24.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Text(
+                    text = "Choose Download Destination",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = palette.textPrimary
+                )
+                Text(
+                    text = req.label,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = palette.textSecondary,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    listOf("highest" to "Best Quality", "1080p" to "1080p", "720p" to "720p", "audio" to "MP3 Audio").forEach { (q, lbl) ->
+                        FilterChip(
+                            selected = formatQuality == q,
+                            onClick = { formatQuality = q },
+                            label = { Text(lbl) }
+                        )
+                    }
+                }
+
+                AstryxCard(
+                    emphasized = true,
+                    onClick = { executePendingDownloadToNas(req) },
+                    contentPadding = PaddingValues(14.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.CloudUpload,
+                            contentDescription = null,
+                            tint = palette.accent,
+                            modifier = Modifier.size(28.dp)
+                        )
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "NAS (Server)",
+                                style = MaterialTheme.typography.titleSmall,
+                                color = palette.textPrimary
+                            )
+                            Text(
+                                text = "Queue download on ${RetrofitClient.getBaseUrl().removePrefix("https://").removePrefix("http://")} with yt-dlp & folder organization",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = palette.textSecondary
+                            )
+                        }
+                        AstryxStatusBadge("NAS", AstryxTone.Accent)
+                    }
+                }
+
+                AstryxCard(
+                    onClick = { executePendingDownloadToPhone(req) },
+                    contentPadding = PaddingValues(14.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Lock,
+                            contentDescription = null,
+                            tint = palette.success,
+                            modifier = Modifier.size(28.dp)
+                        )
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Phone (Private Vault)",
+                                style = MaterialTheme.typography.titleSmall,
+                                color = palette.textPrimary
+                            )
+                            Text(
+                                text = "Save directly inside KV Download only — hidden from Gallery and other apps",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = palette.textSecondary
+                            )
+                        }
+                        AstryxStatusBadge("PRIVATE", AstryxTone.Success)
+                    }
+                }
+            }
+        }
+    }
 }
 
 @SuppressLint("SetJavaScriptEnabled")
 private fun configureWebView(
     webView: WebView,
+    backgroundColorArgb: Int,
     desktopMode: Boolean,
+    dohFallbackHosts: MutableSet<String>,
     onInitMobileUa: (String) -> Unit,
+    onProgressChanged: (Int) -> Unit,
+    onPageCommitVisible: () -> Unit,
+    onReceivedMainError: (String) -> Unit,
+    onEnterCustomFullscreen: (View, WebChromeClient.CustomViewCallback?) -> Unit,
+    onExitCustomFullscreen: () -> Unit,
     onPageStarted: (String) -> Unit,
     onVisitedUrl: (WebView, String) -> Unit,
     onPageFinished: (WebView) -> Unit,
@@ -1051,14 +1744,20 @@ private fun configureWebView(
     CookieManager.getInstance().setAcceptCookie(true)
     CookieManager.getInstance().setAcceptThirdPartyCookies(webView, true)
 
+    webView.setBackgroundColor(backgroundColorArgb)
+    webView.setLayerType(View.LAYER_TYPE_HARDWARE, null)
+
     webView.settings.apply {
         javaScriptEnabled = true
         domStorageEnabled = true
+        databaseEnabled = true
+        javaScriptCanOpenWindowsAutomatically = true
+        setSupportMultipleWindows(false)
+        cacheMode = WebSettings.LOAD_DEFAULT
         mediaPlaybackRequiresUserGesture = false
         mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
         loadWithOverviewMode = true
         useWideViewPort = true
-        // Remove "; wv" token so Google, YouTube, and TikTok treat this as standard Chrome
         val cleanMobileUa = userAgentString.replace("; wv)", ")").replace("; wv", "")
         onInitMobileUa(cleanMobileUa)
         userAgentString = if (desktopMode) DESKTOP_CHROME_UA else cleanMobileUa
@@ -1099,7 +1798,26 @@ private fun configureWebView(
 
     val streamInterceptRe = Regex("""\.(m3u8|mpd|mp4|webm|m4a|mp3|aac|flac)(\?|$)""", RegexOption.IGNORE_CASE)
 
-    webView.webChromeClient = WebChromeClient()
+    webView.webChromeClient = object : WebChromeClient() {
+        override fun onProgressChanged(view: WebView?, newProgress: Int) {
+            onProgressChanged(newProgress)
+        }
+
+        override fun onShowCustomView(view: View?, callback: CustomViewCallback?) {
+            if (view != null) {
+                view.layoutParams = FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.MATCH_PARENT
+                )
+                onEnterCustomFullscreen(view, callback)
+            }
+        }
+
+        override fun onHideCustomView() {
+            onExitCustomFullscreen()
+        }
+    }
+
     webView.webViewClient = object : WebViewClient() {
         override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
             val safe = resolveSafeWebNavigationUrl(request?.url?.toString())
@@ -1117,6 +1835,25 @@ private fun configureWebView(
             super.doUpdateVisitedHistory(view, url, isReload)
             if (view != null && url != null) {
                 onVisitedUrl(view, url)
+            }
+        }
+
+        override fun onPageCommitVisible(view: WebView?, url: String?) {
+            super.onPageCommitVisible(view, url)
+            onPageCommitVisible()
+        }
+
+        override fun onReceivedError(view: WebView?, request: WebResourceRequest?, error: WebResourceError?) {
+            super.onReceivedError(view, request, error)
+            if (request?.isForMainFrame == true) {
+                val host = request.url?.host?.lowercase()
+                val code = error?.errorCode ?: -1
+                if (code == ERROR_HOST_LOOKUP && !host.isNullOrBlank() && dohFallbackHosts.add(host)) {
+                    view?.post { view.loadUrl(request.url.toString()) }
+                    return
+                }
+                val desc = error?.description?.toString()?.takeIf { it.isNotBlank() } ?: "Connection error"
+                onReceivedMainError("$desc (code $code)")
             }
         }
 
@@ -1145,11 +1882,47 @@ private fun configureWebView(
                         )
                     }
                 }
+
+                // DoH fallback fetch for ISP DNS-blocked hosts
+                val host = request.url?.host?.lowercase()
+                if (!host.isNullOrBlank() && dohFallbackHosts.contains(host) && request.method.equals("GET", ignoreCase = true)) {
+                    try {
+                        val client = RetrofitClient.okHttpClient.newBuilder()
+                            .callTimeout(8, TimeUnit.SECONDS)
+                            .connectTimeout(6, TimeUnit.SECONDS)
+                            .readTimeout(6, TimeUnit.SECONDS)
+                            .build()
+                        val b = Request.Builder().url(reqUrl)
+                        request.requestHeaders?.forEach { (k, v) ->
+                            if (!k.equals("Host", ignoreCase = true)) b.header(k, v)
+                        }
+                        runCatching { CookieManager.getInstance().getCookie(reqUrl) }.getOrNull()?.let { c ->
+                            if (c.isNotBlank()) b.header("Cookie", c)
+                        }
+                        client.newCall(b.build()).execute().use { resp ->
+                            val rawCt = resp.header("Content-Type") ?: "text/html; charset=utf-8"
+                            val mime = rawCt.substringBefore(';').trim().ifBlank { "text/html" }
+                            val charset = Regex("""charset=([^;\s]+)""", RegexOption.IGNORE_CASE)
+                                .find(rawCt)?.groupValues?.getOrNull(1) ?: "UTF-8"
+                            val bytes = resp.body?.bytes() ?: ByteArray(0)
+                            val statusCode = resp.code.takeIf { it in 100..599 } ?: 200
+                            return WebResourceResponse(
+                                mime,
+                                charset,
+                                statusCode,
+                                resp.message.ifBlank { "OK" },
+                                emptyMap(),
+                                ByteArrayInputStream(bytes)
+                            )
+                        }
+                    } catch (_: Exception) {
+                    }
+                }
             }
             return super.shouldInterceptRequest(view, request)
         }
 
-        override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
+        override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
             if (url != null) onPageStarted(url)
         }
 

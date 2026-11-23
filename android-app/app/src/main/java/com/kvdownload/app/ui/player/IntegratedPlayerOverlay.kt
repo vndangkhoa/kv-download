@@ -4,8 +4,7 @@ import android.app.PictureInPictureParams
 import android.content.pm.ActivityInfo
 import android.os.Build
 import android.util.Rational
-import android.view.ViewGroup
-import android.widget.FrameLayout
+import android.view.LayoutInflater
 import androidx.activity.compose.BackHandler
 import androidx.annotation.OptIn
 import androidx.compose.animation.AnimatedVisibility
@@ -99,6 +98,7 @@ import androidx.core.view.WindowInsetsControllerCompat
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.ui.PlayerView
 import coil.compose.AsyncImage
+import com.kvdownload.app.R
 import com.kvdownload.app.player.AppPlayerController
 import com.kvdownload.app.player.MediaKind
 import com.kvdownload.app.player.MediaPlayRequest
@@ -291,28 +291,29 @@ fun IntegratedPlayerOverlay(
             } else {
                 AndroidView(
                     factory = { ctx ->
-                        PlayerView(ctx).apply {
+                        (LayoutInflater.from(ctx).inflate(R.layout.view_kv_player, null, false) as PlayerView).apply {
                             player = controller.exoPlayer
-                            useController = false
-                            keepScreenOn = true
                             this.resizeMode = resizeMode
-                            layoutParams = FrameLayout.LayoutParams(
-                                ViewGroup.LayoutParams.MATCH_PARENT,
-                                ViewGroup.LayoutParams.MATCH_PARENT
-                            )
                         }
                     },
                     update = { view ->
-                        view.player = controller.exoPlayer
+                        if (view.player !== controller.exoPlayer) {
+                            view.player = controller.exoPlayer
+                        }
                         if (view.resizeMode != resizeMode) {
                             view.resizeMode = resizeMode
+                        }
+                    },
+                    onRelease = { view ->
+                        if (view.player === controller.exoPlayer) {
+                            view.player = null
                         }
                     },
                     modifier = Modifier.fillMaxSize()
                 )
             }
 
-            if (isBuffering && errorMsg == null && !isInPipMode) {
+            if (isBuffering && errorMsg == null && !isInPipMode && !(showOverlayControls && (showControls || isEnded))) {
                 CircularProgressIndicator(
                     modifier = Modifier.align(Alignment.Center),
                     color = palette.accent
