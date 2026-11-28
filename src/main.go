@@ -64,6 +64,8 @@ func main() {
 	router.Post("/api/gallery/delete-multiple", media.GalleryDeleteMultipleHandler)
 	router.Get("/api/settings/storage", media.GetStorageSettingHandler)
 	router.Post("/api/settings/storage", media.SetStorageSettingHandler)
+	router.Get("/api/settings/performance", media.GetPerformanceSettingsHandler)
+	router.Post("/api/settings/performance", media.SetPerformanceSettingsHandler)
 	router.Get("/download/zip", media.DownloadAllZip)
 	router.Get("/download", media.ServeMedia)
 	router.Head("/download", media.ServeMedia)

@@ -27,7 +27,7 @@ RUN GOOS=$TARGETOS GOARCH=$TARGETARCH go build -o kv-download ./src
 FROM --platform=$TARGETPLATFORM python:3.13.7-alpine3.22
 
 ARG TARGETARCH
-ARG IMAGE_TAG="1.0.50"
+ARG IMAGE_TAG="1.0.52"
 ENV APP_VERSION=$IMAGE_TAG
 ENV CHROMIUM_BIN="/usr/bin/chromium-browser"
 

@@ -144,11 +144,26 @@ func ScanMediaApi(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+	resp := map[string]interface{}{
 		"scan":   info,
 		"rawUrl": url,
 		"error":  ytdlpErrorMessage,
-	})
+	}
+	if info != nil {
+		resp["title"] = info.Title
+		resp["count"] = info.Count
+		resp["totalCount"] = info.TotalCount
+		resp["isPlaylist"] = info.IsPlaylist
+		resp["entries"] = info.Entries
+		resp["thumbnail"] = info.Thumbnail
+		resp["channel"] = info.Channel
+		resp["uploader"] = info.Uploader
+		resp["hasMore"] = info.HasMore
+		resp["nextStart"] = info.NextStart
+		resp["formats"] = info.Formats
+		resp["infoJsonPath"] = info.InfoJSONPath
+	}
+	_ = json.NewEncoder(w).Encode(resp)
 }
 
 // StreamScanMediaApi streams scanned entries live over SSE
@@ -307,9 +322,17 @@ func downloadMedia(url string, requestArgs map[string]string) (string, string, e
 		}
 	}
 
+	perf := GetPerformanceSettings()
+	effectiveRateLimit := resolveEffectiveRateLimit(requestArgs["--limit-rate"])
+	rateLimitBps := parseRateLimitBytesPerSec(effectiveRateLimit)
+	if effectiveRateLimit != "" && requestArgs["--limit-rate"] == "" {
+		args = append(args, "--limit-rate", effectiveRateLimit)
+	}
+
 	targetURL := url
 	effReferer := requestArgs["--referer"]
 	isAV01 := false
+	avTitle := ""
 	if _, _, ok := ParseAV01VideoURL(targetURL); ok {
 		avCtx, avCancel := context.WithTimeout(context.Background(), 20*time.Second)
 		av, avErr := ResolveAV01Video(avCtx, targetURL)
@@ -320,6 +343,7 @@ func downloadMedia(url string, requestArgs map[string]string) (string, string, e
 				targetURL = chosen.URL
 				effReferer = av.Referer
 				isAV01 = true
+				avTitle = av.Title
 				safeStem := sanitizeCaptionFilename(av.Title)
 				if safeStem != "" {
 					for i := 0; i < len(args)-1; i++ {
@@ -331,6 +355,62 @@ func downloadMedia(url string, requestArgs map[string]string) (string, string, e
 					}
 				}
 			}
+		}
+	} else if _, _, videoIdx, ok := ParseXStatusURL(targetURL); ok {
+		xCtx, xCancel := context.WithTimeout(context.Background(), 15*time.Second)
+		xTweet, xErr := ResolveXVideo(xCtx, targetURL)
+		xCancel()
+		if xErr == nil && xTweet != nil {
+			if vid, okVid := SelectXVideo(xTweet, videoIdx); okVid && len(vid.Variants) > 0 {
+				chosen := SelectXVariant(vid.Variants, requestArgs["--format"])
+				if chosen.URL != "" {
+					safeStem := sanitizeCaptionFilename(vid.Title)
+					if safeStem == "" {
+						safeStem = xTweet.TweetID
+					}
+					if safeStem == "" {
+						safeStem = id
+					}
+					if !chosen.IsHLS {
+						if err := os.MkdirAll(getMediaDirectory(id), 0o755); err == nil {
+							outPath := filepath.Join(getMediaDirectory(id), safeStem+".mp4")
+							dlErr := DownloadDirectParallel(context.Background(), DirectDownloadOptions{
+								URL:          chosen.URL,
+								Referer:      xTwitterReferer,
+								OutputPath:   outPath,
+								Connections:  perf.ConnectionsPerTask,
+								RateLimitBps: rateLimitBps,
+							})
+							if dlErr == nil {
+								thumb := vid.Thumbnail
+								if thumb == "" {
+									thumb = xTweet.Thumbnail
+								}
+								if thumb != "" {
+									_ = downloadThumbnailToFile(context.Background(), thumb, filepath.Join(getMediaDirectory(id), safeStem+".jpg"))
+								}
+								moveJsonFiles(id)
+								_ = organizeDownloadedFiles(id)
+								return id, "", nil
+							}
+							log.Warn().Msgf("[X] Direct MP4 download fallback to yt-dlp for %s: %v", targetURL, dlErr)
+						}
+					}
+					targetURL = chosen.URL
+					effReferer = xTwitterReferer
+					isAV01 = true
+					avTitle = vid.Title
+					for i := 0; i < len(args)-1; i++ {
+						if args[i] == "--output" {
+							args[i+1] = getMediaDirectory(id) + safeStem + ".%(ext)s"
+						} else if args[i] == "--format" {
+							args[i+1] = "bv*+ba/b/best"
+						}
+					}
+				}
+			}
+		} else if xErr != nil {
+			log.Warn().Msgf("[X] Native resolve failed for %s, falling back to yt-dlp: %v", targetURL, xErr)
 		}
 	} else if IsFacebookShareURL(targetURL) {
 		if resolved := resolveFbShareURL(targetURL, fbCookieHeader("", targetURL)); resolved != "" && !IsFacebookShareURL(resolved) {
@@ -346,10 +426,40 @@ func downloadMedia(url string, requestArgs map[string]string) (string, string, e
 			args = append(args, "--add-header", "Origin:"+effOrigin)
 		}
 	}
-	isStreamURL := isHLSOrDashURL(targetURL)
-	if isStreamURL {
-		args = append(args, "--concurrent-fragments", "8")
+
+	if perf.NativeHLS && isHLSURL(targetURL) {
+		if err := os.MkdirAll(getMediaDirectory(id), 0o755); err == nil {
+			stem := sanitizeCaptionFilename(avTitle)
+			if stem == "" {
+				stem = id
+			}
+			_, hlsErr := DownloadHLSNative(context.Background(), HLSDownloadOptions{
+				URL:          targetURL,
+				Referer:      effReferer,
+				Cookies:      resolveEffectiveCookiesString(""),
+				TargetDir:    getMediaDirectory(id),
+				OutputStem:   stem,
+				Workers:      perf.ConnectionsPerTask,
+				RateLimitBps: rateLimitBps,
+			})
+			if hlsErr == nil {
+				moveJsonFiles(id)
+				_ = organizeDownloadedFiles(id)
+				return id, "", nil
+			}
+			log.Warn().Msgf("[NativeHLS] direct fetch fallback to yt-dlp for %s: %v", targetURL, hlsErr)
+		}
 	}
+
+	isStreamURL := isHLSOrDashURL(targetURL)
+	ytdlpFragments := clampInt(perf.ConnectionsPerTask, 8, 24)
+	if _, has := requestArgs["--concurrent-fragments"]; !has {
+		args = append(args, "--concurrent-fragments", strconv.Itoa(ytdlpFragments))
+	}
+	if _, has := requestArgs["--buffer-size"]; !has {
+		args = append(args, "--buffer-size", "64K")
+	}
+	args = append(args, "--retries", "10", "--fragment-retries", "10")
 
 	infoJSONPath := ""
 	if !isAV01 {

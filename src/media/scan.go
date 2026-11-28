@@ -159,6 +159,57 @@ func ScanUrlWithPagination(inputUrl string, cookies string, start int, limit int
 		}
 	}
 
+	if _, _, videoIdx, ok := ParseXStatusURL(url); ok {
+		xCtx, xCancel := context.WithTimeout(context.Background(), 15*time.Second)
+		resolved, xErr := ResolveXVideo(xCtx, url)
+		xCancel()
+		if xErr == nil && resolved != nil && len(resolved.Videos) > 0 {
+			videosToList := resolved.Videos
+			if videoIdx > 0 {
+				if chosenVid, okVid := SelectXVideo(resolved, videoIdx); okVid {
+					videosToList = []XVideoItem{chosenVid}
+				}
+			}
+			entries := make([]ScanEntry, 0, len(videosToList))
+			var topFormats []FormatChoice
+			for i, vid := range videosToList {
+				choices := buildXFormatChoices(vid.Variants)
+				if i == 0 {
+					topFormats = choices
+				}
+				entryURL := resolved.CanonicalURL
+				if len(resolved.Videos) > 1 && videoIdx == 0 {
+					entryURL = fmt.Sprintf("%s/video/%d", strings.TrimSuffix(resolved.CanonicalURL, "/"), i+1)
+				}
+				thumb := vid.Thumbnail
+				if thumb == "" {
+					thumb = resolved.Thumbnail
+				}
+				entries = append(entries, ScanEntry{
+					Id:        vid.ID,
+					Title:     vid.Title,
+					Url:       entryURL,
+					Thumbnail: thumb,
+					Duration:  vid.Duration,
+					Uploader:  resolved.AuthorName,
+					Channel:   resolved.Channel,
+					Formats:   choices,
+				})
+			}
+			return &ScanInfo{
+				Title:      resolved.Title,
+				Count:      len(entries),
+				TotalCount: len(entries),
+				IsPlaylist: len(entries) > 1,
+				Thumbnail:  resolved.Thumbnail,
+				Channel:    resolved.Channel,
+				Uploader:   resolved.AuthorName,
+				Formats:    topFormats,
+				Entries:    entries,
+			}, "", nil
+		}
+	}
+
 	log.Info().Msgf("Scanning %s (batch: %d:%d, hasCustomCookies: %t)", url, start, start+limit-1, cookies != "")
 
 	// 1. Check with Anpan router for galleries, art posts, cloud files & digital libraries
@@ -623,6 +674,40 @@ func StreamScanUrl(ctx context.Context, inputUrl string, cookies string, onEntry
 				Uploader:  "AV01",
 				Formats:   choices,
 			}, 1)
+			return nil
+		}
+	}
+
+	if _, _, videoIdx, ok := ParseXStatusURL(cleanURL); ok {
+		if resolved, err := ResolveXVideo(ctx, cleanURL); err == nil && resolved != nil && len(resolved.Videos) > 0 {
+			videosToList := resolved.Videos
+			if videoIdx > 0 {
+				if chosenVid, okVid := SelectXVideo(resolved, videoIdx); okVid {
+					videosToList = []XVideoItem{chosenVid}
+				}
+			}
+			onMeta(resolved.Title, resolved.AuthorName, resolved.Channel, resolved.Thumbnail, len(videosToList))
+			for i, vid := range videosToList {
+				choices := buildXFormatChoices(vid.Variants)
+				entryURL := resolved.CanonicalURL
+				if len(resolved.Videos) > 1 && videoIdx == 0 {
+					entryURL = fmt.Sprintf("%s/video/%d", strings.TrimSuffix(resolved.CanonicalURL, "/"), i+1)
+				}
+				thumb := vid.Thumbnail
+				if thumb == "" {
+					thumb = resolved.Thumbnail
+				}
+				onEntry(ScanEntry{
+					Id:        vid.ID,
+					Title:     vid.Title,
+					Url:       entryURL,
+					Thumbnail: thumb,
+					Duration:  vid.Duration,
+					Uploader:  resolved.AuthorName,
+					Channel:   resolved.Channel,
+					Formats:   choices,
+				}, i+1)
+			}
 			return nil
 		}
 	}

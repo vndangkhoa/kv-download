@@ -207,6 +207,7 @@ data class ScanEntry(
 }
 
 data class ScanResponse(
+    val scan: ScanResponse? = null,
     val id: String? = null,
     val title: String? = null,
     val playlistTitle: String? = null,

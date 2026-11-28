@@ -273,6 +273,54 @@ func BrowserSniffHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// 0b. Check native X / Twitter resolver (bypasses guest syndication TweetTombstone blocks)
+	if _, _, videoIdx, ok := ParseXStatusURL(targetUrl); ok {
+		xCtx, xCancel := context.WithTimeout(r.Context(), 15*time.Second)
+		resolved, xErr := ResolveXVideo(xCtx, targetUrl)
+		xCancel()
+		if xErr != nil {
+			log.Warn().Msgf("[X] Native sniff resolve failed for %s: %v", targetUrl, xErr)
+		} else if resolved != nil && len(resolved.Videos) > 0 {
+			result.PageTitle = resolved.Title
+			videosToEmit := resolved.Videos
+			if videoIdx > 0 {
+				if chosenVid, okVid := SelectXVideo(resolved, videoIdx); okVid {
+					videosToEmit = []XVideoItem{chosenVid}
+				}
+			}
+			for _, vid := range videosToEmit {
+				thumb := vid.Thumbnail
+				if thumb == "" {
+					thumb = resolved.Thumbnail
+				}
+				durStr := formatDurationFloat(vid.Duration)
+				for _, v := range vid.Variants {
+					fmtLabel := v.Label + " MP4"
+					if v.IsHLS {
+						fmtLabel = "M3U8 HLS"
+					}
+					addItem(SniffedMediaItem{
+						Type:       "video",
+						Format:     fmtLabel,
+						Title:      fmt.Sprintf("%s (%s)", vid.Title, v.Label),
+						URL:        v.URL,
+						Thumbnail:  thumb,
+						Source:     "x_extractor",
+						Duration:   durStr,
+						Resolution: v.Label,
+						Channel:    resolved.Channel,
+						IsStream:   v.IsHLS,
+					})
+				}
+			}
+			if len(result.Items) > 0 {
+				result.TotalCount = len(result.Items)
+				_ = json.NewEncoder(w).Encode(result)
+				return
+			}
+		}
+	}
+
 	// 1. Check with Anpan Multi-source Engines (Archive, Booru, Cloud, Pixiv, Imgur)
 	ctx, cancel := context.WithTimeout(r.Context(), 12*time.Second)
 	defer cancel()
@@ -936,7 +984,7 @@ func isDirectMediaUrl(raw string) bool {
 	// Also treat known CDN / direct video URLs without extension as direct
 	// YouTube googlevideo, TikTok CDN (tiktokcdn, v19-webapp, tos-alisg), and generic mime params
 	l := strings.ToLower(raw)
-	if strings.Contains(l, "googlevideo.com/videoplayback") {
+	if strings.Contains(l, "googlevideo.com/videoplayback") || strings.Contains(l, "video.twimg.com") {
 		return true
 	}
 	if strings.Contains(l, "tiktokcdn") || strings.Contains(l, "v16-webapp") || strings.Contains(l, "v19-webapp") || strings.Contains(l, "/video/tos/") {
@@ -972,6 +1020,26 @@ func BrowserResolveHandler(w http.ResponseWriter, r *http.Request) {
 			"type": "direct",
 		})
 		return
+	}
+
+	if _, _, videoIdx, ok := ParseXStatusURL(targetUrl); ok {
+		xCtx, xCancel := context.WithTimeout(r.Context(), 15*time.Second)
+		resolved, xErr := ResolveXVideo(xCtx, targetUrl)
+		xCancel()
+		if xErr == nil && resolved != nil {
+			if vid, okVid := SelectXVideo(resolved, videoIdx); okVid && len(vid.Variants) > 0 {
+				chosen := SelectXVariant(vid.Variants, "highest")
+				if chosen.URL != "" {
+					w.Header().Set("Content-Type", "application/json")
+					w.Header().Set("Access-Control-Allow-Origin", "*")
+					_ = json.NewEncoder(w).Encode(map[string]string{
+						"url":  chosen.URL,
+						"type": "resolved",
+					})
+					return
+				}
+			}
+		}
 	}
 
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
@@ -1078,6 +1146,21 @@ func BrowserStreamHandler(w http.ResponseWriter, r *http.Request) {
 				targetUrl = chosen.URL
 				if customReferer == "" {
 					customReferer = resolved.Referer
+				}
+			}
+		}
+	} else if _, _, videoIdx, ok := ParseXStatusURL(targetUrl); ok {
+		xCtx, xCancel := context.WithTimeout(r.Context(), 15*time.Second)
+		resolved, xErr := ResolveXVideo(xCtx, targetUrl)
+		xCancel()
+		if xErr == nil && resolved != nil {
+			if vid, okVid := SelectXVideo(resolved, videoIdx); okVid && len(vid.Variants) > 0 {
+				chosen := SelectXVariant(vid.Variants, r.URL.Query().Get("format"))
+				if chosen.URL != "" {
+					targetUrl = chosen.URL
+					if customReferer == "" {
+						customReferer = resolved.Referer
+					}
 				}
 			}
 		}

@@ -18,21 +18,44 @@ func HasAria2c() bool {
 	return cmd.Run() == nil
 }
 
-// BuildYtDlpAria2Args returns yt-dlp downloader flags for multi-connection acceleration.
-func BuildYtDlpAria2Args(connections int) []string {
-	if !HasAria2c() {
-		return nil
-	}
+// FormatYtDlpAria2Args builds yt-dlp aria2c downloader arguments without probing PATH.
+func FormatYtDlpAria2Args(connections int, rateLimit string) []string {
 	c := connections
 	if c < 1 {
-		c = 8
+		c = 16
 	} else if c > 16 {
 		c = 16
 	}
+
+	dlArgs := fmt.Sprintf(
+		"aria2c:-x %d -s %d -k 1M -j %d --file-allocation=none --disk-cache=64M --max-tries=5 --retry-wait=1 --connect-timeout=10 --timeout=30 --summary-interval=1 --console-log-level=notice --auto-file-renaming=false",
+		c, c, c,
+	)
+
+	rl := strings.TrimSpace(rateLimit)
+	lowerRL := strings.ToLower(rl)
+	if rl != "" && lowerRL != "unlimited" && lowerRL != "0" && lowerRL != "none" && lowerRL != "max" {
+		dlArgs += " --max-download-limit=" + rl
+	}
+
 	return []string{
 		"--downloader", "aria2c",
-		"--downloader-args", fmt.Sprintf("aria2c:-x %d -s %d -k 1M -j %d", c, c, c),
+		"--downloader-args", dlArgs,
 	}
+}
+
+// BuildYtDlpAria2ArgsWithLimit returns yt-dlp downloader flags for multi-connection acceleration
+// with optional per-task bandwidth limit.
+func BuildYtDlpAria2ArgsWithLimit(connections int, rateLimit string) []string {
+	if !HasAria2c() {
+		return nil
+	}
+	return FormatYtDlpAria2Args(connections, rateLimit)
+}
+
+// BuildYtDlpAria2Args returns yt-dlp downloader flags for multi-connection acceleration.
+func BuildYtDlpAria2Args(connections int) []string {
+	return BuildYtDlpAria2ArgsWithLimit(connections, "")
 }
 
 // DownloadDirectFileAria downloads a single file using parallel chunks with aria2c.
@@ -43,8 +66,8 @@ func DownloadDirectFileAria(ctx context.Context, downloadURL, outputDir, filenam
 	c := connections
 	if c < 1 {
 		c = 16
-	} else if c > 32 {
-		c = 32
+	} else if c > 16 {
+		c = 16
 	}
 
 	args := []string{
@@ -53,10 +76,13 @@ func DownloadDirectFileAria(ctx context.Context, downloadURL, outputDir, filenam
 		"-s", strconv.Itoa(c),
 		"-k", "1M",
 		"-j", strconv.Itoa(c),
+		"--file-allocation=none",
+		"--disk-cache=64M",
 		"--connect-timeout=10",
 		"--timeout=30",
-		"--max-tries=3",
-		"--retry-wait=2",
+		"--max-tries=5",
+		"--retry-wait=1",
+		"--summary-interval=1",
 		"--auto-file-renaming=false",
 		"--allow-overwrite=true",
 	}

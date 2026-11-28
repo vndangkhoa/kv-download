@@ -15,6 +15,7 @@ import com.kvdownload.app.api.PhoneTransferState
 import com.kvdownload.app.api.RetrofitClient
 import com.kvdownload.app.api.SavedPhoneFile
 import com.kvdownload.app.api.SniffedMedia
+import com.kvdownload.app.api.XTwitterResolver
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -259,6 +260,17 @@ class PhoneDownloadManager(private val context: Context) {
         formatPref: String = "highest",
         group: String? = null
     ) {
+        if (XTwitterResolver.isXStatusUrl(mediaUrl)) {
+            saveXVideoToPhone(
+                url = mediaUrl,
+                title = title.ifBlank { null },
+                formatPref = formatPref,
+                channel = channel,
+                referer = referer
+            )
+            return
+        }
+
         if (AV01Resolver.isAV01Url(mediaUrl) || HlsSegmentDownloader.looksLikeHlsUrl(mediaUrl)) {
             saveHlsOrAV01ToPhone(
                 url = mediaUrl,
@@ -457,6 +469,207 @@ class PhoneDownloadManager(private val context: Context) {
                 )
             } finally {
                 tempFile?.delete()
+                activeJobs.remove(transferKey)
+            }
+        }
+        activeJobs[transferKey] = job
+    }
+
+    fun saveXVideoToPhone(
+        url: String,
+        title: String? = null,
+        formatPref: String = "highest",
+        channel: String? = null,
+        referer: String? = null
+    ) {
+        val transferKey = "x:${url.hashCode()}"
+        if (_transfers.value[transferKey]?.let { !it.isCompleted && it.error == null } == true) {
+            return
+        }
+
+        val initialTitle = title?.takeIf { it.isNotBlank() } ?: "X / Twitter Video"
+        updateTransfer(
+            PhoneTransferState(
+                key = transferKey,
+                title = initialTitle,
+                progress = 0f,
+                statusText = "Queued (X)..."
+            )
+        )
+        DownloadForegroundService.sync(context)
+
+        val job = scope.launch {
+            var partFile: File? = null
+            var hlsTempFile: File? = null
+            try {
+                transferSemaphore.withPermit {
+                    updateTransfer(
+                        PhoneTransferState(
+                            key = transferKey,
+                            title = initialTitle,
+                            progress = 0f,
+                            statusText = "Resolving X video..."
+                        )
+                    )
+
+                    val statusRef = XTwitterResolver.parseStatusUrl(url)
+                    val resolved = XTwitterResolver.resolve(url)
+                    val vid = XTwitterResolver.selectVideo(resolved, statusRef?.videoIndex ?: 0)
+                        ?: throw IllegalStateException("No video found in X / Twitter post")
+                    val picked = XTwitterResolver.selectVariant(vid.variants, formatPref)
+
+                    val displayTitle = title?.takeIf { it.isNotBlank() && !it.startsWith("http") }
+                        ?: vid.title.ifBlank { resolved.title }
+                    val finalChannel = channel?.takeIf { it.isNotBlank() && !it.startsWith("http") }
+                        ?: resolved.channel.ifBlank { "X / Twitter" }
+                    val effReferer = referer?.takeIf { it.isNotBlank() } ?: resolved.referer
+                    val subfolder = buildRelativeSubfolder(finalChannel, "X Videos")
+                    val recordId = UUID.randomUUID().toString()
+
+                    if (HlsSegmentDownloader.looksLikeHlsUrl(picked.url)) {
+                        val downloaded = HlsSegmentDownloader.downloadHlsToTempFile(
+                            context = context,
+                            playlistUrl = picked.url,
+                            referer = effReferer,
+                            preferredFormat = formatPref,
+                            qualityLabel = picked.label
+                        ) { progress, bytesNow, speedBps, status ->
+                            val label = if (speedBps > 0L) "$status · ${formatSpeed(speedBps)}" else status
+                            updateTransfer(
+                                PhoneTransferState(
+                                    key = transferKey,
+                                    title = displayTitle,
+                                    progress = progress,
+                                    bytesDownloaded = bytesNow,
+                                    totalBytes = -1L,
+                                    statusText = label,
+                                    speedBytesPerSec = speedBps
+                                )
+                            )
+                        }
+                        hlsTempFile = downloaded.file
+                        val baseName = sanitizeFileComponent(displayTitle, "kv_x_${resolved.tweetId}")
+                        val finalFileName = ensureExtension(baseName.substringBeforeLast('.', baseName), downloaded.extension)
+                        val vaultResult = moveFileToPrivateVault(
+                            srcFile = downloaded.file,
+                            fileName = finalFileName,
+                            category = "video",
+                            subfolder = subfolder
+                        )
+                        hlsTempFile = null
+                        val thumbUri = extractPrivateVideoThumbnail(vaultResult.file, recordId)
+                        addSavedRecord(
+                            SavedPhoneFile(
+                                id = recordId,
+                                serverTaskId = null,
+                                serverPath = null,
+                                fileName = finalFileName,
+                                title = displayTitle,
+                                channel = finalChannel,
+                                group = "X Videos",
+                                category = "video",
+                                mimeType = downloaded.mimeType,
+                                sizeBytes = vaultResult.bytesWritten,
+                                savedAt = System.currentTimeMillis(),
+                                contentUri = vaultResult.uri.toString(),
+                                relativePath = vaultResult.displayPath,
+                                thumbnailUri = thumbUri
+                            )
+                        )
+                        updateTransfer(
+                            PhoneTransferState(
+                                key = transferKey,
+                                title = displayTitle,
+                                progress = 1f,
+                                bytesDownloaded = vaultResult.bytesWritten,
+                                totalBytes = vaultResult.bytesWritten,
+                                isCompleted = true,
+                                savedUri = vaultResult.uri.toString(),
+                                relativePath = vaultResult.displayPath,
+                                statusText = "Saved privately in app"
+                            )
+                        )
+                        return@withPermit
+                    }
+
+                    val directPart = File(tempPartsRoot, "${UUID.randomUUID()}.part")
+                    partFile = directPart
+                    ParallelRangeDownloader.downloadDirectToPartFile(
+                        sourceUrl = picked.url,
+                        fallbackSourceUrl = RetrofitClient.browserStreamUrl(url, effReferer),
+                        referer = effReferer,
+                        partFile = directPart
+                    ) { downloaded, total, speedBps ->
+                        val pct = if (total > 0L) (downloaded.toFloat() / total.toFloat()).coerceIn(0f, 1f) else 0f
+                        updateTransfer(
+                            PhoneTransferState(
+                                key = transferKey,
+                                title = displayTitle,
+                                progress = pct,
+                                bytesDownloaded = downloaded,
+                                totalBytes = total,
+                                statusText = formatTransferStatus(pct, downloaded, total, speedBps),
+                                speedBytesPerSec = speedBps
+                            )
+                        )
+                    }
+
+                    val baseName = sanitizeFileComponent(displayTitle, "kv_x_${resolved.tweetId}")
+                    val finalFileName = ensureExtension(baseName.substringBeforeLast('.', baseName), "mp4")
+                    val vaultResult = moveFileToPrivateVault(
+                        srcFile = directPart,
+                        fileName = finalFileName,
+                        category = "video",
+                        subfolder = subfolder
+                    )
+                    partFile = null
+                    val thumbUri = extractPrivateVideoThumbnail(vaultResult.file, recordId)
+                    addSavedRecord(
+                        SavedPhoneFile(
+                            id = recordId,
+                            serverTaskId = null,
+                            serverPath = null,
+                            fileName = finalFileName,
+                            title = displayTitle,
+                            channel = finalChannel,
+                            group = "X Videos",
+                            category = "video",
+                            mimeType = "video/mp4",
+                            sizeBytes = vaultResult.bytesWritten,
+                            savedAt = System.currentTimeMillis(),
+                            contentUri = vaultResult.uri.toString(),
+                            relativePath = vaultResult.displayPath,
+                            thumbnailUri = thumbUri
+                        )
+                    )
+                    updateTransfer(
+                        PhoneTransferState(
+                            key = transferKey,
+                            title = displayTitle,
+                            progress = 1f,
+                            bytesDownloaded = vaultResult.bytesWritten,
+                            totalBytes = vaultResult.bytesWritten,
+                            isCompleted = true,
+                            savedUri = vaultResult.uri.toString(),
+                            relativePath = vaultResult.displayPath,
+                            statusText = "Saved privately in app"
+                        )
+                    )
+                }
+            } catch (e: CancellationException) {
+                _transfers.update { it - transferKey }
+                throw e
+            } catch (e: Exception) {
+                updateTransfer(
+                    PhoneTransferState(
+                        key = transferKey,
+                        title = initialTitle,
+                        error = e.message ?: "Failed saving X video to phone"
+                    )
+                )
+            } finally {
+                partFile?.delete()
+                hlsTempFile?.delete()
                 activeJobs.remove(transferKey)
             }
         }

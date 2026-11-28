@@ -25,6 +25,7 @@ import androidx.media3.ui.AspectRatioFrameLayout
 import com.kvdownload.app.api.AV01Resolver
 import com.kvdownload.app.api.RetrofitClient
 import com.kvdownload.app.api.StreamVariant
+import com.kvdownload.app.api.XTwitterResolver
 import com.kvdownload.app.storage.HlsSegmentDownloader
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -192,7 +193,7 @@ class AppPlayerController(context: Context) {
                 val resumeMs = exoPlayer.currentPosition.coerceAtLeast(0L)
                 loadPlaybackUrl(
                     uriStr = fallback,
-                    forceHls = req.isHls || HlsSegmentDownloader.looksLikeHlsUrl(fallback),
+                    forceHls = shouldForceHls(fallback, req.isHls),
                     referer = req.referer,
                     extraHeaders = req.headers,
                     seekPositionMs = resumeMs
@@ -250,7 +251,7 @@ class AppPlayerController(context: Context) {
                                 _errorMessage.value = null
                                 loadPlaybackUrl(
                                     uriStr = fallback,
-                                    forceHls = req.isHls || HlsSegmentDownloader.looksLikeHlsUrl(fallback),
+                                    forceHls = shouldForceHls(fallback, req.isHls),
                                     referer = req.referer,
                                     extraHeaders = req.headers,
                                     seekPositionMs = posNow
@@ -340,10 +341,57 @@ class AppPlayerController(context: Context) {
             return
         }
 
+        if (XTwitterResolver.isXStatusUrl(request.primaryUrl) && request.variants.isEmpty()) {
+            _isBuffering.value = true
+            exoPlayer.stop()
+            resolveJob = scope.launch {
+                try {
+                    val statusRef = XTwitterResolver.parseStatusUrl(request.primaryUrl)
+                    val resolved = XTwitterResolver.resolve(request.primaryUrl)
+                    val vid = XTwitterResolver.selectVideo(resolved, statusRef?.videoIndex ?: 0)
+                        ?: throw IllegalStateException("No video found in X / Twitter post")
+                    val top = XTwitterResolver.selectVariant(vid.variants, "highest")
+                    val enriched = request.copy(
+                        title = if (request.title.startsWith("http") || request.title == "X / Twitter Video") vid.title else request.title,
+                        subtitle = request.subtitle ?: resolved.channel,
+                        thumbnailUrl = request.thumbnailUrl ?: vid.thumbnail ?: resolved.thumbnail,
+                        variants = vid.variants,
+                        referer = resolved.referer,
+                        isHls = HlsSegmentDownloader.looksLikeHlsUrl(top.url)
+                    )
+                    _currentRequest.value = enriched
+                    _selectedVariant.value = top
+                    loadPlaybackUrl(
+                        uriStr = top.url,
+                        forceHls = shouldForceHls(top.url, enriched.isHls),
+                        referer = resolved.referer,
+                        extraHeaders = request.headers,
+                        seekPositionMs = 0L
+                    )
+                } catch (e: Exception) {
+                    val fb = request.fallbackUrl
+                    if (!fb.isNullOrBlank()) {
+                        triedFallback = true
+                        loadPlaybackUrl(
+                            uriStr = fb,
+                            forceHls = shouldForceHls(fb, request.isHls),
+                            referer = request.referer ?: XTwitterResolver.REFERER,
+                            extraHeaders = request.headers,
+                            seekPositionMs = 0L
+                        )
+                    } else {
+                        _isBuffering.value = false
+                        _errorMessage.value = e.message ?: "Unable to resolve X video"
+                    }
+                }
+            }
+            return
+        }
+
         val targetUrl = initialVariant?.url ?: request.primaryUrl
         loadPlaybackUrl(
             uriStr = targetUrl,
-            forceHls = request.isHls || request.variants.isNotEmpty() || HlsSegmentDownloader.looksLikeHlsUrl(targetUrl),
+            forceHls = shouldForceHls(targetUrl, request.isHls),
             referer = request.referer,
             extraHeaders = request.headers,
             seekPositionMs = 0L
@@ -357,7 +405,7 @@ class AppPlayerController(context: Context) {
         val resumeMs = exoPlayer.currentPosition.coerceAtLeast(0L)
         loadPlaybackUrl(
             uriStr = variant.url,
-            forceHls = true,
+            forceHls = shouldForceHls(variant.url, req.isHls),
             referer = req.referer,
             extraHeaders = req.headers,
             seekPositionMs = resumeMs
@@ -376,11 +424,17 @@ class AppPlayerController(context: Context) {
         val url = _selectedVariant.value?.url ?: req.primaryUrl
         loadPlaybackUrl(
             uriStr = url,
-            forceHls = req.isHls || req.variants.isNotEmpty() || HlsSegmentDownloader.looksLikeHlsUrl(url),
+            forceHls = shouldForceHls(url, req.isHls),
             referer = req.referer,
             extraHeaders = req.headers,
             seekPositionMs = resumeMs
         )
+    }
+
+    private fun shouldForceHls(targetUrl: String, requestIsHls: Boolean): Boolean {
+        if (HlsSegmentDownloader.looksLikeHlsUrl(targetUrl)) return true
+        val cleanPath = targetUrl.substringBefore('?').substringBefore('#')
+        return requestIsHls && !cleanPath.endsWith(".mp4", ignoreCase = true)
     }
 
     private fun loadPlaybackUrl(

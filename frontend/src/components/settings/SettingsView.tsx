@@ -9,8 +9,10 @@ import {
   fetchYtDlpVersion,
   updateYtDlpChannel,
   fetchWorkers,
-  setWorkers,
-  SPEED_LIMIT_STORAGE_KEY,
+  fetchPerformanceSettings,
+  updatePerformanceSettings,
+  getSavedRateLimit,
+  setSavedRateLimit,
 } from '@/lib/api';
 import { Section } from '@astryxdesign/core/Section';
 import { Card } from '@astryxdesign/core/Card';
@@ -61,13 +63,25 @@ const ORGANIZE_OPTIONS: { label: string; value: OrganizeMode; description: strin
   },
 ];
 
-const WORKER_OPTIONS = ['1', '2', '3', '4', '5', '6', '8', '10'].map((n) => ({
+const WORKER_OPTIONS = ['1', '2', '3', '4', '5', '6', '8', '10', '12', '16'].map((n) => ({
   label: `${n} Concurrent Worker${n === '1' ? '' : 's'}`,
   value: n,
 }));
 
+const CONNECTION_OPTIONS = [
+  { label: '8 Connections (Conservative)', value: '8' },
+  { label: '16 Connections (Balanced)', value: '16' },
+  { label: '24 Connections (Recommended · Max NAS)', value: '24' },
+  { label: '32 Connections (Turbo · Gigabit+)', value: '32' },
+  { label: '48 Connections (Ultra · 2.5GbE+)', value: '48' },
+];
+
 const SPEED_OPTIONS = [
-  { label: 'Unlimited', value: '' },
+  { label: 'Unlimited (Max NAS Speed)', value: '' },
+  { label: '250 MB/s (250M)', value: '250M' },
+  { label: '100 MB/s (100M)', value: '100M' },
+  { label: '50 MB/s (50M)', value: '50M' },
+  { label: '25 MB/s (25M)', value: '25M' },
   { label: '10 MB/s (10M)', value: '10M' },
   { label: '5 MB/s (5M)', value: '5M' },
   { label: '2 MB/s (2M)', value: '2M' },
@@ -91,7 +105,8 @@ export function SettingsView({ theme, onSetTheme }: SettingsViewProps) {
   const [channel, setChannel] = useState('stable');
   const [isUpdatingEngine, setIsUpdatingEngine] = useState(false);
 
-  const [maxWorkers, setMaxWorkers] = useState('3');
+  const [maxWorkers, setMaxWorkers] = useState('4');
+  const [connectionsPerTask, setConnectionsPerTask] = useState('24');
   const [speedLimit, setSpeedLimit] = useState('');
 
   const [feedback, setFeedback] = useState<{
@@ -115,17 +130,30 @@ export function SettingsView({ theme, onSetTheme }: SettingsViewProps) {
       })
       .catch(() => {});
 
-    fetchWorkers()
-      .then((res) => {
-        if (res?.maxWorkers) setMaxWorkers(String(res.maxWorkers));
+    const localCap = getSavedRateLimit();
+    fetchPerformanceSettings()
+      .then((perf) => {
+        if (perf?.maxWorkers) setMaxWorkers(String(perf.maxWorkers));
+        if (perf?.connectionsPerTask) setConnectionsPerTask(String(perf.connectionsPerTask));
+        const serverCap = perf?.rateLimit || '';
+        const effectiveCap = serverCap || localCap;
+        setSpeedLimit(effectiveCap);
+        if (localCap && !serverCap) {
+          setFeedback({
+            status: 'info',
+            title: `Browser speed cap active: ${localCap}/s`,
+            desc: 'Switch Per-Task Bandwidth Limit to "Unlimited (Max NAS Speed)" to unlock full NAS speed.',
+          });
+        }
       })
-      .catch(() => {});
-
-    try {
-      setSpeedLimit(localStorage.getItem(SPEED_LIMIT_STORAGE_KEY) || '');
-    } catch {
-      // Ignore storage access failures.
-    }
+      .catch(() => {
+        if (localCap) setSpeedLimit(localCap);
+        fetchWorkers()
+          .then((res) => {
+            if (res?.maxWorkers) setMaxWorkers(String(res.maxWorkers));
+          })
+          .catch(() => {});
+      });
   }, []);
 
   const handleSaveStorage = async () => {
@@ -198,31 +226,70 @@ export function SettingsView({ theme, onSetTheme }: SettingsViewProps) {
 
   const handleWorkersChange = async (val: string) => {
     setMaxWorkers(val);
-    const count = parseInt(val, 10) || 3;
+    const count = parseInt(val, 10) || 4;
     try {
-      await setWorkers(count);
+      const updated = await updatePerformanceSettings({ maxWorkers: count });
+      setMaxWorkers(String(updated.maxWorkers));
       setFeedback({
         status: 'info',
-        title: `Concurrent workers updated to ${count}`,
+        title: `Concurrent workers updated to ${updated.maxWorkers}`,
       });
-    } catch {
-      // Ignore transient error.
+    } catch (err: any) {
+      setFeedback({
+        status: 'error',
+        title: 'Failed to update concurrent workers',
+        desc: err?.message,
+      });
     }
   };
 
-  const handleSpeedChange = (val: string) => {
-    setSpeedLimit(val);
+  const handleConnectionsChange = async (val: string) => {
+    setConnectionsPerTask(val);
+    const count = parseInt(val, 10) || 24;
     try {
-      if (val) localStorage.setItem(SPEED_LIMIT_STORAGE_KEY, val);
-      else localStorage.removeItem(SPEED_LIMIT_STORAGE_KEY);
+      const updated = await updatePerformanceSettings({ connectionsPerTask: count });
+      setConnectionsPerTask(String(updated.connectionsPerTask));
       setFeedback({
         status: 'info',
-        title: val ? `Rate limit set to ${val}/s` : 'Rate limit set to Unlimited',
+        title: `Connections per download set to ${updated.connectionsPerTask}`,
       });
-    } catch {
-      // Ignore storage failures.
+    } catch (err: any) {
+      setFeedback({
+        status: 'error',
+        title: 'Failed to update connections per download',
+        desc: err?.message,
+      });
     }
   };
+
+  const handleSpeedChange = async (val: string) => {
+    setSpeedLimit(val);
+    setSavedRateLimit(val);
+    try {
+      const updated = await updatePerformanceSettings({ rateLimit: val });
+      const normalized = updated.rateLimit || '';
+      setSpeedLimit(normalized);
+      setSavedRateLimit(normalized);
+      setFeedback({
+        status: 'info',
+        title: normalized ? `Rate limit set to ${normalized}/s` : 'Rate limit set to Unlimited (Max NAS Speed)',
+      });
+    } catch {
+      setFeedback({
+        status: 'info',
+        title: val ? `Rate limit set to ${val}/s` : 'Rate limit set to Unlimited (Max NAS Speed)',
+      });
+    }
+  };
+
+  const ytdlpVersionLabel = ytdlpInfo?.version || ytdlpInfo?.current;
+  const connectionOptions = CONNECTION_OPTIONS.some((o) => o.value === connectionsPerTask)
+    ? CONNECTION_OPTIONS
+    : [{ label: `${connectionsPerTask} Connections (Custom)`, value: connectionsPerTask }, ...CONNECTION_OPTIONS];
+  const speedOptions =
+    !speedLimit || SPEED_OPTIONS.some((o) => o.value === speedLimit)
+      ? SPEED_OPTIONS
+      : [{ label: `${speedLimit}/s (Custom)`, value: speedLimit }, ...SPEED_OPTIONS];
 
   return (
     <div className="max-w-4xl mx-auto space-y-5">
@@ -317,9 +384,9 @@ export function SettingsView({ theme, onSetTheme }: SettingsViewProps) {
               </div>
             </div>
 
-            {ytdlpInfo?.version && (
+            {ytdlpVersionLabel && (
               <Badge
-                label={`yt-dlp ${ytdlpInfo.version}`}
+                label={`yt-dlp ${ytdlpVersionLabel}`}
                 variant="success"
                 icon={<Check className="w-3 h-3" />}
               />
@@ -361,11 +428,19 @@ export function SettingsView({ theme, onSetTheme }: SettingsViewProps) {
                   options={WORKER_OPTIONS}
                 />
                 <Selector
+                  label="Connections per Download (HLS & Parallel)"
+                  width="100%"
+                  value={connectionsPerTask}
+                  onChange={handleConnectionsChange}
+                  options={connectionOptions}
+                  description="Higher connection fan-out saturates NAS Gigabit+ WAN links across HLS and direct files."
+                />
+                <Selector
                   label="Per-Task Bandwidth Limit"
                   width="100%"
                   value={speedLimit}
                   onChange={handleSpeedChange}
-                  options={SPEED_OPTIONS}
+                  options={speedOptions}
                 />
               </div>
             </Card>

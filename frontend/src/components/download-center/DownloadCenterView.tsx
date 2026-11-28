@@ -1,11 +1,19 @@
 'use client';
 
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { DownloadTask, TaskGroup, TaskStatus, ViewMode } from '@/types';
 import { TaskCard } from './TaskCard';
 import { TaskGroupCard } from './TaskGroupCard';
-import { enqueueUrls, clearCompletedTasks, retryFailedTasks } from '@/lib/api';
-import { detectPlatform } from '@/lib/utils';
+import {
+  enqueueUrls,
+  clearCompletedTasks,
+  retryFailedTasks,
+  getSavedRateLimit,
+  setSavedRateLimit,
+  fetchPerformanceSettings,
+  updatePerformanceSettings,
+} from '@/lib/api';
+import { detectPlatform, extractUrlsFromText, cn } from '@/lib/utils';
 import { Card } from '@astryxdesign/core/Card';
 import { Button } from '@astryxdesign/core/Button';
 import { TextArea } from '@astryxdesign/core/TextArea';
@@ -28,7 +36,6 @@ import {
   Sparkles,
   Trash2,
 } from 'lucide-react';
-import { cn } from '@/lib/utils';
 
 interface DownloadCenterViewProps {
   tasks: DownloadTask[];
@@ -169,13 +176,33 @@ export function DownloadCenterView({
   const [viewMode, setViewMode] = useState<ViewMode>('standard');
   const [sortBy, setSortBy] = useState<SortOption>('newest');
   const [searchQuery, setSearchQuery] = useState('');
+  const [activeRateCap, setActiveRateCap] = useState('');
+
+  useEffect(() => {
+    const localCap = getSavedRateLimit();
+    if (localCap) {
+      setActiveRateCap(localCap);
+    }
+    fetchPerformanceSettings()
+      .then((perf) => {
+        const cap = localCap || perf?.rateLimit || '';
+        setActiveRateCap(cap);
+      })
+      .catch(() => {});
+  }, []);
+
+  const handleClearRateCap = async () => {
+    setSavedRateLimit('');
+    setActiveRateCap('');
+    try {
+      await updatePerformanceSettings({ rateLimit: '' });
+    } catch {
+      // Ignore transient network errors; local override already cleared.
+    }
+  };
 
   const parsedUrls = useMemo(
-    () =>
-      urlsText
-        .split('\n')
-        .map((u) => u.trim())
-        .filter((u) => u.startsWith('http://') || u.startsWith('https://')),
+    () => extractUrlsFromText(urlsText),
     [urlsText]
   );
 
@@ -318,9 +345,20 @@ export function DownloadCenterView({
                   variant="purple"
                 />
               )}
+              {activeRateCap && (
+                <button
+                  type="button"
+                  onClick={handleClearRateCap}
+                  title="Remove speed limit to restore max NAS download speed"
+                  className="inline-flex items-center gap-1.5 rounded-full border border-[var(--color-border)] bg-[var(--color-background-muted)] px-2.5 py-0.5 text-[11px] font-semibold text-[var(--color-text-primary)] hover:bg-[var(--color-overlay-hover)] transition-colors"
+                >
+                  <span>Speed cap: {activeRateCap}/s</span>
+                  <span className="text-[var(--color-text-accent)] underline">Set Unlimited</span>
+                </button>
+              )}
             </div>
             <span className="text-xs text-[var(--color-text-secondary)]">
-              Supports YouTube channels/playlists, TikTok, Facebook, SoundCloud, HLS & direct links
+              Supports YouTube channels/playlists, X / Twitter, TikTok, Facebook, AV01, HLS & direct links
             </span>
           </div>
 

@@ -104,6 +104,8 @@ import com.kvdownload.app.api.EnqueueItemInput
 import com.kvdownload.app.api.QueueAddRequest
 import com.kvdownload.app.api.RetrofitClient
 import com.kvdownload.app.api.SniffedMedia
+import com.kvdownload.app.api.XResolvedTweet
+import com.kvdownload.app.api.XTwitterResolver
 import com.kvdownload.app.player.MediaKind
 import com.kvdownload.app.player.MediaPlayRequest
 import com.kvdownload.app.storage.HlsSegmentDownloader
@@ -194,6 +196,20 @@ internal fun detectPlayablePageItem(rawUrl: String, pageTitle: String?): Sniffed
             thumbnail = "https://i.ytimg.com/vi/$vid/hqdefault.jpg",
             source = "webview_page",
             channel = "YouTube"
+        )
+    }
+    if (XTwitterResolver.isXStatusUrl(trimmed)) {
+        val cleanTitle = pageTitle?.takeIf {
+            it.isNotBlank() && !it.equals("X", ignoreCase = true) && !it.equals("Twitter", ignoreCase = true)
+        } ?: "X / Twitter Video"
+        return SniffedMedia(
+            id = "x_${trimmed.hashCode()}",
+            url = trimmed,
+            type = "video",
+            format = "X VIDEO",
+            title = cleanTitle,
+            source = "webview_page",
+            channel = "X / Twitter"
         )
     }
     if (ANDROID_TT_RE.containsMatchIn(trimmed)) {
@@ -343,6 +359,7 @@ fun InAppBrowserScreen(
 
     val sniffedItems = remember { mutableStateListOf<SniffedMedia>() }
     var resolvedAV01 by remember { mutableStateOf<AV01ResolvedMedia?>(null) }
+    var resolvedX by remember { mutableStateOf<XResolvedTweet?>(null) }
     var av01QuickInput by remember { mutableStateOf("") }
     var isResolvingQuickAv01 by remember { mutableStateOf(false) }
 
@@ -402,13 +419,59 @@ fun InAppBrowserScreen(
         }
     }
 
+    fun resolveXDirectOnPhone(target: String, onResolvedCallback: ((XResolvedTweet) -> Unit)? = null) {
+        if (!XTwitterResolver.isXStatusUrl(target)) return
+        isSniffingServer = true
+        scope.launch {
+            try {
+                val xt = XTwitterResolver.resolve(target)
+                resolvedX = xt
+                val statusRef = XTwitterResolver.parseStatusUrl(target)
+                val videosToEmit = if (statusRef != null && statusRef.videoIndex > 0) {
+                    listOfNotNull(XTwitterResolver.selectVideo(xt, statusRef.videoIndex))
+                } else {
+                    xt.videos
+                }
+                val xItems = videosToEmit.flatMap { vid ->
+                    vid.variants.map { variant ->
+                        val isHls = HlsSegmentDownloader.looksLikeHlsUrl(variant.url)
+                        SniffedMedia(
+                            id = "x_${vid.id}_${variant.label}",
+                            url = variant.url,
+                            type = "video",
+                            format = if (isHls) "M3U8 HLS" else "${variant.label} MP4",
+                            title = "${vid.title} (${variant.label})",
+                            thumbnail = vid.thumbnail ?: xt.thumbnail,
+                            source = "x_phone",
+                            resolution = variant.label,
+                            channel = xt.channel,
+                            isStream = isHls,
+                            referer = xt.referer,
+                            variants = vid.variants
+                        )
+                    }
+                }
+                mergeSniffed(xItems)
+                onResolvedCallback?.invoke(xt)
+            } catch (e: Exception) {
+                if (onResolvedCallback != null) {
+                    onShowMessage(e.message ?: "Unable to resolve X video")
+                }
+            } finally {
+                isSniffingServer = false
+            }
+        }
+    }
+
     fun triggerServerSniff(target: String) {
         if (target.isBlank()) return
         isSniffingServer = true
         scope.launch {
             try {
                 val res = RetrofitClient.getApi().browserSniff(target)
-                if (!AV01Resolver.isAV01Url(target) || resolvedAV01 == null) {
+                val skipOverride = (AV01Resolver.isAV01Url(target) && resolvedAV01 != null) ||
+                    (XTwitterResolver.isXStatusUrl(target) && resolvedX != null)
+                if (!skipOverride) {
                     mergeSniffed(res.items.map {
                         it.copy(referer = it.referer ?: target)
                     })
@@ -432,11 +495,14 @@ fun InAppBrowserScreen(
         loadNonce++
         sniffedItems.clear()
         resolvedAV01 = null
+        resolvedX = null
         selectedUrls = emptySet()
 
         detectPlayablePageItem(clean, null)?.let { mergeSniffed(listOf(it)) }
         if (AV01Resolver.isAV01Url(clean)) {
             resolveAV01DirectOnPhone(clean)
+        } else if (XTwitterResolver.isXStatusUrl(clean)) {
+            resolveXDirectOnPhone(clean)
         } else {
             triggerServerSniff(clean)
         }
@@ -482,12 +548,44 @@ fun InAppBrowserScreen(
             return
         }
 
+        val xt = resolvedX
+        val xRef = XTwitterResolver.parseStatusUrl(currentUrl)
+        val xVid = if (xt != null) XTwitterResolver.selectVideo(xt, xRef?.videoIndex ?: 0) else null
+        if (xt != null && xVid != null && xVid.variants.isNotEmpty()) {
+            val picked = XTwitterResolver.selectVariant(xVid.variants, formatQuality)
+            pendingDownload = PendingBrowserDownload(
+                label = xVid.title,
+                items = listOf(
+                    SniffedMedia(
+                        id = "x:${xt.tweetId}",
+                        url = picked.url,
+                        type = "video",
+                        format = "${picked.label} MP4",
+                        title = xVid.title,
+                        thumbnail = xVid.thumbnail ?: xt.thumbnail,
+                        source = "x_phone",
+                        resolution = picked.label,
+                        channel = xt.channel,
+                        isStream = HlsSegmentDownloader.looksLikeHlsUrl(picked.url),
+                        referer = xt.referer,
+                        variants = xVid.variants
+                    )
+                ),
+                canonicalServerUrl = currentUrl.ifBlank { xt.canonicalUrl }
+            )
+            return
+        }
+
         val detectedVideo = sniffedItems.firstOrNull { it.type == "video" }
         if (detectedVideo != null) {
             pendingDownload = PendingBrowserDownload(
                 label = detectedVideo.title.ifBlank { currentUrl },
                 items = listOf(detectedVideo),
-                canonicalServerUrl = if (AV01Resolver.isAV01Url(currentUrl)) currentUrl else detectedVideo.url
+                canonicalServerUrl = when {
+                    AV01Resolver.isAV01Url(currentUrl) -> currentUrl
+                    XTwitterResolver.isXStatusUrl(currentUrl) -> currentUrl
+                    else -> detectedVideo.url
+                }
             )
             return
         }
@@ -581,6 +679,8 @@ fun InAppBrowserScreen(
             val item = req.items.firstOrNull() ?: return
             val effReferer = item.referer ?: currentUrl.ifBlank { null }
             val avPage = req.canonicalServerUrl?.takeIf { AV01Resolver.isAV01Url(it) }
+            val xPage = req.canonicalServerUrl?.takeIf { XTwitterResolver.isXStatusUrl(it) }
+                ?: item.url.takeIf { XTwitterResolver.isXStatusUrl(it) }
             if (avPage != null) {
                 phoneDownloadManager.saveHlsOrAV01ToPhone(
                     url = avPage,
@@ -588,6 +688,14 @@ fun InAppBrowserScreen(
                     formatPref = item.resolution ?: formatQuality,
                     channel = "AV01",
                     referer = effReferer ?: AV01Resolver.REFERER
+                )
+            } else if (xPage != null) {
+                phoneDownloadManager.saveXVideoToPhone(
+                    url = xPage,
+                    title = item.title.ifBlank { req.label },
+                    formatPref = item.resolution ?: formatQuality,
+                    channel = item.channel,
+                    referer = effReferer ?: XTwitterResolver.REFERER
                 )
             } else {
                 phoneDownloadManager.saveDirectMediaToPhone(
@@ -847,7 +955,11 @@ fun InAppBrowserScreen(
 
                                     Button(
                                         onClick = {
-                                            val canonicalUrl = if (AV01Resolver.isAV01Url(currentUrl)) currentUrl else item.url
+                                            val canonicalUrl = when {
+                                                AV01Resolver.isAV01Url(currentUrl) -> currentUrl
+                                                XTwitterResolver.isXStatusUrl(currentUrl) -> currentUrl
+                                                else -> item.url
+                                            }
                                             pendingDownload = PendingBrowserDownload(
                                                 label = item.title.ifBlank { canonicalUrl },
                                                 items = listOf(item),
@@ -928,6 +1040,7 @@ fun InAppBrowserScreen(
                                     pageLoadTimedOut = false
                                     sniffedItems.clear()
                                     resolvedAV01 = null
+                                    resolvedX = null
                                 },
                                 modifier = Modifier.size(34.dp)
                             ) {
@@ -997,6 +1110,7 @@ fun InAppBrowserScreen(
                                             pageErrorText = null
                                             pageLoadTimedOut = false
                                             resolvedAV01 = null
+                                            resolvedX = null
                                             sniffedItems.clear()
                                         }
                                     },
@@ -1047,6 +1161,7 @@ fun InAppBrowserScreen(
                                         pageLoadTimedOut = false
                                         sniffedItems.clear()
                                         resolvedAV01 = null
+                                        resolvedX = null
                                     },
                                     modifier = Modifier.size(30.dp)
                                 ) {
@@ -1064,8 +1179,11 @@ fun InAppBrowserScreen(
                                 AssistChip(
                                     onClick = {
                                         if (currentUrl.isNotBlank()) {
-                                            if (AV01Resolver.isAV01Url(currentUrl)) resolveAV01DirectOnPhone(currentUrl)
-                                            else triggerServerSniff(currentUrl)
+                                            when {
+                                                AV01Resolver.isAV01Url(currentUrl) -> resolveAV01DirectOnPhone(currentUrl)
+                                                XTwitterResolver.isXStatusUrl(currentUrl) -> resolveXDirectOnPhone(currentUrl)
+                                                else -> triggerServerSniff(currentUrl)
+                                            }
                                         }
                                         showSnifferSheet = true
                                     },
@@ -1235,6 +1353,117 @@ fun InAppBrowserScreen(
                 }
             }
 
+            // Instant X / Twitter Video Extraction Banner
+            resolvedX?.let { xt ->
+                val xRef = XTwitterResolver.parseStatusUrl(currentUrl)
+                val vid = XTwitterResolver.selectVideo(xt, xRef?.videoIndex ?: 0)
+                if (vid != null && vid.variants.isNotEmpty()) {
+                    Surface(
+                        color = palette.accentContainer,
+                        border = BorderStroke(1.dp, palette.accent.copy(alpha = 0.4f)),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 10.dp, vertical = 6.dp),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(10.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = vid.title,
+                                        style = MaterialTheme.typography.titleSmall,
+                                        color = palette.accentText,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    Text(
+                                        text = "${xt.channel} · ${vid.variants.joinToString(", ") { it.label }}",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = palette.textSecondary
+                                    )
+                                }
+                                AstryxStatusBadge("X VIDEO READY", AstryxTone.Success)
+                            }
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Button(
+                                    onClick = {
+                                        val picked = XTwitterResolver.selectVariant(vid.variants, formatQuality)
+                                        val canonical = currentUrl.ifBlank { xt.canonicalUrl }
+                                        onPlayMedia(
+                                            MediaPlayRequest(
+                                                id = "x:${xt.tweetId}",
+                                                title = vid.title,
+                                                subtitle = "${xt.channel} · ${picked.label}",
+                                                thumbnailUrl = vid.thumbnail ?: xt.thumbnail,
+                                                primaryUrl = picked.url,
+                                                fallbackUrl = RetrofitClient.browserStreamUrl(canonical, xt.referer),
+                                                kind = MediaKind.VIDEO,
+                                                isHls = HlsSegmentDownloader.looksLikeHlsUrl(picked.url),
+                                                referer = xt.referer,
+                                                variants = vid.variants,
+                                                onSaveToPhone = {
+                                                    phoneDownloadManager.saveXVideoToPhone(
+                                                        url = canonical,
+                                                        title = vid.title,
+                                                        formatPref = formatQuality,
+                                                        channel = xt.channel,
+                                                        referer = xt.referer
+                                                    )
+                                                    onShowMessage("Saving X video privately inside KV Download...")
+                                                }
+                                            )
+                                        )
+                                    },
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(16.dp))
+                                    Text("Play", modifier = Modifier.padding(start = 4.dp))
+                                }
+                                OutlinedButton(
+                                    onClick = {
+                                        val picked = XTwitterResolver.selectVariant(vid.variants, formatQuality)
+                                        val canonical = currentUrl.ifBlank { xt.canonicalUrl }
+                                        pendingDownload = PendingBrowserDownload(
+                                            label = vid.title,
+                                            items = listOf(
+                                                SniffedMedia(
+                                                    id = "x:${xt.tweetId}",
+                                                    url = picked.url,
+                                                    type = "video",
+                                                    format = "${picked.label} MP4",
+                                                    title = vid.title,
+                                                    thumbnail = vid.thumbnail ?: xt.thumbnail,
+                                                    source = "x_phone",
+                                                    resolution = picked.label,
+                                                    channel = xt.channel,
+                                                    isStream = HlsSegmentDownloader.looksLikeHlsUrl(picked.url),
+                                                    referer = xt.referer,
+                                                    variants = vid.variants
+                                                )
+                                            ),
+                                            canonicalServerUrl = canonical
+                                        )
+                                    },
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(16.dp))
+                                    Text("Download", modifier = Modifier.padding(start = 4.dp))
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
             if (currentUrl.isBlank()) {
                 LazyColumn(
                     modifier = Modifier.fillMaxSize(),
@@ -1289,6 +1518,7 @@ fun InAppBrowserScreen(
 
                     val bookmarks = listOf(
                         Triple("Google Search", "https://www.google.com", false),
+                        Triple("X (Twitter)", "https://x.com", false),
                         Triple("YouTube", "https://m.youtube.com", false),
                         Triple("TikTok", "https://www.tiktok.com", false),
                         Triple("AV01 Media", "https://av01.media", false),
@@ -1375,6 +1605,12 @@ fun InAppBrowserScreen(
                                         if (AV01Resolver.isAV01Url(pageUrl) && resolvedAV01?.videoId != AV01Resolver.parseVideoIdAndSlug(pageUrl)?.first) {
                                             resolveAV01DirectOnPhone(pageUrl)
                                         }
+                                        val xRef = XTwitterResolver.parseStatusUrl(pageUrl)
+                                        if (xRef != null && resolvedX?.tweetId != xRef.tweetId) {
+                                            resolveXDirectOnPhone(pageUrl)
+                                        } else if (xRef == null) {
+                                            resolvedX = null
+                                        }
                                     }
                                 },
                                 onVisitedUrl = { view, updatedUrl ->
@@ -1384,6 +1620,12 @@ fun InAppBrowserScreen(
                                         currentUrl = updatedUrl
                                         addressInput = updatedUrl
                                         detectPlayablePageItem(updatedUrl, view.title)?.let { mergeSniffed(listOf(it)) }
+                                        val xRef = XTwitterResolver.parseStatusUrl(updatedUrl)
+                                        if (xRef != null && resolvedX?.tweetId != xRef.tweetId) {
+                                            resolveXDirectOnPhone(updatedUrl)
+                                        } else if (xRef == null) {
+                                            resolvedX = null
+                                        }
                                         view.evaluateJavascript(INJECTED_SNIFFER_JS, null)
                                     }
                                 },

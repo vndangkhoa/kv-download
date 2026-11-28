@@ -79,13 +79,8 @@ type QueueManager struct {
 var GlobalQueue *QueueManager
 
 func init() {
-	defaultWorkers := 3
-	if env := strings.TrimSpace(os.Getenv("MR_MAX_WORKERS")); env != "" {
-		if n, err := strconv.Atoi(env); err == nil && n > 0 {
-			defaultWorkers = n
-		}
-	}
-	GlobalQueue = NewQueueManager(defaultWorkers)
+	perf := GetPerformanceSettings()
+	GlobalQueue = NewQueueManager(perf.MaxWorkers)
 	GlobalQueue.LoadState()
 }
 
@@ -123,7 +118,9 @@ func detectPlatformName(rawURL string) string {
 		return "Facebook"
 	case strings.Contains(u, "instagram.com"):
 		return "Instagram"
-	case strings.Contains(u, "twitter.com") || strings.Contains(u, "x.com"):
+	case strings.Contains(u, "twitter.com") || strings.Contains(u, "x.com") ||
+		strings.Contains(u, "fxtwitter.com") || strings.Contains(u, "vxtwitter.com") ||
+		strings.Contains(u, "fixupx.com") || strings.Contains(u, "fixvx.com"):
 		return "X / Twitter"
 	case strings.Contains(u, "soundcloud.com"):
 		return "SoundCloud"
@@ -317,6 +314,53 @@ func (q *QueueManager) resolveTaskMetadataAsync(taskID string) {
 			}
 			q.mu.Unlock()
 			return
+		}
+	}
+
+	if _, _, videoIdx, ok := ParseXStatusURL(targetURL); ok {
+		if xTweet, err := ResolveXVideo(ctx, targetURL); err == nil && xTweet != nil {
+			if vid, okVid := SelectXVideo(xTweet, videoIdx); okVid {
+				q.mu.Lock()
+				if task, exists := q.tasks[taskID]; exists && task != nil {
+					changed := false
+					if vid.Title != "" && (isUrlLike(task.Title) || task.Title == shortUrl(task.URL)) {
+						task.Title = vid.Title
+						changed = true
+					}
+					if xTweet.Channel != "" && (task.Channel == "" || isUrlLike(task.Channel)) {
+						task.Channel = xTweet.Channel
+						changed = true
+					}
+					if xTweet.AuthorName != "" && task.Uploader == "" {
+						task.Uploader = xTweet.AuthorName
+						changed = true
+					}
+					if task.Platform == "" || task.Platform == "Direct Link" {
+						task.Platform = "X / Twitter"
+						changed = true
+					}
+					thumb := vid.Thumbnail
+					if thumb == "" {
+						thumb = xTweet.Thumbnail
+					}
+					if task.Thumbnail == "" && thumb != "" {
+						task.Thumbnail = thumb
+						changed = true
+					}
+					if task.Duration == "" && vid.Duration > 0 {
+						task.Duration = formatDurationFloat(vid.Duration)
+						changed = true
+					}
+					if changed {
+						q.saveStateLocked()
+						q.mu.Unlock()
+						q.broadcastTaskUpdate(task)
+						return
+					}
+				}
+				q.mu.Unlock()
+				return
+			}
 		}
 	}
 
@@ -549,9 +593,8 @@ func (q *QueueManager) GetTasks() []*DownloadTask {
 	return q.getTasksLocked()
 }
 
-func (q *QueueManager) SetMaxWorkers(n int) {
+func (q *QueueManager) setMaxWorkersInternal(n int, persist bool) {
 	q.mu.Lock()
-	defer q.mu.Unlock()
 	if n < 1 {
 		n = 1
 	}
@@ -561,6 +604,15 @@ func (q *QueueManager) SetMaxWorkers(n int) {
 	q.maxWorkers = n
 	log.Info().Msgf("Queue max concurrent workers set to %d", n)
 	q.dispatchLocked()
+	q.mu.Unlock()
+
+	if persist && q == GlobalQueue {
+		_, _ = UpdatePerformanceSettings(PerformanceSettingsPatch{MaxWorkers: &n})
+	}
+}
+
+func (q *QueueManager) SetMaxWorkers(n int) {
+	q.setMaxWorkersInternal(n, true)
 }
 
 func (q *QueueManager) GetMaxWorkers() int {
@@ -616,6 +668,104 @@ func isAudioFormat(format string) bool {
 	return strings.HasPrefix(f, "audio_") || f == "mp3" || f == "m4a" || f == "flac" || f == "wav" || f == "aac" || f == "opus" || f == "ogg"
 }
 
+func resolveEffectiveCookiesString(taskCookies string) string {
+	if strings.TrimSpace(taskCookies) != "" {
+		return taskCookies
+	}
+	if cp := getCookiesPath(); isReadableFile(cp) {
+		if b, err := os.ReadFile(cp); err == nil {
+			return string(b)
+		}
+	}
+	return ""
+}
+
+func (q *QueueManager) updateTaskProgress(task *DownloadTask, p HLSProgress) {
+	q.mu.Lock()
+	task.Percent = p.Percent
+	if p.Speed != "" {
+		task.Speed = p.Speed
+	}
+	task.ETA = p.ETA
+	if p.Downloaded > 0 {
+		task.Downloaded = p.Downloaded
+	}
+	if p.TotalBytes > 0 {
+		task.TotalBytes = p.TotalBytes
+		task.HumanSize = humanize.Bytes(uint64(p.TotalBytes))
+	}
+	q.mu.Unlock()
+	q.broadcastTaskUpdate(task)
+}
+
+func (q *QueueManager) handleTaskCancelled(task *DownloadTask, targetDir string) {
+	_ = os.RemoveAll(targetDir)
+	q.mu.Lock()
+	task.Status = StatusCancelled
+	now := time.Now()
+	task.CompletedAt = &now
+	q.saveStateLocked()
+	q.mu.Unlock()
+	q.broadcastTaskUpdate(task)
+}
+
+func (q *QueueManager) finalizeTaskFiles(task *DownloadTask, dirID string, preferPlayable bool) bool {
+	ch := task.Channel
+	if ch == "" {
+		ch = task.Uploader
+	}
+	if ch == "" {
+		ch = task.PlaylistTitle
+	}
+	grpTitle := task.GroupTitle
+	if grpTitle == "" {
+		grpTitle = task.PlaylistTitle
+	}
+	_ = organizeDownloadedTaskFilesWithGroup(dirID, ch, grpTitle, task.Platform, task.Title)
+	medias, _ := getAllFilesForId(dirID)
+	if len(medias) == 0 {
+		return false
+	}
+	var chosen *Media
+	if preferPlayable {
+		for i := range medias {
+			cat := getCategoryByExt(filepath.Ext(medias[i].Name))
+			if cat == CategoryVideos || cat == CategoryMusic {
+				chosen = &medias[i]
+				break
+			}
+		}
+	} else {
+		chosen = &medias[0]
+	}
+	if chosen == nil {
+		return false
+	}
+	q.completeTask(task, *chosen, dirID)
+	return true
+}
+
+func scanLinesOrCR(data []byte, atEOF bool) (advance int, token []byte, err error) {
+	if atEOF && len(data) == 0 {
+		return 0, nil, nil
+	}
+	for i := 0; i < len(data); i++ {
+		if data[i] == '\n' {
+			return i + 1, data[:i], nil
+		}
+		if data[i] == '\r' {
+			if i+1 < len(data) && data[i+1] == '\n' {
+				return i + 2, data[:i], nil
+			}
+			return i + 1, data[:i], nil
+		}
+	}
+	if atEOF {
+		return len(data), data, nil
+	}
+	return 0, nil, nil
+}
+
 func (q *QueueManager) processTask(ctx context.Context, task *DownloadTask) {
 	defer func() {
 		if task.cancelFunc != nil {
@@ -629,59 +779,65 @@ func (q *QueueManager) processTask(ctx context.Context, task *DownloadTask) {
 	targetDir := getMediaDirectory(dirID)
 	_ = os.MkdirAll(targetDir, 0o755)
 
-	// ── 1. Anpan Target Routing (Torrents & Direct Cloud Accelerated Downloads) ──
-	target, _ := anpan.InspectTarget(ctx, task.URL)
-	if target != nil {
-		if target.Type == anpan.TargetTorrent && anpan.HasAria2c() {
-			log.Info().Msgf("Routing torrent task %s via aria2c", task.ID)
-			err := anpan.DownloadTorrentAria(ctx, task.URL, targetDir)
-			if err != nil && ctx.Err() != context.Canceled {
-				q.failTask(task, err.Error())
-				return
-			}
-			ch := task.Channel
-			if ch == "" {
-				ch = task.Uploader
-			}
-			if ch == "" {
-				ch = task.PlaylistTitle
-			}
-			grpTitle := task.GroupTitle
-			if grpTitle == "" {
-				grpTitle = task.PlaylistTitle
-			}
-			_ = organizeDownloadedTaskFilesWithGroup(dirID, ch, grpTitle, task.Platform, task.Title)
-			medias, _ := getAllFilesForId(dirID)
-			if len(medias) > 0 {
-				q.completeTask(task, medias[0], dirID)
-				return
-			}
-		}
+	perf := GetPerformanceSettings()
+	effectiveRateLimit := resolveEffectiveRateLimit(task.RateLimit)
+	rateLimitBps := parseRateLimitBytesPerSec(effectiveRateLimit)
+	effectiveCookies := resolveEffectiveCookiesString(task.Cookies)
 
-		if target.Type == anpan.TargetDirect && target.URL != "" && anpan.HasAria2c() {
-			fn := target.Filename
-			if fn == "" {
-				fn = "download"
-			}
-			log.Info().Msgf("Routing direct file %s via aria2c", target.URL)
-			err := anpan.DownloadDirectFileAria(ctx, target.URL, targetDir, fn, 16)
-			if err == nil {
-				ch := task.Channel
-				if ch == "" {
-					ch = task.Uploader
-				}
-				if ch == "" {
-					ch = task.PlaylistTitle
-				}
-				grpTitle := task.GroupTitle
-				if grpTitle == "" {
-					grpTitle = task.PlaylistTitle
-				}
-				_ = organizeDownloadedTaskFilesWithGroup(dirID, ch, grpTitle, task.Platform, task.Title)
-				medias, _ := getAllFilesForId(dirID)
-				if len(medias) > 0 {
-					q.completeTask(task, medias[0], dirID)
+	// ── 1. Anpan Target Routing (Torrents & Direct Cloud Accelerated Downloads) ──
+	// Skip the 1.5s HEAD probe for AV01, X/Twitter, and direct HLS/DASH URLs.
+	_, _, isAV01URL := ParseAV01VideoURL(task.URL)
+	isXURL := IsXStatusURL(task.URL)
+	if !isAV01URL && !isXURL && !isHLSOrDashURL(task.URL) {
+		target, _ := anpan.InspectTarget(ctx, task.URL)
+		if target != nil {
+			if target.Type == anpan.TargetTorrent && anpan.HasAria2c() {
+				log.Info().Msgf("Routing torrent task %s via aria2c", task.ID)
+				err := anpan.DownloadTorrentAria(ctx, task.URL, targetDir)
+				if err != nil && ctx.Err() != context.Canceled {
+					q.failTask(task, err.Error())
 					return
+				}
+				if q.finalizeTaskFiles(task, dirID, false) {
+					return
+				}
+			}
+
+			if target.Type == anpan.TargetDirect && target.URL != "" {
+				fn := target.Filename
+				if fn == "" {
+					fn = "download"
+				}
+				outPath := filepath.Join(targetDir, fn)
+				log.Info().Msgf("Routing direct file %s via %d-worker parallel downloader", target.URL, perf.ConnectionsPerTask)
+				err := DownloadDirectParallel(ctx, DirectDownloadOptions{
+					URL:          target.URL,
+					Referer:      task.Referer,
+					Cookies:      effectiveCookies,
+					OutputPath:   outPath,
+					Connections:  perf.ConnectionsPerTask,
+					RateLimitBps: rateLimitBps,
+					OnProgress: func(p HLSProgress) {
+						q.updateTaskProgress(task, p)
+					},
+				})
+				if ctx.Err() == context.Canceled {
+					q.handleTaskCancelled(task, targetDir)
+					return
+				}
+				if err == nil && q.finalizeTaskFiles(task, dirID, false) {
+					return
+				}
+				if err != nil {
+					log.Warn().Msgf("[DirectParallel] failed for %s (%v), falling back", target.URL, err)
+					if anpan.HasAria2c() {
+						ariaConns := clampInt(perf.ConnectionsPerTask, 1, 16)
+						if ariaErr := anpan.DownloadDirectFileAria(ctx, target.URL, targetDir, fn, ariaConns); ariaErr == nil {
+							if q.finalizeTaskFiles(task, dirID, false) {
+								return
+							}
+						}
+					}
 				}
 			}
 		}
@@ -694,14 +850,7 @@ func (q *QueueManager) processTask(ctx context.Context, task *DownloadTask) {
 
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		if ctx.Err() == context.Canceled {
-			_ = os.RemoveAll(targetDir)
-			q.mu.Lock()
-			task.Status = StatusCancelled
-			now := time.Now()
-			task.CompletedAt = &now
-			q.saveStateLocked()
-			q.mu.Unlock()
-			q.broadcastTaskUpdate(task)
+			q.handleTaskCancelled(task, targetDir)
 			return
 		}
 
@@ -747,6 +896,117 @@ func (q *QueueManager) processTask(ctx context.Context, task *DownloadTask) {
 					}
 				}
 			}
+		} else if _, _, videoIdx, ok := ParseXStatusURL(targetURL); ok {
+			xCtx, xCancel := context.WithTimeout(ctx, 15*time.Second)
+			xTweet, xErr := ResolveXVideo(xCtx, targetURL)
+			xCancel()
+			if xErr == nil && xTweet != nil {
+				if vid, okVid := SelectXVideo(xTweet, videoIdx); okVid && len(vid.Variants) > 0 {
+					chosen := SelectXVariant(vid.Variants, task.Format)
+					thumb := vid.Thumbnail
+					if thumb == "" {
+						thumb = xTweet.Thumbnail
+					}
+					q.mu.Lock()
+					changed := false
+					if vid.Title != "" && (task.Title == "" || isUrlLike(task.Title) || task.Title == shortUrl(task.URL)) {
+						task.Title = vid.Title
+						changed = true
+					}
+					if xTweet.Channel != "" && (task.Channel == "" || isUrlLike(task.Channel)) {
+						task.Channel = xTweet.Channel
+						changed = true
+					}
+					if xTweet.AuthorName != "" && task.Uploader == "" {
+						task.Uploader = xTweet.AuthorName
+						changed = true
+					}
+					if task.Platform == "" || task.Platform == "Direct Link" {
+						task.Platform = "X / Twitter"
+						changed = true
+					}
+					if task.Thumbnail == "" && thumb != "" {
+						task.Thumbnail = thumb
+						changed = true
+					}
+					if task.Duration == "" && vid.Duration > 0 {
+						task.Duration = formatDurationFloat(vid.Duration)
+						changed = true
+					}
+					if changed {
+						q.saveStateLocked()
+					}
+					q.mu.Unlock()
+					if changed {
+						q.broadcastTaskUpdate(task)
+					}
+
+					stem := sanitizeCaptionFilename(vid.Title)
+					if stem == "" {
+						stem = xTweet.TweetID
+					}
+					if stem == "" {
+						stem = task.ID
+					}
+
+					if !chosen.IsHLS && chosen.URL != "" {
+						dlPath := filepath.Join(targetDir, stem+".mp4")
+						if isAudio {
+							dlPath = filepath.Join(targetDir, stem+".source.mp4")
+						}
+						log.Info().Msgf("[X] Starting %d-worker Go direct download for %s -> %s", perf.ConnectionsPerTask, task.URL, chosen.Label)
+						dlErr := DownloadDirectParallel(ctx, DirectDownloadOptions{
+							URL:          chosen.URL,
+							Referer:      xTwitterReferer,
+							OutputPath:   dlPath,
+							Connections:  perf.ConnectionsPerTask,
+							RateLimitBps: rateLimitBps,
+							OnProgress: func(p HLSProgress) {
+								q.updateTaskProgress(task, p)
+							},
+						})
+						if ctx.Err() == context.Canceled {
+							q.handleTaskCancelled(task, targetDir)
+							return
+						}
+						if dlErr == nil {
+							if isAudio {
+								_, audErr := extractAudioFromFileWithFFmpeg(ctx, dlPath, targetDir, stem, task.Format)
+								_ = os.Remove(dlPath)
+								if audErr != nil {
+									log.Warn().Msgf("[X] ffmpeg audio extraction failed for %s (%v), falling back to yt-dlp", task.URL, audErr)
+								} else {
+									if thumb != "" {
+										_ = downloadThumbnailToFile(ctx, thumb, filepath.Join(targetDir, stem+".jpg"))
+									}
+									moveJsonFiles(dirID)
+									if q.finalizeTaskFiles(task, dirID, true) {
+										return
+									}
+								}
+							} else {
+								if thumb != "" {
+									_ = downloadThumbnailToFile(ctx, thumb, filepath.Join(targetDir, stem+".jpg"))
+								}
+								moveJsonFiles(dirID)
+								if q.finalizeTaskFiles(task, dirID, true) {
+									return
+								}
+							}
+						} else {
+							log.Warn().Msgf("[X] Direct MP4 download failed for %s (%v), falling back to yt-dlp", task.URL, dlErr)
+						}
+					}
+
+					if chosen.URL != "" {
+						targetURL = chosen.URL
+						effReferer = xTwitterReferer
+						avTitle = vid.Title
+					}
+				}
+			} else if xErr != nil {
+				log.Warn().Msgf("[X] Native resolve failed for %s (%v), falling back to yt-dlp", task.URL, xErr)
+			}
 		} else if IsFacebookShareURL(targetURL) {
 			if resolved := resolveFbShareURL(targetURL, task.Cookies); resolved != "" && !IsFacebookShareURL(resolved) {
 				if canon := fbCanonicalVideoUrl(resolved); canon != "" {
@@ -763,6 +1023,44 @@ func (q *QueueManager) processTask(ctx context.Context, task *DownloadTask) {
 		}
 		isStreamURL := isHLSOrDashURL(targetURL)
 
+		// Attempt 1: Native multi-TCP Go HLS engine for .m3u8 streams (dramatically faster than yt-dlp Python).
+		if attempt == 1 && perf.NativeHLS && isHLSURL(targetURL) {
+			nativeStem := sanitizeCaptionFilename(avTitle)
+			if nativeStem == "" && !isUrlLike(task.Title) {
+				nativeStem = sanitizeCaptionFilename(task.Title)
+			}
+			if nativeStem == "" {
+				nativeStem = task.ID
+			}
+			log.Info().Msgf("[NativeHLS] Starting %d-worker Go HLS download for %s", perf.ConnectionsPerTask, targetURL)
+			_, hlsErr := DownloadHLSNative(ctx, HLSDownloadOptions{
+				URL:          targetURL,
+				Referer:      effReferer,
+				Cookies:      effectiveCookies,
+				Format:       task.Format,
+				IsAudio:      isAudio,
+				TargetDir:    targetDir,
+				OutputStem:   nativeStem,
+				Workers:      perf.ConnectionsPerTask,
+				RateLimitBps: rateLimitBps,
+				OnProgress: func(p HLSProgress) {
+					q.updateTaskProgress(task, p)
+				},
+			})
+			if ctx.Err() == context.Canceled {
+				q.handleTaskCancelled(task, targetDir)
+				return
+			}
+			if hlsErr == nil {
+				moveJsonFiles(dirID)
+				if q.finalizeTaskFiles(task, dirID, true) {
+					return
+				}
+			} else {
+				log.Warn().Msgf("[NativeHLS] falling back to yt-dlp for %s: %v", targetURL, hlsErr)
+			}
+		}
+
 		outTmpl := outputTemplate
 		if avTitle != "" {
 			safeStem := sanitizeCaptionFilename(avTitle)
@@ -772,6 +1070,7 @@ func (q *QueueManager) processTask(ctx context.Context, task *DownloadTask) {
 			outTmpl = targetDir + safeStem + ".%(ext)s"
 		}
 
+		ytdlpFragments := clampInt(perf.ConnectionsPerTask, 8, 24)
 		args := []string{
 			"--newline",
 			"--progress-template", "%(progress._percent_str)s|%(progress._speed_str)s|%(progress._eta_str)s|%(progress.downloaded_bytes)s|%(progress.total_bytes)s",
@@ -781,6 +1080,10 @@ func (q *QueueManager) processTask(ctx context.Context, task *DownloadTask) {
 			"--convert-thumbnails", "jpg",
 			"--output", outTmpl,
 			"--no-check-certificates",
+			"--concurrent-fragments", strconv.Itoa(ytdlpFragments),
+			"--buffer-size", "64K",
+			"--retries", "10",
+			"--fragment-retries", "10",
 			"--extractor-args", "instagram:image_persist=1;threads:app_version=30.0.0",
 		}
 
@@ -791,16 +1094,18 @@ func (q *QueueManager) processTask(ctx context.Context, task *DownloadTask) {
 		}
 
 		// Attempt 1: try aria2c if available (skip aria2c for HLS/DASH streams where fragment handling breaks).
+		usedAria2 := false
 		if attempt == 1 && !isStreamURL && anpan.HasAria2c() && !isAudio && !strings.Contains(task.URL, "tiktok.com") {
-			if ariaArgs := anpan.BuildYtDlpAria2Args(16); ariaArgs != nil {
+			if ariaArgs := anpan.BuildYtDlpAria2ArgsWithLimit(perf.ConnectionsPerTask, effectiveRateLimit); ariaArgs != nil {
 				args = append(args, ariaArgs...)
+				usedAria2 = true
 			}
 		}
-		if isStreamURL {
-			args = append(args, "--concurrent-fragments", "8")
-			if attempt == 1 {
-				args = append(args, "--hls-prefer-native")
-			}
+		if !usedAria2 && !isStreamURL && attempt <= 2 && !strings.Contains(task.URL, "tiktok.com") {
+			args = append(args, "--http-chunk-size", "10M")
+		}
+		if isStreamURL && attempt == 1 {
+			args = append(args, "--hls-prefer-native")
 		}
 		if effReferer != "" {
 			args = append(args, "--referer", effReferer)
@@ -834,12 +1139,8 @@ func (q *QueueManager) processTask(ctx context.Context, task *DownloadTask) {
 			args = append(args, "--impersonate", impersonate)
 		}
 
-		rateLimit := strings.TrimSpace(task.RateLimit)
-		if rateLimit == "" {
-			rateLimit = strings.TrimSpace(os.Getenv("MR_RATE_LIMIT"))
-		}
-		if rateLimit != "" && rateLimit != "unlimited" && rateLimit != "0" {
-			args = append(args, "--limit-rate", rateLimit)
+		if effectiveRateLimit != "" {
+			args = append(args, "--limit-rate", effectiveRateLimit)
 		}
 
 		if task.Cookies != "" {
@@ -900,6 +1201,7 @@ func (q *QueueManager) processTask(ctx context.Context, task *DownloadTask) {
 		}
 
 		scanner := bufio.NewScanner(stdoutPipe)
+		scanner.Split(scanLinesOrCR)
 		buf := make([]byte, 64*1024)
 		scanner.Buffer(buf, 1024*1024)
 
@@ -913,45 +1215,14 @@ func (q *QueueManager) processTask(ctx context.Context, task *DownloadTask) {
 		err = cmd.Wait()
 
 		if ctx.Err() == context.Canceled {
-			_ = os.RemoveAll(targetDir)
-			q.mu.Lock()
-			task.Status = StatusCancelled
-			now := time.Now()
-			task.CompletedAt = &now
-			q.saveStateLocked()
-			q.mu.Unlock()
-			q.broadcastTaskUpdate(task)
+			q.handleTaskCancelled(task, targetDir)
 			return
 		}
 
 		if err == nil {
 			moveJsonFiles(dirID)
-			ch := task.Channel
-			if ch == "" {
-				ch = task.Uploader
-			}
-			if ch == "" {
-				ch = task.PlaylistTitle
-			}
-			grpTitle := task.GroupTitle
-			if grpTitle == "" {
-				grpTitle = task.PlaylistTitle
-			}
-			_ = organizeDownloadedTaskFilesWithGroup(dirID, ch, grpTitle, task.Platform, task.Title)
-			medias, _ := getAllFilesForId(dirID)
-			if len(medias) > 0 {
-				var chosen *Media
-				for i := range medias {
-					cat := getCategoryByExt(filepath.Ext(medias[i].Name))
-					if cat == CategoryVideos || cat == CategoryMusic {
-						chosen = &medias[i]
-						break
-					}
-				}
-				if chosen != nil {
-					q.completeTask(task, *chosen, dirID)
-					return
-				}
+			if q.finalizeTaskFiles(task, dirID, true) {
+				return
 			}
 		}
 
@@ -981,21 +1252,7 @@ func (q *QueueManager) processTask(ctx context.Context, task *DownloadTask) {
 			ffmpegOut := filepath.Join(targetDir, stem+ext)
 			log.Info().Msgf("[HLS-Fallback] Attempting ffmpeg remux for %s -> %s", targetURL, ffmpegOut)
 			if ffErr := downloadHLSWithFFmpeg(ctx, targetURL, effReferer, ffmpegOut, isAudio); ffErr == nil {
-				ch := task.Channel
-				if ch == "" {
-					ch = task.Uploader
-				}
-				if ch == "" {
-					ch = task.PlaylistTitle
-				}
-				grpTitle := task.GroupTitle
-				if grpTitle == "" {
-					grpTitle = task.PlaylistTitle
-				}
-				_ = organizeDownloadedTaskFilesWithGroup(dirID, ch, grpTitle, task.Platform, task.Title)
-				medias, _ := getAllFilesForId(dirID)
-				if len(medias) > 0 {
-					q.completeTask(task, medias[0], dirID)
+				if q.finalizeTaskFiles(task, dirID, false) {
 					return
 				}
 			} else {
@@ -1110,7 +1367,13 @@ func (q *QueueManager) completeTask(task *DownloadTask, item Media, dirID string
 	}
 }
 
-var percentRegex = regexp.MustCompile(`([0-9.]+)%`)
+var (
+	percentRegex = regexp.MustCompile(`([0-9.]+)%`)
+	aria2PctRe   = regexp.MustCompile(`\((\d+(?:\.\d+)?)%\)`)
+	aria2DLRe    = regexp.MustCompile(`DL:([^\s\]]+)`)
+	aria2ETARe   = regexp.MustCompile(`ETA:([^\s\]]+)`)
+	aria2SizeRe  = regexp.MustCompile(`([0-9.]+[KMGT]?i?B)/([0-9.]+[KMGT]?i?B)`)
+)
 
 func (q *QueueManager) parseProgressLine(task *DownloadTask, line string) {
 	line = strings.TrimSpace(line)
@@ -1139,6 +1402,29 @@ func (q *QueueManager) parseProgressLine(task *DownloadTask, line string) {
 				task.TotalBytes = tot
 				task.HumanSize = humanize.Bytes(uint64(tot))
 			}
+		}
+	} else if strings.Contains(line, "DL:") && strings.Contains(line, "%") {
+		if m := aria2PctRe.FindStringSubmatch(line); len(m) > 1 {
+			if pVal, err := strconv.ParseFloat(m[1], 64); err == nil {
+				task.Percent = pVal
+				updated = true
+			}
+		}
+		if m := aria2DLRe.FindStringSubmatch(line); len(m) > 1 {
+			spd := strings.TrimSpace(m[1])
+			if spd != "" && !strings.HasSuffix(spd, "/s") {
+				spd += "/s"
+			}
+			task.Speed = spd
+			updated = true
+		}
+		if m := aria2ETARe.FindStringSubmatch(line); len(m) > 1 {
+			task.ETA = strings.TrimSpace(m[1])
+			updated = true
+		}
+		if m := aria2SizeRe.FindStringSubmatch(line); len(m) > 2 {
+			task.HumanSize = strings.TrimSpace(m[2])
+			updated = true
 		}
 	} else if matches := percentRegex.FindStringSubmatch(line); len(matches) > 1 {
 		if pVal, err := strconv.ParseFloat(matches[1], 64); err == nil {

@@ -13,6 +13,7 @@ import (
 )
 
 type YtDlpVersionInfo struct {
+	Version       string `json:"version"`
 	Current       string `json:"current"`
 	Channel       string `json:"channel"`
 	LatestStable  string `json:"latestStable"`
@@ -44,6 +45,7 @@ func YtDlpVersionHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	info := YtDlpVersionInfo{
+		Version:       currentVer,
 		Current:       currentVer,
 		Channel:       channel,
 		LatestStable:  "2026.08.19",

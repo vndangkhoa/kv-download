@@ -3,6 +3,7 @@ import {
   EnqueueItemInput,
   GalleryResponse,
   OrganizeMode,
+  PerformanceSettings,
   SniffedMedia,
   StorageSettings,
   YtDlpVersionInfo,
@@ -41,6 +42,20 @@ export function getSavedRateLimit(): string {
     return localStorage.getItem(SPEED_LIMIT_STORAGE_KEY) || '';
   } catch {
     return '';
+  }
+}
+
+export function setSavedRateLimit(val: string): void {
+  if (typeof window === 'undefined') return;
+  try {
+    const trimmed = val.trim();
+    if (trimmed && trimmed.toLowerCase() !== 'unlimited' && trimmed !== '0') {
+      localStorage.setItem(SPEED_LIMIT_STORAGE_KEY, trimmed);
+    } else {
+      localStorage.removeItem(SPEED_LIMIT_STORAGE_KEY);
+    }
+  } catch {
+    // Ignore storage failures.
   }
 }
 
@@ -279,6 +294,24 @@ export async function setWorkers(count: number): Promise<void> {
     method: 'POST',
   });
   if (!res.ok) throw new Error('Failed to update workers');
+}
+
+export async function fetchPerformanceSettings(): Promise<PerformanceSettings> {
+  const res = await fetch(`${BASE_API}/api/settings/performance`);
+  if (!res.ok) throw new Error('Failed to load performance settings');
+  return res.json();
+}
+
+export async function updatePerformanceSettings(
+  patch: Partial<Pick<PerformanceSettings, 'maxWorkers' | 'connectionsPerTask' | 'rateLimit' | 'nativeHls'>>
+): Promise<PerformanceSettings> {
+  const res = await fetch(`${BASE_API}/api/settings/performance`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(patch),
+  });
+  if (!res.ok) throw new Error('Failed to save performance settings');
+  return res.json();
 }
 
 export async function fetchBrowserSniff(url: string): Promise<SniffedMedia[]> {

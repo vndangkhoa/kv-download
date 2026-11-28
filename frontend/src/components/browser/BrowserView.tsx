@@ -67,6 +67,7 @@ const QUALITY_OPTIONS = [
 
 const QUICK_BOOKMARKS = [
   { name: 'Google', url: 'https://www.google.com', desc: 'Search & open any website in Chromium Core' },
+  { name: 'X (Twitter)', url: 'https://x.com', desc: 'Browse posts & download X videos in HD' },
   { name: 'YouTube', url: 'https://www.youtube.com', desc: 'Browse & download HD/4K videos & shorts' },
   { name: 'TikTok', url: 'https://www.tiktok.com', desc: 'Browse creator feeds & grab clean videos' },
   { name: 'AV01 Media', url: 'https://av01.media', desc: 'DNS-resilient proxy & HLS M3U8 streams' },

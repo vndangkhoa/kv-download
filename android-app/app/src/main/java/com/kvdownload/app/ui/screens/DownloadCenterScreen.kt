@@ -94,6 +94,7 @@ import com.kvdownload.app.api.RetrofitClient
 import com.kvdownload.app.api.SavedPhoneFile
 import com.kvdownload.app.api.ScanEntry
 import com.kvdownload.app.api.TaskGroup
+import com.kvdownload.app.api.XTwitterResolver
 import com.kvdownload.app.player.MediaKind
 import com.kvdownload.app.player.MediaPlayRequest
 import com.kvdownload.app.storage.HlsSegmentDownloader
@@ -107,6 +108,20 @@ import com.kvdownload.app.ui.components.AstryxStatusBadge
 import com.kvdownload.app.ui.components.AstryxTone
 import com.kvdownload.app.ui.theme.LocalAstryxPalette
 import kotlinx.coroutines.launch
+
+private val COMPOSER_URL_REGEX = Regex("""https?://[^\s<>"]+""", RegexOption.IGNORE_CASE)
+
+internal fun extractUrlsFromText(raw: String): List<String> {
+    if (raw.isBlank()) return emptyList()
+    val seen = linkedSetOf<String>()
+    for (m in COMPOSER_URL_REGEX.findAll(raw)) {
+        val cleaned = m.value.trimEnd('.', ',', ';', ':', '!', '?', ')', ']', '}').trim()
+        if (cleaned.isNotBlank()) {
+            seen.add(cleaned)
+        }
+    }
+    return seen.toList()
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -158,15 +173,17 @@ fun DownloadCenterScreen(
     }
 
     val parsedUrls = remember(urlText) {
-        urlText.lines()
-            .map { it.trim() }
-            .filter { it.startsWith("http://") || it.startsWith("https://") }
+        extractUrlsFromText(urlText)
     }
 
     val directHlsOrAv01Url = remember(parsedUrls) {
         parsedUrls.firstOrNull { u ->
             AV01Resolver.isAV01Url(u) || HlsSegmentDownloader.looksLikeHlsUrl(u)
         }
+    }
+
+    val directXUrl = remember(parsedUrls) {
+        parsedUrls.firstOrNull { u -> XTwitterResolver.isXStatusUrl(u) }
     }
 
     val filteredTasks = remember(tasks, statusFilter, searchQuery, sortBy) {
@@ -206,19 +223,21 @@ fun DownloadCenterScreen(
         scope.launch {
             try {
                 val res = RetrofitClient.getApi().scanUrl(targetUrl, start = 1, limit = 50)
-                if (!res.error.isNullOrBlank()) {
-                    scanError = res.error
+                val scanData = res.scan ?: res
+                val scanErr = res.error ?: scanData.error
+                if (!scanErr.isNullOrBlank()) {
+                    scanError = scanErr
                 } else {
-                    scanTitle = res.title ?: res.playlistTitle ?: "Channel / Playlist"
-                    scanChannel = res.channel ?: res.uploader ?: ""
-                    val list = res.entries.orEmpty().ifEmpty {
-                        val u = res.webpage_url ?: targetUrl
+                    scanTitle = scanData.title ?: scanData.playlistTitle ?: "Channel / Playlist"
+                    scanChannel = scanData.channel ?: scanData.uploader ?: ""
+                    val list = scanData.entries.orEmpty().ifEmpty {
+                        val u = scanData.webpage_url ?: targetUrl
                         listOf(
                             ScanEntry(
-                                id = res.id ?: "single",
+                                id = scanData.id ?: "single",
                                 url = u,
-                                title = res.title ?: u,
-                                thumbnail = res.thumbnail,
+                                title = scanData.title ?: u,
+                                thumbnail = scanData.thumbnail,
                                 channel = scanChannel
                             )
                         )
@@ -289,14 +308,14 @@ fun DownloadCenterScreen(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Column {
+                    Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            "Add Media, AV01, or Channel Links",
+                            "Add Media, X, AV01, or Channel Links",
                             style = MaterialTheme.typography.titleMedium,
                             color = palette.textPrimary
                         )
                         Text(
-                            "Supports playlists, .m3u8 HLS streams & AV01 videos",
+                            "Supports X / Twitter, YouTube, TikTok, .m3u8 HLS & AV01",
                             style = MaterialTheme.typography.bodySmall,
                             color = palette.textSecondary
                         )
@@ -304,6 +323,11 @@ fun DownloadCenterScreen(
                     if (directHlsOrAv01Url != null) {
                         AstryxStatusBadge(
                             text = if (AV01Resolver.isAV01Url(directHlsOrAv01Url)) "AV01 HLS" else "M3U8 HLS",
+                            tone = AstryxTone.Accent
+                        )
+                    } else if (directXUrl != null) {
+                        AstryxStatusBadge(
+                            text = "X VIDEO",
                             tone = AstryxTone.Accent
                         )
                     }
@@ -316,7 +340,7 @@ fun DownloadCenterScreen(
                     minLines = 2,
                     maxLines = 5,
                     placeholder = {
-                        Text("Paste URLs (one per line) — YouTube, TikTok, Facebook, AV01, .m3u8...")
+                        Text("Paste URLs (one per line) — X / Twitter, YouTube, TikTok, AV01, .m3u8...")
                     }
                 )
 
@@ -415,10 +439,57 @@ fun DownloadCenterScreen(
                                     )
                                     onShowMessage("Saving M3U8 stream to Private App Vault...")
                                 },
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Icon(Icons.Default.PhoneAndroid, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Text("M3U8 To Phone", modifier = Modifier.padding(start = 4.dp), maxLines = 1)
+                            }
+                    }
+                } else if (directXUrl != null) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        OutlinedButton(
+                            onClick = {
+                                onPlayMedia(
+                                    MediaPlayRequest(
+                                        id = "x:${directXUrl.hashCode()}",
+                                        title = "X / Twitter Video",
+                                        subtitle = "Direct Phone Playback",
+                                        primaryUrl = directXUrl,
+                                        fallbackUrl = RetrofitClient.browserStreamUrl(directXUrl, XTwitterResolver.REFERER),
+                                        kind = MediaKind.VIDEO,
+                                        isHls = false,
+                                        referer = XTwitterResolver.REFERER,
+                                        onSaveToPhone = {
+                                            phoneDownloadManager.saveXVideoToPhone(
+                                                url = directXUrl,
+                                                formatPref = selectedFormat
+                                            )
+                                            onShowMessage("Saving X video to Private App Vault...")
+                                        }
+                                    )
+                                )
+                            },
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Text("Preview Video", modifier = Modifier.padding(start = 4.dp), maxLines = 1)
+                        }
+
+                        OutlinedButton(
+                            onClick = {
+                                phoneDownloadManager.saveXVideoToPhone(
+                                    url = directXUrl,
+                                    formatPref = selectedFormat
+                                )
+                                onShowMessage("Saving X video to Private App Vault...")
+                            },
                             modifier = Modifier.weight(1f)
                         ) {
                             Icon(Icons.Default.PhoneAndroid, contentDescription = null, modifier = Modifier.size(16.dp))
-                            Text("M3U8 To Phone", modifier = Modifier.padding(start = 4.dp), maxLines = 1)
+                            Text("Save to Phone", modifier = Modifier.padding(start = 4.dp), maxLines = 1)
                         }
                     }
                 }

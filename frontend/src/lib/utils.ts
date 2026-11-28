@@ -20,6 +20,21 @@ export function formatTime(seconds?: number): string {
   return `${mins}:${secs < 10 ? '0' : ''}${secs}`;
 }
 
+export function extractUrlsFromText(text?: string): string[] {
+  if (!text) return [];
+  const matches = text.match(/https?:\/\/[^\s<>"']+/gi) || [];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of matches) {
+    const cleaned = raw.replace(/[.,;:!?)\]}]+$/g, '').trim();
+    if (cleaned && !seen.has(cleaned)) {
+      seen.add(cleaned);
+      out.push(cleaned);
+    }
+  }
+  return out;
+}
+
 export interface PlatformInfo {
   name: string;
   icon: string;
@@ -122,7 +137,14 @@ export function detectPlatform(url?: string): PlatformInfo {
       isPlaylist: isPl
     };
   }
-  if (u.includes('twitter.com') || u.includes('x.com')) {
+  if (
+    u.includes('twitter.com') ||
+    u.includes('x.com') ||
+    u.includes('fxtwitter.com') ||
+    u.includes('vxtwitter.com') ||
+    u.includes('fixupx.com') ||
+    u.includes('fixvx.com')
+  ) {
     return {
       name: 'X / Twitter',
       icon: 'Twitter',

@@ -31,7 +31,8 @@ export default function App() {
   useEffect(() => {
     fetchYtDlpVersion()
       .then((info) => {
-        if (info?.version) setYtdlpVersion(info.version);
+        const ver = info?.version || info?.current;
+        if (ver) setYtdlpVersion(ver);
       })
       .catch(() => {});
   }, []);

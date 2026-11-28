@@ -5,12 +5,15 @@ import android.media.MediaExtractor
 import com.kvdownload.app.api.AV01Resolver
 import com.kvdownload.app.api.DownloadTask
 import com.kvdownload.app.api.RetrofitClient
+import com.kvdownload.app.api.XStatusRef
+import com.kvdownload.app.api.XTwitterResolver
 import com.kvdownload.app.storage.HlsSegmentDownloader
 import com.kvdownload.app.ui.adaptive.FoldPosture
 import com.kvdownload.app.ui.adaptive.HingeRectDp
 import com.kvdownload.app.ui.adaptive.WidthClass
 import com.kvdownload.app.ui.adaptive.computeWindowState
 import com.kvdownload.app.ui.screens.detectPlayablePageItem
+import com.kvdownload.app.ui.screens.extractUrlsFromText
 import com.kvdownload.app.ui.screens.normalizeAv01QuickInput
 import com.kvdownload.app.ui.screens.normalizeBrowserOmniboxUrl
 import com.kvdownload.app.ui.screens.resolveSafeWebNavigationUrl
@@ -240,5 +243,105 @@ class MediaAndAdaptiveTest {
         assertEquals(33_333L, HlsSegmentDownloader.normalizeTrackPtsUs(38_333L, 5_000L, 0L))
         assertEquals(33_334L, HlsSegmentDownloader.normalizeTrackPtsUs(38_333L, 5_000L, 33_333L))
         assertEquals(33_335L, HlsSegmentDownloader.normalizeTrackPtsUs(1_000L, 5_000L, 33_334L))
+    }
+
+    @Test
+    fun xTwitterUrlParsingAndShareTextExtraction() {
+        val sample = "https://x.com/qqzzllyy/status/2126583986168488147?a=6E90jXRCBI7YPx1mZbo&s=19"
+        assertTrue(XTwitterResolver.isXStatusUrl(sample))
+        val parsed = XTwitterResolver.parseStatusUrl(sample)
+        assertEquals(XStatusRef("qqzzllyy", "2126583986168488147", 0), parsed)
+
+        assertEquals(
+            XStatusRef("i", "2126583986168488147", 2),
+            XTwitterResolver.parseStatusUrl("https://mobile.x.com/i/web/status/2126583986168488147/video/2")
+        )
+        assertEquals(
+            XStatusRef("jack", "1234567890", 0),
+            XTwitterResolver.parseStatusUrl("https://twitter.com/jack/statuses/1234567890")
+        )
+        assertTrue(XTwitterResolver.isXStatusUrl("https://fxtwitter.com/qqzzllyy/status/2126583986168488147"))
+        assertTrue(XTwitterResolver.isXStatusUrl("https://vxtwitter.com/qqzzllyy/status/2126583986168488147"))
+        assertFalse(XTwitterResolver.isXStatusUrl("https://x.com/home"))
+        assertFalse(XTwitterResolver.isXStatusUrl("https://x.com/qqzzllyy"))
+
+        val extracted = extractUrlsFromText("Check this video! $sample, really cool!")
+        assertEquals(listOf(sample), extracted)
+
+        val detected = detectPlayablePageItem(sample, "X Post")
+        assertNotNull(detected)
+        assertEquals("X VIDEO", detected!!.format)
+        assertEquals("X / Twitter", detected.channel)
+    }
+
+    @Test
+    fun xTwitterFxAndVxJsonParsingAndVariantSelection() {
+        val fxJson = """
+            {
+              "code": 200,
+              "tweet": {
+                "url": "https://x.com/qqzzllyy/status/2126583986168488147",
+                "id": "2126583986168488147",
+                "text": "Sample tweet https://t.co/RZEEUrFil1",
+                "author": {"name": "Author", "screen_name": "qqzzllyy"},
+                "media": {
+                  "videos": [{
+                    "id": "2126583831310548992",
+                    "url": "https://video.twimg.com/amplify_video/2126583831310548992/vid/avc1/448x796/7BA28qwJLCkMsM2h.mp4?tag=29",
+                    "thumbnail_url": "https://pbs.twimg.com/thumb.jpg",
+                    "duration": 46.788,
+                    "width": 448,
+                    "height": 796,
+                    "type": "video",
+                    "variants": [
+                      {"url": "https://video.twimg.com/amplify_video/2126583831310548992/pl/NCL4wt0QLwK-n-Xn.m3u8?tag=29", "bitrate": 0, "content_type": "application/x-mpegURL"},
+                      {"url": "https://video.twimg.com/amplify_video/2126583831310548992/vid/avc1/320x568/awFr8Ml0ZgPFns4O.mp4?tag=29", "bitrate": 632000, "content_type": "video/mp4"},
+                      {"url": "https://video.twimg.com/amplify_video/2126583831310548992/vid/avc1/448x796/7BA28qwJLCkMsM2h.mp4?tag=29", "bitrate": 950000, "content_type": "video/mp4"}
+                    ]
+                  }]
+                }
+              }
+            }
+        """.trimIndent()
+
+        val ref = XStatusRef("qqzzllyy", "2126583986168488147", 0)
+        val parsed = XTwitterResolver.parseFxTwitterJson(fxJson, ref)
+        assertEquals("@qqzzllyy", parsed.channel)
+        assertEquals("Sample tweet", parsed.title)
+        assertEquals(1, parsed.videos.size)
+        val variants = parsed.videos[0].variants
+        assertEquals(3, variants.size)
+        assertEquals("448p", variants[0].label)
+        assertEquals("320p", variants[1].label)
+        assertEquals("HLS", variants[2].label)
+
+        assertEquals("448p", XTwitterResolver.selectVariant(variants, "highest").label)
+        assertEquals("448p", XTwitterResolver.selectVariant(variants, "720p").label)
+        assertEquals("320p", XTwitterResolver.selectVariant(variants, "360p").label)
+
+        val vxJson = """
+            {
+              "tweetID": "2126583986168488147",
+              "text": "Quote fallback",
+              "user_name": "Quoter",
+              "user_screen_name": "quoter",
+              "media_extended": [],
+              "qrt": {
+                "media_extended": [{
+                  "duration_millis": 12500,
+                  "id_str": "999",
+                  "size": {"width": 720, "height": 1280},
+                  "thumbnail_url": "https://pbs.twimg.com/q.jpg",
+                  "type": "gif",
+                  "url": "https://video.twimg.com/ext_tw_video/999/pu/vid/720x1280/q.mp4"
+                }]
+              }
+            }
+        """.trimIndent()
+        val vxParsed = XTwitterResolver.parseVxTwitterJson(vxJson, ref)
+        assertEquals(1, vxParsed.videos.size)
+        assertTrue(vxParsed.videos[0].isGif)
+        assertEquals(12.5, vxParsed.videos[0].durationSec, 0.01)
+        assertEquals("720p", vxParsed.videos[0].variants[0].label)
     }
 }

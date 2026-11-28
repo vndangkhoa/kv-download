@@ -1070,6 +1070,16 @@ func detectPlayablePageMedia(rawURL, pageTitle string) []SniffedMediaItem {
 			Channel: "AV01",
 			Source:  "chromium_page",
 		})
+	} else if _, _, _, ok := ParseXStatusURL(trimmed); ok {
+		out = append(out, SniffedMediaItem{
+			ID:      "x_" + fmt.Sprintf("%x", len(trimmed)),
+			Type:    "video",
+			Format:  "X VIDEO",
+			Title:   firstNonEmptyString(title, "X / Twitter Video"),
+			URL:     trimmed,
+			Channel: "X / Twitter",
+			Source:  "chromium_page",
+		})
 	} else if strings.Contains(lower, "vimeo.com/") && regexp.MustCompile(`vimeo\.com/\d+`).MatchString(lower) {
 		out = append(out, SniffedMediaItem{
 			Type:    "video",
@@ -1127,6 +1137,45 @@ func (m *chromiumManager) detectPlayablePageMedia(rawURL, pageTitle string) {
 				}
 			}
 		}(rawURL)
+	}
+	if _, _, videoIdx, ok := ParseXStatusURL(rawURL); ok {
+		go func(u string, vIdx int) {
+			ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+			defer cancel()
+			if resolved, err := ResolveXVideo(ctx, u); err == nil && resolved != nil && len(resolved.Videos) > 0 {
+				videosToEmit := resolved.Videos
+				if vIdx > 0 {
+					if chosenVid, okVid := SelectXVideo(resolved, vIdx); okVid {
+						videosToEmit = []XVideoItem{chosenVid}
+					}
+				}
+				for _, vid := range videosToEmit {
+					thumb := vid.Thumbnail
+					if thumb == "" {
+						thumb = resolved.Thumbnail
+					}
+					for _, v := range vid.Variants {
+						fmtLabel := v.Label + " MP4"
+						if v.IsHLS {
+							fmtLabel = "M3U8 HLS"
+						}
+						m.addMediaItem(SniffedMediaItem{
+							ID:         "x_" + vid.ID + "_" + v.Label,
+							Type:       "video",
+							Format:     fmtLabel,
+							Title:      fmt.Sprintf("%s (%s)", vid.Title, v.Label),
+							URL:        v.URL,
+							Thumbnail:  thumb,
+							Duration:   formatDurationFloat(vid.Duration),
+							Resolution: v.Label,
+							Channel:    resolved.Channel,
+							IsStream:   v.IsHLS,
+							Source:     "x_extractor",
+						})
+					}
+				}
+			}
+		}(rawURL, videoIdx)
 	}
 }
 

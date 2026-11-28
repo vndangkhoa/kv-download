@@ -111,9 +111,19 @@ export interface StorageSettings {
 
 export interface YtDlpVersionInfo {
   version: string;
+  current?: string;
   latest?: string;
   channel?: string;
   updateAvailable?: boolean;
+}
+
+export interface PerformanceSettings {
+  maxWorkers: number;
+  connectionsPerTask: number;
+  rateLimit: string;
+  nativeHls: boolean;
+  aria2cAvailable?: boolean;
+  ffmpegAvailable?: boolean;
 }
 
 export interface AlbumEntry {

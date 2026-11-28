@@ -4,6 +4,55 @@ import { useEffect, useState, useCallback, useRef } from 'react';
 import { DownloadTask } from '@/types';
 import { fetchQueue } from '@/lib/api';
 
+function parseSpeedBytesPerSec(raw?: string): number {
+  if (!raw) return 0;
+  const m = raw.trim().match(/^([0-9]+(?:\.[0-9]+)?)\s*(GiB|GB|MiB|MB|KiB|KB|B)\s*\/?\s*s?$/i);
+  if (!m) return 0;
+  const val = parseFloat(m[1]);
+  if (!isFinite(val) || val <= 0) return 0;
+  const unit = m[2].toLowerCase();
+  switch (unit) {
+    case 'gib':
+      return val * 1024 * 1024 * 1024;
+    case 'gb':
+      return val * 1000 * 1000 * 1000;
+    case 'mib':
+      return val * 1024 * 1024;
+    case 'mb':
+      return val * 1000 * 1000;
+    case 'kib':
+      return val * 1024;
+    case 'kb':
+      return val * 1000;
+    case 'b':
+      return val;
+    default:
+      return 0;
+  }
+}
+
+function formatAggregatedSpeed(bps: number): string {
+  const gib = 1024 * 1024 * 1024;
+  const mib = 1024 * 1024;
+  const kib = 1024;
+  if (bps >= gib) return `${(bps / gib).toFixed(2)} GiB/s`;
+  if (bps >= mib) return `${(bps / mib).toFixed(2)} MiB/s`;
+  if (bps >= kib) return `${(bps / kib).toFixed(1)} KiB/s`;
+  return `${Math.round(bps)} B/s`;
+}
+
+function sumActiveSpeeds(activeTasks: DownloadTask[]): string {
+  if (activeTasks.length === 0) return '0 KB/s';
+  let totalBps = 0;
+  for (const t of activeTasks) {
+    totalBps += parseSpeedBytesPerSec(t.speed);
+  }
+  if (totalBps > 0) {
+    return formatAggregatedSpeed(totalBps);
+  }
+  return activeTasks[0]?.speed || '0 KB/s';
+}
+
 export function useSSE() {
   const [tasks, setTasks] = useState<Record<string, DownloadTask>>({});
   const [isConnected, setIsConnected] = useState(false);
@@ -78,11 +127,11 @@ export function useSSE() {
     };
   }, [syncQueue]);
 
-  // Compute speed & task array
+  // Compute aggregated active download speed across all active tasks
   useEffect(() => {
     const activeTasks = Object.values(tasks).filter((t) => t.status === 'downloading' && t.speed);
-    if (activeTasks.length > 0 && activeTasks[0].speed) {
-      setGlobalSpeed(activeTasks[0].speed);
+    if (activeTasks.length > 0) {
+      setGlobalSpeed(sumActiveSpeeds(activeTasks));
     } else {
       setGlobalSpeed('0 KB/s');
     }

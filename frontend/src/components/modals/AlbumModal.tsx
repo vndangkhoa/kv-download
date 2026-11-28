@@ -57,19 +57,21 @@ export function AlbumModal({ url, onClose, onSuccess }: AlbumModalProps) {
         const data = await scanMediaUrl(url, 1, 50);
         if (!active) return;
 
-        if (data.error) {
-          setError(data.error);
+        const scanData = data?.scan ?? data;
+        const scanError = data?.error || scanData?.error;
+        if (scanError) {
+          setError(scanError);
           setIsLoading(false);
           return;
         }
 
-        const rawTitle = data.title || data.playlistTitle || 'Playlist / Channel Selection';
-        const rawChannel = data.channel || data.uploader || '';
+        const rawTitle = scanData.title || scanData.playlistTitle || 'Playlist / Channel Selection';
+        const rawChannel = scanData.channel || scanData.uploader || '';
         setScanTitle(rawTitle);
         setScanChannel(rawChannel);
-        setTotalEntries(Number(data.playlistCount || data.totalCount || 0));
+        setTotalEntries(Number(scanData.playlistCount || scanData.totalCount || 0));
 
-        const list: AlbumEntry[] = (data.entries || []).map((e: any, idx: number) => ({
+        const list: AlbumEntry[] = (scanData.entries || []).map((e: any, idx: number) => ({
           id: e.id || `item-${idx}`,
           url: e.url || e.webpage_url || url,
           title: e.title || `Track ${idx + 1}`,
@@ -80,22 +82,22 @@ export function AlbumModal({ url, onClose, onSuccess }: AlbumModalProps) {
           infoJsonPath: e.infoJsonPath || e.info_json_path,
         }));
 
-        if (list.length === 0 && data.webpage_url) {
+        if (list.length === 0 && scanData.webpage_url) {
           list.push({
-            id: data.id || 'single',
-            url: data.webpage_url,
-            title: data.title || url,
-            duration: data.durationString || data.duration_string || '',
-            thumbnail: data.thumbnail,
+            id: scanData.id || 'single',
+            url: scanData.webpage_url,
+            title: scanData.title || url,
+            duration: scanData.durationString || scanData.duration_string || '',
+            thumbnail: scanData.thumbnail,
             uploader: rawChannel,
             channel: rawChannel,
-            infoJsonPath: data.infoJsonPath,
+            infoJsonPath: scanData.infoJsonPath,
           });
         }
 
         setEntries(list);
         setSelectedIds(new Set(list.map((it) => it.id)));
-        setHasMore(Boolean(data.hasMore) || (Number(data.playlistCount || 0) > list.length));
+        setHasMore(Boolean(scanData.hasMore) || (Number(scanData.playlistCount || 0) > list.length));
       } catch (err: any) {
         if (active) setError(err?.message || 'Failed to inspect URL');
       } finally {
@@ -115,7 +117,8 @@ export function AlbumModal({ url, onClose, onSuccess }: AlbumModalProps) {
     try {
       const start = entries.length + 1;
       const data = await scanMediaUrl(url, start, 50);
-      const nextItems: AlbumEntry[] = (data.entries || []).map((e: any, idx: number) => ({
+      const scanData = data?.scan ?? data;
+      const nextItems: AlbumEntry[] = (scanData.entries || []).map((e: any, idx: number) => ({
         id: e.id || `item-${start + idx}`,
         url: e.url || e.webpage_url || url,
         title: e.title || `Track ${start + idx}`,
@@ -137,7 +140,7 @@ export function AlbumModal({ url, onClose, onSuccess }: AlbumModalProps) {
           return next;
         });
       }
-      setHasMore(Boolean(data.hasMore) && nextItems.length > 0);
+      setHasMore(Boolean(scanData.hasMore) && nextItems.length > 0);
     } catch {
       // Keep already scanned items visible.
     } finally {

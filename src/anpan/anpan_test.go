@@ -2,6 +2,7 @@ package anpan
 
 import (
 	"context"
+	"strings"
 	"testing"
 )
 
@@ -68,5 +69,31 @@ func TestInspectTargetRouter(t *testing.T) {
 	pixeldrain := "https://pixeldrain.com/u/abc1234"
 	if !IsCloudHostURL(pixeldrain) {
 		t.Fatalf("expected IsCloudHostURL for Pixeldrain to be true")
+	}
+}
+
+func TestBuildYtDlpAria2ArgsClampAndLimit(t *testing.T) {
+	args := FormatYtDlpAria2Args(32, "50M")
+	joined := strings.Join(args, " ")
+	if !strings.Contains(joined, "-x 16 -s 16 -k 1M -j 16") {
+		t.Fatalf("expected -x clamped to 16, got: %s", joined)
+	}
+	if !strings.Contains(joined, "--file-allocation=none") {
+		t.Fatalf("expected --file-allocation=none, got: %s", joined)
+	}
+	if !strings.Contains(joined, "--disk-cache=64M") {
+		t.Fatalf("expected --disk-cache=64M, got: %s", joined)
+	}
+	if !strings.Contains(joined, "--max-download-limit=50M") {
+		t.Fatalf("expected --max-download-limit=50M, got: %s", joined)
+	}
+
+	unlimitedArgs := FormatYtDlpAria2Args(12, "unlimited")
+	unlimitedJoined := strings.Join(unlimitedArgs, " ")
+	if !strings.Contains(unlimitedJoined, "-x 12 -s 12 -k 1M -j 12") {
+		t.Fatalf("expected -x 12, got: %s", unlimitedJoined)
+	}
+	if strings.Contains(unlimitedJoined, "--max-download-limit") {
+		t.Fatalf("did not expect --max-download-limit for unlimited, got: %s", unlimitedJoined)
 	}
 }
