@@ -21,10 +21,29 @@ android {
         }
     }
 
+    val releaseKeystorePath = System.getenv("KVDOWNLOAD_KEYSTORE_PATH")
+        ?: "/config/.secrets/kvdownload-release.keystore"
+    val releaseKeystoreFile = file(releaseKeystorePath)
+    val releaseStorePassword = System.getenv("KVDOWNLOAD_KEYSTORE_PASS").orEmpty()
+    val releaseKeyAlias = System.getenv("KVDOWNLOAD_KEY_ALIAS")?.takeIf { it.isNotBlank() } ?: "kvdownload"
+    val releaseKeyPassword = System.getenv("KVDOWNLOAD_KEY_PASS")?.takeIf { it.isNotBlank() } ?: releaseStorePassword
+    val hasReleaseSigning = releaseKeystoreFile.isFile && releaseStorePassword.isNotBlank()
+
+    signingConfigs {
+        if (hasReleaseSigning) {
+            create("release") {
+                storeFile = releaseKeystoreFile
+                storePassword = releaseStorePassword
+                keyAlias = releaseKeyAlias
+                keyPassword = releaseKeyPassword
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = if (hasReleaseSigning) signingConfigs.getByName("release") else signingConfigs.getByName("debug")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
